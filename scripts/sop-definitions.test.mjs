@@ -50,6 +50,10 @@ describe('SOP definition catalog', () => {
       catalog.stubDefinitions.map((definition) => definition.id).includes('video-cocreation'),
       'video-cocreation stub should validate without entering runtime codegen',
     );
+    assert.ok(
+      catalog.stubDefinitions.map((definition) => definition.id).includes('stock-advisor'),
+      'stock-advisor stub should validate without entering runtime codegen (pending context_gate_predicate)',
+    );
   });
 
   it('ports all 19 development SOP rules into development.yaml with predicates', () => {
