@@ -62,12 +62,10 @@ cvo_decisions:
 │                                                                 │
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │ 前端（Next.js + React，参照 Clowder AI packages/web）     │  │
-│  │  ├─ 今日速览 + 持仓实时行情                                │  │
-│  │  ├─ 历史分析时间轴 + 筛选                                   │  │
-│  │  ├─ 持仓管理（表单 CRUD → DB）                              │  │
-│  │  ├─ 情报管理（CRUD → DB）                                   │  │
-│  │  ├─ 推送配置 + 手动/定时触发                                │  │
-│  │  └─ 投资人管理 + 权限设置                                   │  │
+│  │  ├─ 分析 Tab：最新速览 + 历史时间轴 + Drilldown              │  │
+│  │  ├─ 持仓 Tab：持仓 CRUD + boundaries + 操作日志              │  │
+│  │  ├─ 系统 Tab：推送配置 + 权限 + 账户设置                     │  │
+│  │  └─ 情报 Tab：Phase B 起加入 CRUD + TTL 管理                 │  │
 │  └───────────────────┬──────────────────────────────────────┘  │
 │                      │                                           │
 │  ┌───────────────────▼──────────────────────────────────────┐  │
@@ -353,22 +351,23 @@ CREATE TABLE users (
 
 ---
 
-## 5. 产品形态（5 Tab）
+## 5. 产品形态（Phase A 3 Tab）
 
 ### 5.1 页面骨架
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ 📈 投资行情中心   [👤 投资人 ▼]  [🔑 权限]  [⚙️ 设置]     │
+│ 📈 投资行情中心   [👤 投资人 ▼]                    [⚙️]     │
 ├─────────────────────────────────────────────────────────────┤
 │                                                              │
-│  ┌──────── 今日速览 ─────────────────────────────────────┐  │
-│  │  🧭 黄金逼近红线不加，优先补券商+科创                    │  │
-│  │  仓位 70% 现金 ¥9万 | 黄金19%⚠️ 券商6%⬇️ 科创6%⬇️        │  │
-│  │  信号：ACTION ② / WATCH ① / NORMAL ⑥                   │  │
+│  ┌──────── Hero 速览 ────────────────────────────────────┐  │
+│  │  L1  🧭 黄金逼近红线不加，优先补券商+科创                │  │
+│  │  L2  仓位 70% ▓▓▓▓▓▓▓░░░  现金 ¥9万                  │  │
+│  │      黄金 18.3%▓▓░⚠️  券商 9.2%▓░⬇️  科创 6%░⬇️       │  │
+│  │  L3  ACTION：华泰三维度3/3；紫金触止损                  │  │
 │  └──────────────────────────────────────────────────────┘  │
 │                                                              │
-│  [今日]  [历史]  [持仓]  [情报]  [设置]                      │
+│  [分析]  [持仓]  [系统]                                      │
 │  ────────────────────────────────────────                    │
 │  （各 Tab 内容区）                                             │
 │                                                              │
@@ -379,13 +378,22 @@ CREATE TABLE users (
 
 | Tab | 内容 | 数据源 | 写入方式 |
 |---|---|---|---|
-| **今日** | 最新分析速报 + Drilldown + 持仓实时行情 + 组合占比 | analysis_results + analysis_details + 行情代理 | ❌ 只读 |
-| **历史** | 时间轴：开盘/盘后/异动筛选 + 日期筛选 + 信号搜索 | analysis_results + analysis_details | ❌ 只读 |
-| **持仓** | holdings 表 + ops_log + strategy_changelog | portfolios + holdings + ops_log + strategy_changelog | ✅ 表单 CRUD → DB → 同步 state.json |
-| **情报** | intelligence CRUD + TTL 管理 + 可选 RSS 导入 | intelligence | ✅ 表单 CRUD → DB → 同步 intelligence.json |
-| **设置** | 投资人管理 + boundaries 编辑 + 推送配置 + 权限绑定 | investors + access_control + users | ✅ 表单 CRUD → DB |
+| **分析** | 最新分析速报 + Drilldown + 持仓实时行情 + 历史时间轴 / 日期筛选 / 信号搜索 | analysis_results + analysis_details + 行情代理 | ❌ 只读 |
+| **持仓** | holdings 表 + boundaries + ops_log + strategy_changelog；浏览表格 + 编辑 Drawer | portfolios + holdings + ops_log + strategy_changelog | ✅ 表单 CRUD → DB → 同步 state.json |
+| **系统** | 推送配置 + 权限绑定 + 账户设置；投资人管理从顶栏投资人菜单进入 | investors + access_control + users + push_config | ✅ 表单 CRUD → DB |
+| **情报（Phase B）** | intelligence CRUD + TTL 管理 + 可选 RSS 导入 | intelligence | ✅ 表单 CRUD → DB → 同步 intelligence.json |
 
 **关键哲学**：持仓/边界/策略变更**直接走表单** → 写 DB → 同步 state.json。不需要 @鸿瑞。鸿瑞只负责"分析"这件猫擅长的事。
+
+### 5.3 UI 信息架构原则（烁烁 Design Gate）
+
+- Phase A 首屏只显示 **分析 / 持仓 / 系统** 三个 Tab；不放 coming soon 空壳。情报到 Phase B 再加入。
+- 今日与历史合并为 **分析**：最新分析置顶，历史作为同一 Tab 内的时间筛选和时间轴。
+- Boundaries / 红线属于投资数据，不属于系统设置；入口放在 **持仓** Tab 的可展开面板。
+- 投资人切换放顶栏；投资人管理作为下拉菜单里的管理入口，不占独立 Tab。
+- Hero 速览必须有三层视觉层级：L1 组合结论、L2 仓位/分组可视化、L3 ACTION 摘要直接展开。
+- 持仓页分浏览模式和编辑模式：默认紧凑表格，编辑用右侧 Drawer；加仓/减仓快操作不超过 3 步。
+- 视觉调性采用数据驱动 dashboard：暖灰暗色主题、等宽数字、8px 间距基数；信号色（琥珀/蓝/灰）与涨跌色（绿涨红跌）分开。
 
 ---
 
@@ -517,12 +525,12 @@ DELETE /api/access/:id                               -- 移除绑定
 - [ ] AC-A3: 投资人 + boundaries + 组合管理
 - [ ] AC-A4: 行情代理（腾讯 API + 30s 缓存）+ 持仓行情面板
 - [ ] AC-A5: Agent 适配层（异步模式）：DB → state.json 同步 + thread 消息触发 + 结果轮询 + 解析存 DB
-- [ ] AC-A6: 今日速览 Tab（读 analysis_results 展示）
-- [ ] AC-A7: 历史分析 Tab（时间轴 + 筛选）
+- [ ] AC-A6: 分析 Tab（最新速览 + 历史时间轴 + Drilldown + 筛选）
+- [ ] AC-A7: 持仓 Tab（浏览表格 + 编辑 Drawer + boundaries 面板）
 - [ ] AC-A8: 推送服务（至少微信一个通道）
 - [ ] AC-A9: 定时分析（cron 触发适配层 → 鸿瑞分析 → 结果入 DB → 推送）
 
-**验收标准**：本机 `localhost:PORT` 打开 → 看到今日行情 + 持仓 → 手动触发分析 → 鸿瑞出结果 → 页面刷新看到 → 微信收到推送。
+**验收标准**：本机 `localhost:PORT` 打开 → 看到分析 / 持仓 / 系统三入口 + Hero 速览 + 持仓表格 → 手动触发分析 → 鸿瑞出结果 → 页面刷新看到 → 微信收到推送。
 
 ### Phase B — 情报 + K 线（1.5-2 周）
 
