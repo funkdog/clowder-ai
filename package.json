@@ -67,6 +67,7 @@
     "gen:env-reference": "node scripts/gen-env-reference.mjs",
     "check:features": "node scripts/check-feature-truth.mjs",
     "check:capability-tips": "node --test scripts/check-capability-tips.test.mjs && node scripts/check-capability-tips.mjs",
+    "check:capability-tips:stale": "node --test scripts/check-capability-tips-stale.test.mjs && node scripts/check-capability-tips-stale.mjs",
     "gen:sop-definitions": "node scripts/sop-definitions.mjs",
     "check:sop-definitions": "node --test scripts/sop-definitions.test.mjs && node scripts/sop-definitions.mjs --check",
     "check:followup-tails": "node scripts/check-followup-tails.mjs",
