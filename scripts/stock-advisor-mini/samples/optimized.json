@@ -1,0 +1,7 @@
+{"mode":"optimized","tool_events":[
+  {"type":"tool_call","url":"https://qt.gtimg.cn/q=sh601899"},
+  {"type":"tool_result","output":"v_sh601899=..."},
+  {"type":"tool_call","url":"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param=sh601899"},
+  {"type":"tool_result","output":"qfqday ok"}],
+ "final_text":"📊 投资人1\n速报：紫金矿业 ACTION 加仓\n动作：加仓100股\n触发：MA5上穿MA20\n依据：金价上行+量比放大\ndrilldown：逐票分析\n技术：MA5上穿MA20，MACD金叉，量比1.5\n逻辑：铜产能爬坡，金价驱动基本面\n组合：当前黄金占比21%逼近红线，加仓后仍达标\n📋 推送合规自检 已完成",
+ "final_json":{"type":"stock_analysis_v1","timestamp":"2026-06-26T22:23:00+08:00","investor_id":"investor_fixture","portfolio_verdict":"黄金逼近红线不加，优先券商"}}
