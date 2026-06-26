@@ -1,4 +1,5 @@
 export { accountsRoutes } from './accounts.js';
+export { agentInvokeRoutes } from './agent-invoke.js';
 export { agentHooksRoutes } from './agent-hooks.js';
 export { approvalHubRoutes } from './approval-hub-routes.js';
 export { audioProxyRoutes } from './audio-proxy.js';

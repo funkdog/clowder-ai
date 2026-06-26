@@ -170,6 +170,7 @@ import { dispatchProposalRoutes } from './routes/dispatch-proposal-routes.js';
 import { gameRoutes } from './routes/games.js';
 import {
   accountsRoutes,
+  agentInvokeRoutes,
   agentHooksRoutes,
   approvalHubRoutes,
   audioProxyRoutes,
@@ -3005,6 +3006,14 @@ async function main(): Promise<void> {
   await app.register(accountsRoutes);
   await app.register(claudeRescueRoutes);
   await app.register(auditRoutes, { threadStore });
+  await app.register(agentInvokeRoutes, {
+    router,
+    messageStore,
+    invocationRecordStore,
+    invocationTracker,
+    threadStore,
+    queueProcessor,
+  });
   await app.register(capabilitiesRoutes);
   await app.register(audioProxyRoutes);
 
