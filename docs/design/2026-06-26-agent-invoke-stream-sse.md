@@ -30,7 +30,7 @@ owner_impl: 小小舟 [GLM-5.2]
 - 新增 `POST /api/agent/invoke/stream`，真 SSE，逐事件推送。
 - 对外 event taxonomy：`session_init` / `text` / `tool_call` / `tool_result` / `error` / `done`（+ heartbeat）。
 - 完整投研 prompt（区别于同步 route 的 strict-fast）。
-- capabilities 端点登记 stream route。
+- capabilities 端点登记 stream route，并把 stream 标为默认/推荐入口。
 
 **不做（本次 scope 外）**：
 - ❌ 不改 F240（personal-investment-dashboard）。F240 怎么接 SSE 是 F240 后续单独排期。本次只交付 Clowder 侧能力 + 契约。
@@ -122,7 +122,7 @@ app.post('/api/agent/invoke/stream', async (request, reply) => {
 - [ ] AC-4：内部遥测事件（system_info/provider_signal/liveness/agent_loop/status）不出现在流中。
 - [ ] AC-5：前置错误（400/404/409）在 hijack 前以 JSON 返回；流中错误走 `error` event。
 - [ ] AC-6：硬超时 300s 生效，超时关流且 abort agent；客户端断连不泄漏 invocation。
-- [ ] AC-7：`/api/agent/invoke/capabilities` 登记 stream route（path/method/event taxonomy）。
+- [ ] AC-7：`/api/agent/invoke/capabilities` 登记 stream route（path/method/event taxonomy），且 `route` / `preferredRoute` 指向 `/api/agent/invoke/stream`；同步 `/api/agent/invoke` 只保留为 strict-fast state-only fallback。
 - [ ] AC-8：`pnpm check` + `pnpm lint` 通过；文件 ≤350 行（超了拆 helper）；无 `any`。
 
 ## 8. Git 基线现状（开干第一步 — 必读）

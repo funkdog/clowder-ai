@@ -126,6 +126,9 @@ describe('agentInvokeRoutes', () => {
     const body = JSON.parse(res.body);
     assert.equal(body.ok, true);
     assert.equal(body.available, true);
+    assert.equal(body.route, '/api/agent/invoke/stream');
+    assert.equal(body.preferredRoute, '/api/agent/invoke/stream');
+    assert.equal(body.defaultMode, 'sse');
     assert.equal(body.request.type, 'stock_advisor.invoke.v1');
     assert.equal(body.response.type, 'stock_analysis_v1');
     assert.equal(body.response.mode, 'fail_closed');

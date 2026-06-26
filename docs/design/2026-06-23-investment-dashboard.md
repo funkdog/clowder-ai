@@ -156,23 +156,23 @@ cvo_decisions:
 - 轮询间隔：5s，超时 5min
 - 认证：使用 cat-cafe API token（配置在投资系统的 env 中）
 
-**Phase D（同步模式，需 cat-cafe 侧新增）**：
+**Phase D（Agent Runtime API，stream 优先）**：
 
 ```
 投资系统                          Clowder AI
   │                                  │
-  │  POST /api/agent/invoke          │
+  │  POST /api/agent/invoke/stream   │
   │  { skill: "stock-advisor",       │
   │    state: { ... },               │
-  │    timeout: 120 }                │
+  │    timeoutMs: 300000 }           │
   │ ───────────────────────────────► │
-  │                                  │  鸿瑞分析（内部调度）
-  │  { result: { verdict, signals,   │
-  │    details: [...] } }            │
+  │                                  │  鸿瑞完整投研（拉行情/K线）
+  │  SSE: tool_call/tool_result/...  │
   │ ◄─────────────────────────────── │
+  │  done { result: stock_analysis_v1}
 ```
 
-需 cat-cafe 新增 `/api/agent/invoke` 路由 —— 这是远期优化，Phase A 不做。
+需 cat-cafe 新增 `/api/agent/invoke/stream` 路由。`/api/agent/invoke` 只保留为 strict-fast state-only fallback，不作为完整投资分析入口。
 
 ### 3.3 结果解析：猫输出 → 结构化 DB
 
@@ -550,7 +550,7 @@ DELETE /api/access/:id                               -- 移除绑定
 
 ### Phase D — 高级能力（远期）
 
-- [ ] 同步 API：cat-cafe 新增 `POST /api/agent/invoke` → 投资系统直调
+- [ ] Agent Runtime API：cat-cafe 新增 `POST /api/agent/invoke/stream` → 投资系统直调完整投研；`POST /api/agent/invoke` 仅作 state-only fallback
 - [ ] Eval 集成：分析质量接入 eval:sop 管线
 - [ ] 自建行情数据归档
 - [ ] 移动端适配

@@ -207,7 +207,7 @@ F240 adapter 首次同步 state.json 时写入：
 目标：把异步 thread 适配升级为更稳定的 Agent API，并把分析质量接入 eval。
 
 范围：
-- 设计并在 Clowder AI 侧实现 `POST /api/agent/invoke` 或等价结构化调用契约
+- 设计并在 Clowder AI 侧实现 `POST /api/agent/invoke/stream` 完整投研调用契约；`POST /api/agent/invoke` 仅作 strict-fast state-only fallback
 - F192 / eval:sop 接入投资分析质量检查
 - 行情数据归档
 - 远端服务器部署方案
