@@ -61,9 +61,6 @@ describe('ball-custody transition — 球流转', () => {
       false,
     );
   });
-  it('a later durable invocation reopens a ball resolved by the prior turn', () => {
-    assert.deepStrictEqual(transition('resolved', ev('invocation.started'), snap()), { ok: true, next: 'active' });
-  });
 });
 
 describe('ball-custody transition — hold 守卫', () => {

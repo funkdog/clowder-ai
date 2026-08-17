@@ -22,12 +22,6 @@ import { transition } from './ball-custody-state-machine.js';
 const VALID_INTENTS: BallIntent[] = ['handoff', 'fyi', 'done_notify'];
 const VALID_RESOLVE_MODES: BallResolveMode[] = ['bounces_back', 'completes'];
 
-function applyInvocationStartedHolder(proj: BallCustodyProjection, event: BallCustodyEvent): void {
-  if (event.kind === 'invocation.started' && typeof event.payload.catId === 'string') {
-    proj.holder = event.payload.catId;
-  }
-}
-
 function createInitialProjection(subjectKey: string, now: number): BallCustodyProjection {
   return {
     subjectKey,
@@ -51,7 +45,6 @@ function createInitialProjection(subjectKey: string, now: number): BallCustodyPr
 /** accepted transition 后应用字段 effect（mutate proj）。plan §B 标注的副字段更新。 */
 function applyFieldEffects(proj: BallCustodyProjection, event: BallCustodyEvent, now: number): void {
   const p = event.payload;
-  applyInvocationStartedHolder(proj, event);
   switch (event.kind) {
     case 'ball.handed':
       if (typeof p.toCatId === 'string') proj.holder = p.toCatId;

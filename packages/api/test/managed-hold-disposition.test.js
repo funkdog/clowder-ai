@@ -676,30 +676,6 @@ describe('F167 × F254 managed hold disposition', () => {
     assert.deepEqual(h.messageStore.getById(h.stored.id).queueCustody.handledByCatIds, []);
   });
 
-  test('a newer invocation serialized after the old disposition reopens custody for the newer work', async () => {
-    const h = await harness({
-      beforeDispositionRecord: async ({ setLatest }) => {
-        setLatest(false);
-      },
-    });
-
-    const result = await h.service.complete(auth(h), 'completed');
-    assert.equal(result.outcome, 'applied');
-    assert.equal((await h.projectionStore.get('ball:thread:thread-1')).state, 'resolved');
-
-    await h.ingest.record(
-      buildInvocationStartedEvent({
-        invocationId: 'newer-work-invocation',
-        threadId: 'thread-1',
-        catId: 'codex-sol',
-        at: 4_000,
-      }),
-    );
-    const projection = await h.projectionStore.get('ball:thread:thread-1');
-    assert.equal(projection.state, 'active');
-    assert.equal(projection.holder, 'codex-sol');
-  });
-
   test('repairs projection when the exact event append wins before projection persistence fails', async () => {
     const h = await harness({ failDispositionProjectionOnce: true });
 
