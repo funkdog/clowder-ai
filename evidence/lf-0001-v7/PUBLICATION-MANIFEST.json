@@ -1,0 +1,575 @@
+{
+  "schemaVersion": "lf-0001.v7.public-evidence-subset.v1",
+  "createdAt": "2026-08-17T09:15:00.000Z",
+  "source": {
+    "runnerCommit": "0a4d8eef9a0e17ac0661cc7a401e9f8ee0472f2b",
+    "candidateSha": "0522d5ecbd819f3869460656c6eef4f62bdf5511",
+    "candidatePatchSha256": "b21dbd04cfa7a2a96cdf98c5d896059361a440a985239a6dd0936fde00c10345"
+  },
+  "fullLocalPackage": {
+    "manifestCanonicalSha256": "9d1c42ec4332e33230dbec10f584ddc2947e7eb9d5c5219c1efa8104ea02b413",
+    "artifactIndexRawSha256": "9aa191cc652ccf137ed7ccfc82ad66c8a70235326441f461d6199bc9c6082faf",
+    "artifactIndexCanonicalSha256": "80fb9e79dc8de18c3940b9d61350fa5c2d9beab802d8797a16955b9820acdae4",
+    "artifactCount": 412,
+    "totalBytes": 160360060,
+    "custody": "local_restricted"
+  },
+  "publicSubset": {
+    "completeOriginalPackage": false,
+    "entryCount": 107,
+    "totalBytes": 4221270,
+    "entries": [
+      {
+        "path": "build-publication.mjs",
+        "size": 3586,
+        "sha256": "4c2ac59036de15c8f1f049f36964966745def3a65122baea4a3b8cfae8ece473"
+      },
+      {
+        "path": "candidate-final-files/packages/api/src/routes/threads.ts",
+        "size": 45588,
+        "sha256": "0aa483d44afaf9e9733d17f62e359d4222a13344d35a5220a272c7bdb6d421a9"
+      },
+      {
+        "path": "candidate-final-files/packages/api/src/utils/persistent-project-path.ts",
+        "size": 1447,
+        "sha256": "13e61e754320b61318e5419e158389b21491eda422d1b227dea808d25df83d88"
+      },
+      {
+        "path": "candidate-final-files/packages/api/test/project-path.test.js",
+        "size": 10530,
+        "sha256": "c476c2b32883f87e7c1b139f835b8929cab1a8032df4459b85b726c1be7241e6"
+      },
+      {
+        "path": "candidate-final-files/packages/api/test/threads-endpoint.test.js",
+        "size": 51010,
+        "sha256": "7d58a692f392353caa688f9772bdf44022b97818ae1c6aef307984ba13bff3ff"
+      },
+      {
+        "path": "README.md",
+        "size": 3195,
+        "sha256": "a7510fb8de5135871c6c05ac2a1736d50c02064976d285564e53fa3933c5d9fa"
+      },
+      {
+        "path": "records/oracle-calibration/authorized-convergence-canary-plan.json",
+        "size": 93310,
+        "sha256": "3cb67010ff75f389263c484b38839e1d07462b1bcafa1584ec656a71c7ad4f1d"
+      },
+      {
+        "path": "records/oracle-calibration/convergence-canary-scope.json",
+        "size": 88314,
+        "sha256": "26b8b6ef34042d2e075ca7f9ae9936901388138b4919448127b3450460328ec7"
+      },
+      {
+        "path": "records/oracle-calibration/manifest.json",
+        "size": 37439,
+        "sha256": "5de1beff15f6eda35f36f0a3218925ef3d84df1ce5a2e29e33f6f30f06152b76"
+      },
+      {
+        "path": "records/oracle-calibration/oracle-calibration-certificate.json",
+        "size": 5571,
+        "sha256": "f66530071435064fcd5e71b00f87d0ca231c54bef64aa867a5622accade53d6b"
+      },
+      {
+        "path": "records/review-boundary-calibration/manifest.json",
+        "size": 37439,
+        "sha256": "5de1beff15f6eda35f36f0a3218925ef3d84df1ce5a2e29e33f6f30f06152b76"
+      },
+      {
+        "path": "records/review-boundary-calibration/review-boundary-calibration-certificate.json",
+        "size": 18496,
+        "sha256": "efae03edd17ccecb6c882df0d7f8a6208f8769afd82de9ad88476bd459d37434"
+      },
+      {
+        "path": "records/review-boundary-calibration/review-boundary-calibration-execution-record.json",
+        "size": 88109,
+        "sha256": "6bbf5bb0c778be20c8fe88672b635d30bfa2831fe5195c8428af323294f7d5f1"
+      },
+      {
+        "path": "records/review-boundary-calibration/review-boundary-calibration-plan.json",
+        "size": 64901,
+        "sha256": "08a2421452ef86150ce0c96f075ff2beae4b0bc66e9f0c7fdb3cd2c61ec3c8b9"
+      },
+      {
+        "path": "records/review-boundary-calibration/review-boundary-calibration-scope.json",
+        "size": 61565,
+        "sha256": "91032352c05678687af3e8c0033a1c1f53c7866f32df44483d947af393bc7344"
+      },
+      {
+        "path": "records/v7/candidate-evaluation.json",
+        "size": 1150,
+        "sha256": "86e45a9abbcbdf3acb3db103be6114983e24fdc237fd3daa1e9d9d602de6ec9e"
+      },
+      {
+        "path": "records/v7/convergence-canary-execution-record.json",
+        "size": 106792,
+        "sha256": "b938ca6ace4c211e2fadba6e76ffe4986943064235a66625159b5fc87e266483"
+      },
+      {
+        "path": "records/v7/convergence-canary-plan.json",
+        "size": 93310,
+        "sha256": "3cb67010ff75f389263c484b38839e1d07462b1bcafa1584ec656a71c7ad4f1d"
+      },
+      {
+        "path": "records/v7/convergence-canary-receipt.json",
+        "size": 7532,
+        "sha256": "d3880b842695e271010e2321d8d64f16d2181a28e31ffa27aa2833500ac8a55b"
+      },
+      {
+        "path": "records/v7/convergence-canary-scope.json",
+        "size": 88314,
+        "sha256": "26b8b6ef34042d2e075ca7f9ae9936901388138b4919448127b3450460328ec7"
+      },
+      {
+        "path": "records/v7/convergence-canary/convergence-result.json",
+        "size": 5197,
+        "sha256": "b2d7a8788290a1ced92b21dc880c2a688b35508bcf658b0bef3a2ed1d769d3a2"
+      },
+      {
+        "path": "records/v7/convergence-canary/executor-checkpoint.json",
+        "size": 2602,
+        "sha256": "2c32dd681c2a41d3a3496cb2d8a9b3e63c6c6609a12451c72de6d9833d12b6ce"
+      },
+      {
+        "path": "records/v7/convergence-canary/judge-visible-candidate.json",
+        "size": 1196595,
+        "sha256": "ff913641f6669651fb762f1a6bf15edde5e505ab33f974d5cf637b7caa3413ff"
+      },
+      {
+        "path": "records/v7/convergence-canary/oracle-episode-repeatability.json",
+        "size": 582,
+        "sha256": "9c62a40e7c6385b317add4af9e3c884d18b03592b416245253a8dc7e449acc48"
+      },
+      {
+        "path": "records/v7/convergence-canary/oracle-episode.json",
+        "size": 583,
+        "sha256": "aa52c5c3d5c5c9d6d0db4a19547442b01cbdcb3f30f105822ae1719043cb17c4"
+      },
+      {
+        "path": "records/v7/convergence-canary/review-boundary-judge.json",
+        "size": 460,
+        "sha256": "cfa32c74ad82a1edd49efae554e759bacabcf20c8d2c328e9905c89d0c33d6f5"
+      },
+      {
+        "path": "records/v7/episode-artifact-index.json",
+        "size": 102572,
+        "sha256": "9aa191cc652ccf137ed7ccfc82ad66c8a70235326441f461d6199bc9c6082faf"
+      },
+      {
+        "path": "records/v7/episode-candidate-final-files.json",
+        "size": 112993,
+        "sha256": "af9e18ac09e101f11493487787e487ca6e1a7d1bf59b02cff9bc2efcbf6fe4d1"
+      },
+      {
+        "path": "records/v7/episode-evidence-manifest.json",
+        "size": 12586,
+        "sha256": "7d6bcc822c44b740f0f6c1b17fb8298c7144c89b6dff789e36062de3a9121409"
+      },
+      {
+        "path": "records/v7/manifest.json",
+        "size": 37439,
+        "sha256": "5de1beff15f6eda35f36f0a3218925ef3d84df1ce5a2e29e33f6f30f06152b76"
+      },
+      {
+        "path": "runner-source/cat-cafe-skills/adaptive-development-sop/agents/openai.yaml",
+        "size": 522,
+        "sha256": "8bfed29dd17595fe7abcbdf64d3e7ae8967a5b2be1585d03b9a7a0c8ea6f3142"
+      },
+      {
+        "path": "runner-source/cat-cafe-skills/adaptive-development-sop/references/trial-receipt.md",
+        "size": 6029,
+        "sha256": "2d99adcb757fb7f23855260d5c748b9cb3486b1358112bad5ea5ebf4aa8625c0"
+      },
+      {
+        "path": "runner-source/cat-cafe-skills/adaptive-development-sop/SKILL.md",
+        "size": 20220,
+        "sha256": "3f7dde482d6d8723c4cc6fc0132fdcc799b9840a91fad1998d11f6f891f9114c"
+      },
+      {
+        "path": "runner-source/docs/harness-feedback/benchmarks/adaptive-development-v1/convergence-candidate-metric.md",
+        "size": 12396,
+        "sha256": "e9eb60d9e3aba1b0311fd963539865698db651928206685b7f56b37984d00476"
+      },
+      {
+        "path": "runner-source/docs/harness-feedback/benchmarks/adaptive-development-v1/convergence-review-boundary-gold-cases.json",
+        "size": 47539,
+        "sha256": "5a276b917eabfab17f3a9390080cfb8320b0bba2bc0ce4a11d4572eb94f6dfd9"
+      },
+      {
+        "path": "runner-source/docs/harness-feedback/benchmarks/adaptive-development-v1/convergence-review-boundary-rubric.json",
+        "size": 8419,
+        "sha256": "97ea8d58b18469078c5abcb663f1cbb0452343a0792f693241d914d928f2abfe"
+      },
+      {
+        "path": "runner-source/docs/harness-feedback/benchmarks/adaptive-development-v1/manifest.json",
+        "size": 36427,
+        "sha256": "c423c1baa79288d91940a372158516d488cc66c6c8bbb0a421b2e2fcd257d640"
+      },
+      {
+        "path": "runner-source/docs/harness-feedback/benchmarks/adaptive-development-v1/outcome-checkpoint-2026-08-03.md",
+        "size": 17698,
+        "sha256": "4bfdacb6caa26c1d0d31574422c1b5aa873b9d735850b6af170fb97dc02dde1c"
+      },
+      {
+        "path": "runner-source/docs/harness-feedback/eval-domains/eval-adaptive-development.yaml",
+        "size": 645,
+        "sha256": "2463ddc072f0468e13880caf112c4291430ba39a6633116c6589110fc4731e12"
+      },
+      {
+        "path": "runner-source/packages/api/scripts/run-adaptive-development-disposable-oracle-calibration.mjs",
+        "size": 10409,
+        "sha256": "92ea6704bc2281a92f78437e64f373332d0b2d199f385539531c8734d8908e3d"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-benchmark-contract.ts",
+        "size": 59736,
+        "sha256": "756dd1c11f5c68496f6102d5e7d6a9f94a292617303bfeea024acc11e88a8596"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-benchmark-evaluator.ts",
+        "size": 30639,
+        "sha256": "f49e85d533ba6b2e52551ec0f5ecdcec7e762a8e3f35ff2f9a28ee18f9f7eeb4"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-benchmark-execution-store.ts",
+        "size": 22448,
+        "sha256": "e0527bafd670cb23c0d19549a09c97482896f380ed95f8de227bce71d670c251"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-benchmark-runner.ts",
+        "size": 181078,
+        "sha256": "68234dde78bf52b9af0bedc368165d37e3b00eed1686f5b20b26be21017f1b52"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-benchmark-store.ts",
+        "size": 6413,
+        "sha256": "e48aa0ae5ce726db26df9026ffa46586b6432029c116f4e4fab825e267e94126"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-collector.ts",
+        "size": 15297,
+        "sha256": "323ccd8bcce80ef31716e8885e665d2edf83cc6405742de7d33305ff535c1c9f"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-convergence-canary-store.ts",
+        "size": 21751,
+        "sha256": "18f43537373f4b552adbd911aad5f3d579db8cd5e21932802b10784e914a2608"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-convergence-canary.ts",
+        "size": 98300,
+        "sha256": "0cf6bea5dad9c9d9b9825103d553088c1b6f9d6c65f5a28ea514861076fee324"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-convergence-review-boundary-judge.ts",
+        "size": 12991,
+        "sha256": "acc3adce337385a7f0125a991a47ef3a7be82cdf4253f4bbfe0495ee80fdcc70"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-convergence-review-boundary.ts",
+        "size": 29255,
+        "sha256": "c017d2470c50598e7c92ddb83cad9bf8bfd5ab118ac5e1ae73c02462d3e7a528"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-git-facts.ts",
+        "size": 634,
+        "sha256": "e0d517e0d3731a25d7781e520c9db9ae244cf84a529b8047db8152ec87065d1e"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-harness-version.ts",
+        "size": 1290,
+        "sha256": "4dfbb7ebb51356734d6fdf6ae36ca5191e0307ebdace3df41fc536a6d488aaa3"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-operational-canary-store.ts",
+        "size": 20227,
+        "sha256": "983252151e775b104afda5a9113d3f796aebeb5c568dd0fff5a02a6d42221491"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-operational-canary.ts",
+        "size": 15501,
+        "sha256": "13426a76f3d7be22cd9d677b1ecc52a40668c809016973f6fd2f7d6b9ffea880"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-opt-in.ts",
+        "size": 2705,
+        "sha256": "dea234b6062af83412e373ee51b350cc88ca50b975746d2626a89bcaf4397e53"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-oracle-toolchain.ts",
+        "size": 5616,
+        "sha256": "63f1ef6d1b425d9988861f44a4ecfb3d7018f2bb558204036648c64109493243"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-runtime-observer-worker-client.ts",
+        "size": 7832,
+        "sha256": "88d560fb8d696655fdb74d0d7a2a7f19ef3e1ac7cdd9bc37f92c358dcb7ad028"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-runtime-observer-worker.ts",
+        "size": 2308,
+        "sha256": "457e8b78245b94aa40c6e47627e21219be3a299b5c7fa0fa126ce8d561259074"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-runtime-observer.ts",
+        "size": 31368,
+        "sha256": "b00e6bc7243d1dcc0c0bb2986348a809c5530a71928a4a8bea31290b238d6df5"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-trial-provider.ts",
+        "size": 2555,
+        "sha256": "81b9ca700946e6f52b916093b2131b227bd0c803312ba2999df78f3bf75afb6b"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-trial-store.ts",
+        "size": 15999,
+        "sha256": "4b7351f80581760d02fa6879f9a050b89f7fb59bcb942cc8bfabaff7a1ab3784"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/adaptive-development-types.ts",
+        "size": 3486,
+        "sha256": "b3f3c250f50306d89c2c67598403fec1eed7c5698821d19a4c3e8e4a585996ac"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/eval-adaptive-development-live-verdict.ts",
+        "size": 13825,
+        "sha256": "6f448eaa6d89c4991d9b05421ac4681c77e1bee54e2a65941e59fad57446c16f"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/adaptive-development/eval-adaptive-development-renderer.ts",
+        "size": 1331,
+        "sha256": "b4dd6ac938f2c6c11934e7166fcfe55d40c910e3faedd6e4aa506470b552ae1d"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/publish-verdict/adaptive-development-generator-adapter.ts",
+        "size": 2994,
+        "sha256": "847be6343542773f43fdb7e3be78f1cb1d06059412be66045cdbfcbd7d084812"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/sop/adaptive-sop-admission.ts",
+        "size": 28633,
+        "sha256": "a4afb1881bd041ea1955f99baae2091d8c5d0094fca74b770624dce3bb03f75d"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/sop/adaptive-sop-comparative-pilot.ts",
+        "size": 33873,
+        "sha256": "dd6835973dce82ed2950a3792188792ccc33ded96e04da90d28764a6801d2c59"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/sop/adaptive-sop-contract.ts",
+        "size": 11934,
+        "sha256": "312066117669288b68a43e4dcc65d8a3d7cac082fc3fb932f9d579dbeaf19208"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/sop/adaptive-sop-replay-fixture-grader.ts",
+        "size": 26546,
+        "sha256": "eee569652a13f98f264ad9a913c9ef377ae6fef2dde4d4d9f94b85b7888058d9"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/sop/adaptive-sop-replay-model-ports.ts",
+        "size": 17407,
+        "sha256": "4316ec66e4f63618842bb5da90627a6914d2c1cc3225e7aa760a1c1851dc12d8"
+      },
+      {
+        "path": "runner-source/packages/api/src/infrastructure/harness-eval/sop/adaptive-sop-replay-runner.ts",
+        "size": 20437,
+        "sha256": "8e2ce510fe426bd71f2d6c7128be93a30a220d2ade8fe4edcf9f912bdd403676"
+      },
+      {
+        "path": "runner-source/packages/api/src/scripts/run-adaptive-development-benchmark-s0.ts",
+        "size": 297169,
+        "sha256": "043180bf6cf8f5e6693e50f58ccf4a6ae5343b79874916b6f7e2f69fd944d94b"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-benchmark-execution-store.test.js",
+        "size": 6841,
+        "sha256": "85b838ebc2835563d6a9dff0dfc0d75c3b2247e47e6784f83c0b8856c10aaa8a"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-benchmark-runner.test.js",
+        "size": 204651,
+        "sha256": "d91616421b13b8d8641eb6a29aedfb832f308abb9437720847084a8cd33735c7"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-benchmark.test.js",
+        "size": 62074,
+        "sha256": "520ef2ec7d568257c7765ca4538cb4e37f1091e2f1ac2704eca070c7a4613c1f"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-collector.test.js",
+        "size": 8333,
+        "sha256": "2d96a6b07e810726c1a9983e1376933530d0bc8d7df24eefa62457b779a92d5b"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-convergence-canary-live.test.js",
+        "size": 18653,
+        "sha256": "8f9ad544b457bb39a8be170b54b9566ca1d447c1e572095cbbdf2301ca6fd41f"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-convergence-canary-store.test.js",
+        "size": 20582,
+        "sha256": "8ffbf32dd970f0b4c2efd9294dead131b9802eb8caf42c07e6a749596d4bc95c"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-convergence-review-boundary.test.js",
+        "size": 22252,
+        "sha256": "d8369c257ecd310cd04f71311713af68c469a4256bd20b7d4a4d723c1b638f42"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-eval-wiring.test.js",
+        "size": 9481,
+        "sha256": "550f448d446ae21e51382a8e29f88b27ed36aa57765d7891dd5ab29200f9b2b7"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-git-facts.test.js",
+        "size": 4712,
+        "sha256": "1278d2185b6aa7e389dff45ea04c4c52c2c10e92912df22da5f0d6aca73e40f0"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-operational-canary-store.test.js",
+        "size": 6920,
+        "sha256": "0606743e50ee059d48ee5f4fb88fbe96925da1a66dd0f381454ba0b17e65eee0"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-operational-canary.test.js",
+        "size": 8204,
+        "sha256": "c88d3c5a9d82fdaad07ff733239424c23c73c4d667ae567c708f903cecb56db3"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-opt-in.test.js",
+        "size": 1514,
+        "sha256": "9e1d5338e9f1827c544dc043b191322d704a4737650f2d5873dd638fcf4dba68"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-runtime-observer.test.js",
+        "size": 29790,
+        "sha256": "a136d5c5e523e097bfc4594a67c19f311593e3786e3f0046798b3acad66e62b0"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-development-trial-store.test.js",
+        "size": 6043,
+        "sha256": "c7e11a961acb3ebd12013ce3e64a00b910d714273ddc010a248c1a7d527bfaf2"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-sop-admission.test.js",
+        "size": 15147,
+        "sha256": "d759e47029741774f5538e5ce6df07f6228052e3e766e8597b3bc18f64d2bff1"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-sop-comparative-pilot.test.js",
+        "size": 26781,
+        "sha256": "c97d8650e1ceae52fc83668834488ba4a76168c7d2965483e3f078e60eb86733"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-sop-contract-validator.test.js",
+        "size": 10754,
+        "sha256": "e76a76e5029bc5887da3effd419984aaabe44f2a565f53ddb7cb4ea76f49b9a6"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-sop-local-skill.test.js",
+        "size": 12709,
+        "sha256": "831707eccd03d21abd44711597d4856ae065e47f8f8720f91a14ef210f6ba0cb"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-sop-replay-fixture-grader.test.js",
+        "size": 27329,
+        "sha256": "3f717a9c51b9515a33c21c166a45508c6cff4f4d38075e662e7ff43a80b010a4"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-sop-replay-manifest.test.js",
+        "size": 11167,
+        "sha256": "d123d645d1d255384bbece622f06dbf0f8b575be9a666552c63822c52fba5bab"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-sop-replay-model-ports.test.js",
+        "size": 15054,
+        "sha256": "b00486712a0a67ebae353d767cc9b13c39ded727f5db16d99a9db1ebc2181eaa"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/adaptive-sop-replay-runner.test.js",
+        "size": 19042,
+        "sha256": "8c44d0fe8ff5d0deb03ab643788b76f3bccdc51d4818136f93c01fb2e23d4e1b"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/fixtures/adaptive-development-disposable-containment.oracle.ts",
+        "size": 1817,
+        "sha256": "4963e0d5ca36c9667cb3dbcef48fe2de6e9e0abd8a05764c32f7a2f77f38e12e"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/fixtures/adaptive-development-disposable-filtered.oracle.ts",
+        "size": 2027,
+        "sha256": "f42d36d08ff96095f046d6a603ec5baf3cb8d27fe19f15c95119cdc9ff4bd40f"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/fixtures/adaptive-development-disposable-remap.oracle.ts",
+        "size": 3486,
+        "sha256": "6b49e04497e0f85b4862c9e2af0a8c235c0085f99e0b11dc7106742540f40756"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/fixtures/adaptive-development-disposable-stale.oracle.ts",
+        "size": 2686,
+        "sha256": "e99ad413526126c61e5fa1bea1cd15a4e3ca93a5e5d440d41f180d052770380f"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/fixtures/adaptive-sop-admission-profiles.json",
+        "size": 5718,
+        "sha256": "a19574f01ffbd8820418009474150ffda59c4ecb791bbce5f16535a30a1787f6"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/fixtures/adaptive-sop-comparative-pilot-manifest.json",
+        "size": 3223,
+        "sha256": "a690cdaa9479978573e4f08e55cfdbb1fb90bd66cd1ea93ad3f71a036703554c"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/fixtures/adaptive-sop-grader-rubric.json",
+        "size": 9544,
+        "sha256": "d296c38d6784c72286f88faa0c8d4ae933520fdc1a67256c5c2cb0d8e39dbceb"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/fixtures/adaptive-sop-replay-manifest.json",
+        "size": 43597,
+        "sha256": "9e576dfb6c8caeaec4eee2b4e06c5188aa38b6fd3d162577780afb00ff000fa5"
+      },
+      {
+        "path": "runner-source/packages/api/test/harness-eval/helpers/adaptive-development-convergence-review-boundary-fixture.js",
+        "size": 2344,
+        "sha256": "7f90d03a746b6be43d4d465c38cc1296a68c05e0f27972b01971afce0877becc"
+      },
+      {
+        "path": "runner-source/packages/shared/src/__tests__/adaptive-sop-contract.test.ts",
+        "size": 7450,
+        "sha256": "20b0a047b405933a49885684652406e77ddf7405bca033267287a66409a45792"
+      },
+      {
+        "path": "runner-source/packages/shared/src/schemas/adaptive-sop.ts",
+        "size": 7697,
+        "sha256": "fda4fa34ae28102f66500034dc2be81041585a91fb8168c2fd1ff95334f138d0"
+      },
+      {
+        "path": "SECURITY-NOTES.md",
+        "size": 1044,
+        "sha256": "2754105208af34528756cda098b298c4975f066010a58d7d2501a39edf64514c"
+      },
+      {
+        "path": "verify-public-evidence.mjs",
+        "size": 1515,
+        "sha256": "f0a11d77dd057d04cbd4351934bfd030858287b0e20bdce775caae65ac665301"
+      }
+    ]
+  },
+  "excludedOriginalArtifactClasses": [
+    "runtime-snapshot.tar",
+    "codex-home databases, WAL/SHM files, sessions, and installation identifiers",
+    "raw provider stdout and environment/model-catalog snapshots",
+    "tool caches and compiler binaries",
+    "embedded Git object databases and worktree internals",
+    "provider CA copies and ephemeral control sandboxes not required by the public record set"
+  ],
+  "claimBounds": {
+    "structuralPipelineEvidencePublished": true,
+    "fullOriginalPackagePublic": false,
+    "candidateTaskSucceeded": false,
+    "sopUpliftClaimEligible": false,
+    "overallSopCalibrationComplete": false,
+    "generalizationClaimEligible": false
+  }
+}

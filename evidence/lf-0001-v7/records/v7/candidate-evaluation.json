@@ -1,0 +1,40 @@
+{
+  "schemaVersion": "lf-0001.development-convergence-candidate-evaluation.v4",
+  "nonScoring": true,
+  "effectClaimEligible": false,
+  "validity": "valid",
+  "sourceResultSha256": "238b95025c173ec86498fb5b026f011dbbc3287896aaba9ebb0a1404311bc176",
+  "candidateSha": "0522d5ecbd819f3869460656c6eef4f62bdf5511",
+  "executionStatus": "completed",
+  "behaviorVector": [
+    {
+      "id": "runtime-root-and-descendant-remap",
+      "passed": false
+    },
+    {
+      "id": "workspace-containment",
+      "passed": false
+    },
+    {
+      "id": "stale-runtime-fail-closed",
+      "passed": false
+    },
+    {
+      "id": "filtered-read-isolation",
+      "passed": true
+    }
+  ],
+  "taskCorrectnessPassed": false,
+  "hardBoundariesPassed": true,
+  "singleCandidateExecutionPassed": true,
+  "candidateFrozenBeforeMeasurement": true,
+  "postHocFeedbackAbsent": true,
+  "repairRounds": 0,
+  "reviewBoundaryPassed": true,
+  "reviewBoundaryP1Count": 0,
+  "reviewBoundaryP2Count": 0,
+  "outcomeCheckpointOracleConsistent": false,
+  "structuralMeasurementValid": true,
+  "calibrationCoverage": "review_boundary_only",
+  "overallSopCalibrationComplete": false
+}

@@ -1,0 +1,284 @@
+import assert from 'node:assert/strict';
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs';
+import { realpath } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { after, before, describe, it } from 'node:test';
+
+const {
+  validateProjectPath,
+  validateProjectPathDetailed,
+  isUnderAllowedRoot,
+  getAllowedRoots,
+  getDefaultDeniedRoots,
+  isPathUnderRoots,
+  isDenylistMode,
+} = await import('../dist/utils/project-path.js');
+const { resolvePersistentProjectPath } = await import('../dist/utils/persistent-project-path.js');
+
+describe('denylist mode (default)', () => {
+  let savedAllowedRoots;
+
+  before(() => {
+    savedAllowedRoots = process.env.PROJECT_ALLOWED_ROOTS;
+    delete process.env.PROJECT_ALLOWED_ROOTS;
+  });
+
+  after(() => {
+    if (savedAllowedRoots === undefined) delete process.env.PROJECT_ALLOWED_ROOTS;
+    else process.env.PROJECT_ALLOWED_ROOTS = savedAllowedRoots;
+  });
+
+  it('uses denylist mode by default', () => {
+    assert.strictEqual(isDenylistMode(), true);
+  });
+
+  it('accepts path under home directory', () => {
+    assert.strictEqual(isUnderAllowedRoot(join(homedir(), 'projects')), true);
+  });
+
+  it('accepts home directory itself', () => {
+    assert.strictEqual(isUnderAllowedRoot(homedir()), true);
+  });
+
+  it('accepts path under /tmp', () => {
+    assert.strictEqual(isUnderAllowedRoot('/tmp/test-dir'), true);
+  });
+
+  it('accepts /opt, /srv, /mnt and other common project locations', () => {
+    assert.strictEqual(isUnderAllowedRoot('/opt/projects'), true);
+    assert.strictEqual(isUnderAllowedRoot('/srv/data'), true);
+    assert.strictEqual(isUnderAllowedRoot('/mnt/disk/repo'), true);
+    assert.strictEqual(isUnderAllowedRoot('/usr/code'), true);
+    assert.strictEqual(isUnderAllowedRoot('/var/www/site'), true);
+  });
+
+  it('rejects paths under denied system directories', () => {
+    if (process.platform === 'darwin') {
+      assert.strictEqual(isUnderAllowedRoot('/dev/null'), false);
+      assert.strictEqual(isUnderAllowedRoot('/sbin/mount'), false);
+      assert.strictEqual(isUnderAllowedRoot('/System/Library'), false);
+    } else {
+      assert.strictEqual(isUnderAllowedRoot('/proc/1/status'), false);
+      assert.strictEqual(isUnderAllowedRoot('/sys/class'), false);
+      assert.strictEqual(isUnderAllowedRoot('/dev/null'), false);
+      assert.strictEqual(isUnderAllowedRoot('/boot/vmlinuz'), false);
+      assert.strictEqual(isUnderAllowedRoot('/sbin/init'), false);
+      assert.strictEqual(isUnderAllowedRoot('/run/user'), false);
+    }
+  });
+
+  it('getAllowedRoots() returns denied roots in denylist mode', () => {
+    const roots = getAllowedRoots();
+    assert.ok(Array.isArray(roots));
+    assert.ok(roots.length > 0);
+  });
+});
+
+describe('getDefaultDeniedRoots', () => {
+  it('returns system directories for macOS', () => {
+    const denied = getDefaultDeniedRoots('darwin');
+    assert.ok(denied.includes('/dev'));
+    assert.ok(denied.includes('/sbin'));
+    assert.ok(denied.includes('/System'));
+  });
+
+  it('returns system directories for Linux', () => {
+    const denied = getDefaultDeniedRoots('linux');
+    assert.ok(denied.includes('/proc'));
+    assert.ok(denied.includes('/sys'));
+    assert.ok(denied.includes('/dev'));
+    assert.ok(denied.includes('/boot'));
+  });
+
+  it('returns SYSTEMROOT for Windows', () => {
+    const denied = getDefaultDeniedRoots('win32');
+    assert.ok(denied.length >= 1);
+  });
+});
+
+describe('isPathUnderRoots', () => {
+  it('rejects cross-drive Windows paths', () => {
+    assert.strictEqual(isPathUnderRoots('D:\\repo', ['C:\\work'], 'win32'), false);
+    assert.strictEqual(isPathUnderRoots('C:\\work\\repo', ['C:\\work'], 'win32'), true);
+  });
+});
+
+describe('validateProjectPath', () => {
+  let testDir;
+  let subDir;
+
+  before(() => {
+    testDir = mkdtempSync(join(process.cwd(), '.tmp-cat-cafe-test-path-validation-'));
+    subDir = join(testDir, 'project-a');
+    mkdirSync(subDir, { recursive: true });
+  });
+
+  after(() => {
+    rmSync(testDir, { recursive: true, force: true });
+  });
+
+  it('returns canonicalized path for valid directory', async () => {
+    const result = await validateProjectPath(subDir);
+    assert.ok(result);
+    assert.strictEqual(result, await realpath(subDir));
+  });
+
+  it('returns null for nonexistent path', async () => {
+    const result = await validateProjectPath('/nonexistent/path/xxx');
+    assert.strictEqual(result, null);
+  });
+
+  it('classifies transient filesystem errors separately from invalid paths', async () => {
+    const result = await validateProjectPathDetailed('/tmp/project', {
+      realpath: async () => {
+        const err = new Error('disk not ready');
+        err.code = 'EIO';
+        throw err;
+      },
+      stat: async () => {
+        throw new Error('stat should not be reached');
+      },
+    });
+
+    assert.deepStrictEqual(result, {
+      ok: false,
+      reason: 'io_error',
+      message: 'disk not ready',
+    });
+  });
+
+  it('returns null for denied system path', async () => {
+    const result = await validateProjectPath('/dev');
+    assert.strictEqual(result, null);
+  });
+
+  it('returns null for file (not directory)', async () => {
+    const { writeFileSync } = await import('node:fs');
+    const filePath = join(testDir, 'not-a-dir.txt');
+    writeFileSync(filePath, 'test');
+    const result = await validateProjectPath(filePath);
+    assert.strictEqual(result, null);
+  });
+
+  it('resolves symlinks and checks real path', async () => {
+    const linkPath = join(testDir, 'link-to-project');
+    if (existsSync(linkPath)) rmSync(linkPath);
+    symlinkSync(subDir, linkPath);
+    const result = await validateProjectPath(linkPath);
+    assert.equal(result, realpathSync(subDir));
+  });
+
+  it('rejects symlinks that escape to denied paths', async () => {
+    const linkPath = join(testDir, 'link-to-dev');
+    if (existsSync(linkPath)) rmSync(linkPath);
+    try {
+      symlinkSync('/dev', linkPath);
+      const result = await validateProjectPath(linkPath);
+      assert.strictEqual(result, null);
+    } catch {
+      // symlink creation may fail in sandboxed environments
+    }
+  });
+});
+
+describe('resolvePersistentProjectPath', () => {
+  let root;
+  let originalRuntimeRoot;
+  let originalWorkspaceRoot;
+
+  before(() => {
+    root = mkdtempSync(join(process.cwd(), '.tmp-cat-cafe-persistent-project-path-'));
+    originalRuntimeRoot = process.env.CAT_CAFE_RUNTIME_ROOT;
+    originalWorkspaceRoot = process.env.CAT_CAFE_WORKSPACE_ROOT;
+  });
+
+  after(() => {
+    if (originalRuntimeRoot === undefined) delete process.env.CAT_CAFE_RUNTIME_ROOT;
+    else process.env.CAT_CAFE_RUNTIME_ROOT = originalRuntimeRoot;
+    if (originalWorkspaceRoot === undefined) delete process.env.CAT_CAFE_WORKSPACE_ROOT;
+    else process.env.CAT_CAFE_WORKSPACE_ROOT = originalWorkspaceRoot;
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it('maps a missing runtime descendant to an existing persistent descendant', async () => {
+    const runtimeRoot = join(root, 'disposable-runtime');
+    const workspaceRoot = join(root, 'persistent-workspace');
+    const persistentProject = join(workspaceRoot, 'packages', 'api');
+    mkdirSync(persistentProject, { recursive: true });
+    process.env.CAT_CAFE_RUNTIME_ROOT = runtimeRoot;
+    process.env.CAT_CAFE_WORKSPACE_ROOT = workspaceRoot;
+
+    assert.equal(
+      await resolvePersistentProjectPath(join(runtimeRoot, 'packages', 'api')),
+      realpathSync(persistentProject),
+    );
+  });
+
+  it('fails closed when a runtime path has no persistent target', async () => {
+    process.env.CAT_CAFE_RUNTIME_ROOT = join(root, 'runtime-without-target');
+    delete process.env.CAT_CAFE_WORKSPACE_ROOT;
+
+    assert.equal(await resolvePersistentProjectPath(process.env.CAT_CAFE_RUNTIME_ROOT), null);
+  });
+});
+
+describe('PROJECT_ALLOWED_ROOTS legacy mode', () => {
+  let savedAllowedRootsEnv;
+  let savedAllowedRootsAppendEnv;
+
+  before(() => {
+    savedAllowedRootsEnv = process.env.PROJECT_ALLOWED_ROOTS;
+    savedAllowedRootsAppendEnv = process.env.PROJECT_ALLOWED_ROOTS_APPEND;
+  });
+
+  after(() => {
+    if (savedAllowedRootsEnv === undefined) delete process.env.PROJECT_ALLOWED_ROOTS;
+    else process.env.PROJECT_ALLOWED_ROOTS = savedAllowedRootsEnv;
+    if (savedAllowedRootsAppendEnv === undefined) delete process.env.PROJECT_ALLOWED_ROOTS_APPEND;
+    else process.env.PROJECT_ALLOWED_ROOTS_APPEND = savedAllowedRootsAppendEnv;
+  });
+
+  it('switches to allowlist mode when env var is set', () => {
+    delete process.env.PROJECT_ALLOWED_ROOTS_APPEND;
+    process.env.PROJECT_ALLOWED_ROOTS = '/opt/projects:/srv/data';
+    assert.strictEqual(isDenylistMode(), false);
+    assert.strictEqual(isUnderAllowedRoot('/opt/projects/my-app'), true);
+    assert.strictEqual(isUnderAllowedRoot('/srv/data/files'), true);
+    assert.strictEqual(isUnderAllowedRoot(join(homedir(), 'projects')), false);
+    assert.strictEqual(isUnderAllowedRoot('/tmp/foo'), false);
+  });
+
+  it('handles multiple colon-separated paths', () => {
+    delete process.env.PROJECT_ALLOWED_ROOTS_APPEND;
+    process.env.PROJECT_ALLOWED_ROOTS = `/opt/a:/opt/b:${homedir()}`;
+    assert.strictEqual(isUnderAllowedRoot('/opt/a/x'), true);
+    assert.strictEqual(isUnderAllowedRoot('/opt/b/y'), true);
+    assert.strictEqual(isUnderAllowedRoot(join(homedir(), 'z')), true);
+    assert.strictEqual(isUnderAllowedRoot('/opt/c/w'), false);
+  });
+
+  it('falls back to denylist when env var is empty', () => {
+    delete process.env.PROJECT_ALLOWED_ROOTS_APPEND;
+    process.env.PROJECT_ALLOWED_ROOTS = '';
+    assert.strictEqual(isDenylistMode(), true);
+    assert.strictEqual(isUnderAllowedRoot(join(homedir(), 'projects')), true);
+  });
+
+  it('append mode includes os.tmpdir() (macOS /var/folders fix — sync public gate)', () => {
+    // On macOS, os.tmpdir() returns /var/folders/…/T/ which resolves to
+    // /private/var/folders/…/T/ — NOT under /tmp or /private/tmp.
+    // Tests that mkdtemp() into tmpdir() must be allowed when
+    // PROJECT_ALLOWED_ROOTS_APPEND=true (the sync public gate mode).
+    process.env.PROJECT_ALLOWED_ROOTS = '/some/custom/root';
+    process.env.PROJECT_ALLOWED_ROOTS_APPEND = 'true';
+
+    const resolvedTmpdir = realpathSync(tmpdir());
+    const testPath = join(resolvedTmpdir, 'some-test-project');
+    assert.strictEqual(
+      isUnderAllowedRoot(testPath),
+      true,
+      `path under resolved tmpdir (${resolvedTmpdir}) must be allowed in append mode`,
+    );
+  });
+});

@@ -1,0 +1,87 @@
+{
+  "schemaVersion": "lf-0001.comparative-pilot-manifest.v1",
+  "pilotId": "lf-0001-contained-code-pr-655",
+  "fixtureId": "sop-replay-stale-formatter-regression",
+  "sourcePullRequest": 655,
+  "baseCommit": "8335b91253f690324f29739ef12ad8575fdb897b",
+  "modelInputSha256": "9fc41f80bd6c5ce1d92208d02e372129a99af663dc72b2950193401eadd81ce4",
+  "model": { "provider": "openai", "modelId": "gpt-5.6-sol" },
+  "fixture": {
+    "mutatingWork": true,
+    "protectedSurface": false,
+    "objectiveOutcomeCheck": true
+  },
+  "trialsPerArm": 3,
+  "arms": [
+    {
+      "id": "full_sop",
+      "harnessVersion": "lf-0001.full-sop-v1",
+      "planContract": "not_applicable",
+      "executionPolicy": "current development SOP"
+    },
+    {
+      "id": "free_plan_hard_gates",
+      "harnessVersion": "lf-0001.free-plan-hard-gates-v1",
+      "planContract": "not_applicable",
+      "executionPolicy": "model-directed strategy with the same deterministic hard gates"
+    },
+    {
+      "id": "adaptive_plan_hard_gates",
+      "harnessVersion": "lf-0001.adaptive-plan-hard-gates-v1",
+      "planContract": "lf-0001.plan-body-response.v3",
+      "executionPolicy": "structured adaptive plan with the same deterministic hard gates"
+    }
+  ],
+  "controls": {
+    "trustedOutcomeHiddenFromExecutors": true,
+    "sameToolPermissions": true,
+    "sameHardGates": true,
+    "sameDataIsolation": true,
+    "sameReviewBoundary": true,
+    "projection": "executors receive only the replay candidate modelInput and pinned base checkout"
+  },
+  "comparability": {
+    "allowedChangedPaths": ["packages/api/test/telegram-html-formatter.test.js"],
+    "outcomeOracle": {
+      "id": "focused-formatter-regression-v1",
+      "commandOrTool": "node --test packages/api/test/telegram-html-formatter.test.js",
+      "successExitCode": 0
+    },
+    "gatePolicy": {
+      "id": "clowder-pre-review-gate-v1",
+      "commandOrTool": "pnpm gate --no-rebase --skip-install",
+      "successExitCode": 0
+    },
+    "toolPermissionsPolicy": {
+      "id": "isolated-code-trial-tools-v1",
+      "description": "All arms receive the same repository and verification tool permissions."
+    },
+    "dataIsolationPolicy": {
+      "id": "isolated-worktree-test-data-v1",
+      "description": "All arms run in isolated worktrees without production user data."
+    },
+    "reviewBoundaryPolicy": {
+      "id": "cross-individual-p1p2-clearance-v1",
+      "description": "Every mutating trial requires cross-individual review and P1/P2 clearance."
+    }
+  },
+  "requiredTrialEvidence": [
+    "execution_provenance",
+    "diff_and_verification",
+    "review_and_outcome",
+    "safety",
+    "harness_tax",
+    "telemetry"
+  ],
+  "stopConditions": [
+    "any hard-invariant miss",
+    "any P1/P2 escape or escaped regression",
+    "adaptive response requires an external compatibility schema or repair",
+    "arms do not share the same model, base, model input, environment, hard gates, or review boundary"
+  ],
+  "notClaimed": [
+    "This manifest does not authorize execution outside isolated worktrees and test data.",
+    "Three trials do not satisfy AC-B3 or AC-B4.",
+    "The comparative evaluator does not select a winner or promote adaptive mode automatically."
+  ]
+}

@@ -1,0 +1,207 @@
+{
+  "schemaVersion": "lf-0001.development-oracle-calibration-certificate.v1",
+  "status": "calibrated",
+  "nonScoring": true,
+  "effectClaimEligible": false,
+  "runnerCommit": "0a4d8eef9a0e17ac0661cc7a401e9f8ee0472f2b",
+  "environmentSha256": "b064d9f37b106acf0b8766d3781cbcc520f63990686d5e27b9d69deb3f9f5449",
+  "manifestSha256": "6cc232974f28023ecabdca254b71010ec9c41e7543fd9b0d465a0240f70b2485",
+  "oracleToolchainSha256": "e5dda3092a12c28abad4e23d8b8e96ddec34c1f4aa796d43fa6ecdf36f618c5e",
+  "oracleSpecificitySha256": "acf5a786dfac9fef7d9472e2f0264959dc9139bee3600eb75508cabdce65214a",
+  "canaryId": "real-agent-sop-outcome-v3",
+  "taskId": "long-disposable-checkout-writes",
+  "calibration": {
+    "expectedBehaviorIds": [
+      "runtime-root-and-descendant-remap",
+      "workspace-containment",
+      "stale-runtime-fail-closed",
+      "filtered-read-isolation"
+    ],
+    "baseline": {
+      "candidateSha": "38f45bae0973043e4fe43f72815c81f09385961b",
+      "passed": false,
+      "checks": [
+        {
+          "id": "runtime-root-and-descendant-remap",
+          "passed": false
+        },
+        {
+          "id": "workspace-containment",
+          "passed": false
+        },
+        {
+          "id": "stale-runtime-fail-closed",
+          "passed": false
+        },
+        {
+          "id": "filtered-read-isolation",
+          "passed": false
+        }
+      ]
+    },
+    "goldProjection": {
+      "candidateSha": "7c21777bea8af93a1537a332789e9891495097c7",
+      "passed": true,
+      "checks": [
+        {
+          "id": "runtime-root-and-descendant-remap",
+          "passed": true
+        },
+        {
+          "id": "workspace-containment",
+          "passed": true
+        },
+        {
+          "id": "stale-runtime-fail-closed",
+          "passed": true
+        },
+        {
+          "id": "filtered-read-isolation",
+          "passed": true
+        }
+      ]
+    },
+    "behaviorEquivalentAlternate": {
+      "candidateSha": "4e32e6e0c5b939cec6b5f2a313337269422021a8",
+      "passed": true,
+      "checks": [
+        {
+          "id": "runtime-root-and-descendant-remap",
+          "passed": true
+        },
+        {
+          "id": "workspace-containment",
+          "passed": true
+        },
+        {
+          "id": "stale-runtime-fail-closed",
+          "passed": true
+        },
+        {
+          "id": "filtered-read-isolation",
+          "passed": true
+        }
+      ]
+    },
+    "singleFaultMutations": [
+      {
+        "id": "collapse-runtime-descendant-remap",
+        "targetBehaviorIds": [
+          "runtime-root-and-descendant-remap"
+        ],
+        "oracle": {
+          "candidateSha": "35e69ab9782766fff8297a9009cd15266617c78e",
+          "passed": false,
+          "checks": [
+            {
+              "id": "runtime-root-and-descendant-remap",
+              "passed": false
+            },
+            {
+              "id": "workspace-containment",
+              "passed": true
+            },
+            {
+              "id": "stale-runtime-fail-closed",
+              "passed": true
+            },
+            {
+              "id": "filtered-read-isolation",
+              "passed": true
+            }
+          ]
+        }
+      },
+      {
+        "id": "allow-workspace-symlink-escape",
+        "targetBehaviorIds": [
+          "workspace-containment"
+        ],
+        "oracle": {
+          "candidateSha": "c2363d73af8c4f2f1854afb6505b642177f6add9",
+          "passed": false,
+          "checks": [
+            {
+              "id": "runtime-root-and-descendant-remap",
+              "passed": true
+            },
+            {
+              "id": "workspace-containment",
+              "passed": false
+            },
+            {
+              "id": "stale-runtime-fail-closed",
+              "passed": true
+            },
+            {
+              "id": "filtered-read-isolation",
+              "passed": true
+            }
+          ]
+        }
+      },
+      {
+        "id": "migrate-unrelated-filtered-records",
+        "targetBehaviorIds": [
+          "filtered-read-isolation"
+        ],
+        "oracle": {
+          "candidateSha": "50a887e2ae19cf2bc13e33aada2d6029bc39a254",
+          "passed": false,
+          "checks": [
+            {
+              "id": "runtime-root-and-descendant-remap",
+              "passed": true
+            },
+            {
+              "id": "workspace-containment",
+              "passed": true
+            },
+            {
+              "id": "stale-runtime-fail-closed",
+              "passed": true
+            },
+            {
+              "id": "filtered-read-isolation",
+              "passed": false
+            }
+          ]
+        }
+      },
+      {
+        "id": "expose-stale-runtime-descendant",
+        "targetBehaviorIds": [
+          "stale-runtime-fail-closed"
+        ],
+        "oracle": {
+          "candidateSha": "e32839f24bfe7f57e323cde1d1abaded27b7b228",
+          "passed": false,
+          "checks": [
+            {
+              "id": "runtime-root-and-descendant-remap",
+              "passed": true
+            },
+            {
+              "id": "workspace-containment",
+              "passed": true
+            },
+            {
+              "id": "stale-runtime-fail-closed",
+              "passed": false
+            },
+            {
+              "id": "filtered-read-isolation",
+              "passed": true
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "behaviorIds": [
+    "runtime-root-and-descendant-remap",
+    "workspace-containment",
+    "stale-runtime-fail-closed",
+    "filtered-read-isolation"
+  ]
+}

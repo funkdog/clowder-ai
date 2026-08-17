@@ -1,0 +1,26 @@
+---
+domainId: eval:adaptive-development
+displayName: Adaptive Development Free Plan Eval
+systemThreadId: thread_eval_adaptive_development
+evalCat:
+  catId: opus-47
+  handle: "@opus47"
+  model: claude-opus-4-7
+frequency: daily
+sourceAdapter: adaptive-development-trial-eval
+sourceRefsKind: adaptive-development-trial-window
+threadPolicy:
+  role: working-home
+  stateSot: registry
+  allowedContent:
+    - longitudinal-analysis
+    - verdict-discussion
+    - handoff-drafts
+legacyScheduledTaskIds: []
+handoffTargetResolver:
+  featureId: F192
+  ownerCatId: opus-47
+  threadLookup: feature-thread
+sla:
+  acknowledgeHours: 48
+  reevalWithinHours: 168

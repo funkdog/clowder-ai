@@ -1,0 +1,4 @@
+interface:
+  display_name: "Adaptive Development SOP"
+  short_description: "Model-directed local work with concrete hard gates"
+  default_prompt: "Use $adaptive-development-sop in free_plan_hard_gates mode for this local task. Keep passive evaluation out of the execution path. End with the complete Outcome Checkpoint fields from the Skill, keep operator_experience=pending and review_state=pending for the ordinary local result, and enter Formal Review only for a stable candidate when Review or delivery is requested."

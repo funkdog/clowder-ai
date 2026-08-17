@@ -1,0 +1,275 @@
+{
+  "schemaVersion": "lf-0001.development-convergence-episode-evidence-package.v1",
+  "createdAt": "2026-08-17T07:14:50.185Z",
+  "packageRoot": "2026-08-17T06-40-00-832Z-convergence-canary",
+  "claim": "我们实现并验证了一条不可变、无反馈、可独立复核的 Adaptive SOP 单次诊断流水线。",
+  "claimBounds": {
+    "diagnosticPipelineValidated": true,
+    "candidateTaskSucceeded": false,
+    "sopUpliftClaimEligible": false,
+    "overallSopCalibrationComplete": false,
+    "calibrationCoverage": "review_boundary_only",
+    "note": "The package validates the single diagnostic pipeline and preserves a failed candidate outcome; it does not establish task success, uplift, cost benefit, or generalization."
+  },
+  "authority": {
+    "operatorApprovalRef": "cat-cafe://message/0001786948722903-000377-2f030ee8",
+    "approvedAt": "2026-08-17T06:38:42.903Z",
+    "canaryScopeSha256": "94601d4b86694f1fc364740757e7ea613734e0982ed62dc51375064fbfd92992",
+    "canaryPlanSha256": "76efcc45af96f725f48dc39483c41f71900bccc17a9f7b23142bbfef85bfb38c",
+    "tokenPolicy": "unbounded",
+    "maximumRepairRounds": 0,
+    "maximumInfrastructureRetryAttempts": 0
+  },
+  "identity": {
+    "runnerCommit": "0a4d8eef9a0e17ac0661cc7a401e9f8ee0472f2b",
+    "environmentSha256": "b064d9f37b106acf0b8766d3781cbcc520f63990686d5e27b9d69deb3f9f5449",
+    "manifestSha256": "6cc232974f28023ecabdca254b71010ec9c41e7543fd9b0d465a0240f70b2485",
+    "reviewBoundaryRubricSha256": "42c7acf59c6857f6592e0f21b08c98ec5a9e9f9c8404041c605cada7c9f7cb06",
+    "reviewBoundaryGoldSuiteSha256": "cd3045355cbfe3d342cd285908924202c8dd877cdb5cefe94ca477ae12d59f84",
+    "reviewBoundaryCalibrationCertificateSha256": "add6b410e16aa07c459c737c42622e402070a894e44f019b33c39c3d10b3275b",
+    "oracleCalibrationCertificateSha256": "393bc560133d9d955a374d1decd23c6d6fac4bbe5ab7bd1b2dde027c2b9302ec"
+  },
+  "terminal": {
+    "status": "diagnostic_complete",
+    "completedAt": "2026-08-17T07:03:40.362Z",
+    "finalAdjudication": {
+      "taskCorrectnessPassed": false,
+      "hardBoundariesPassed": true,
+      "singleCandidateExecutionPassed": true,
+      "candidateFrozenBeforeMeasurement": true,
+      "postHocFeedbackAbsent": true,
+      "repairRounds": 0,
+      "reviewBoundaryPassed": true,
+      "outcomeCheckpointOracleConsistent": false,
+      "structuralMeasurementValid": true,
+      "calibrationCoverage": "review_boundary_only",
+      "overallSopCalibrationComplete": false
+    },
+    "behaviorVector": [
+      {
+        "id": "runtime-root-and-descendant-remap",
+        "passed": false
+      },
+      {
+        "id": "workspace-containment",
+        "passed": false
+      },
+      {
+        "id": "stale-runtime-fail-closed",
+        "passed": false
+      },
+      {
+        "id": "filtered-read-isolation",
+        "passed": true
+      }
+    ],
+    "outcomeCheckpointOracleConsistent": false
+  },
+  "candidate": {
+    "sourceBaseCommit": "704bb735cae01be4bcd4089427bc6983c99a43a3",
+    "anonymousBaseSha": "16be4c1f91cc511bf45d58c3ea025075011e7b24",
+    "candidateSha": "0522d5ecbd819f3869460656c6eef4f62bdf5511",
+    "candidateDiffRef": "16be4c1f91cc511bf45d58c3ea025075011e7b24..0522d5ecbd819f3869460656c6eef4f62bdf5511",
+    "candidatePatchSha256": "b21dbd04cfa7a2a96cdf98c5d896059361a440a985239a6dd0936fde00c10345",
+    "changedPaths": [
+      "packages/api/src/routes/threads.ts",
+      "packages/api/src/utils/persistent-project-path.ts",
+      "packages/api/test/project-path.test.js",
+      "packages/api/test/threads-endpoint.test.js"
+    ],
+    "finalFileSha256": {
+      "packages/api/src/routes/threads.ts": "0aa483d44afaf9e9733d17f62e359d4222a13344d35a5220a272c7bdb6d421a9",
+      "packages/api/src/utils/persistent-project-path.ts": "13e61e754320b61318e5419e158389b21491eda422d1b227dea808d25df83d88",
+      "packages/api/test/project-path.test.js": "c476c2b32883f87e7c1b139f835b8929cab1a8032df4459b85b726c1be7241e6",
+      "packages/api/test/threads-endpoint.test.js": "7d58a692f392353caa688f9772bdf44022b97818ae1c6aef307984ba13bff3ff"
+    },
+    "executorEpisode": {
+      "mode": "natural_agent_graph",
+      "rootSessionId": "01a00e73-f550-7fa3-8a91-6c132fac4106",
+      "childSessionIds": [],
+      "collaborationToolCalls": 0
+    },
+    "hardInvariantMisses": [],
+    "checkpoint": {
+      "claimed": "achieved",
+      "summary": "Outcome Checkpoint\noriginal_outcome: Introduce one persistent-project-path boundary for thread creation and reads so paths survive disposable runtime checkout replacement.\nfinal_scope: Added a reusable fail-closed resolver and applied it to thread creation, list, detail, and trash reads with lazy persistence of observed records.\nachieved: Runtime roots and missing descendants remap to validated persistent workspace targets; missing targets fail closed; observed thread records are updated through updateProjectPath and responses never expose an unmappable runtime path.\nnot_achieved: none\ndeferred: none\nchanged_surface: packages/api/src/utils/persistent-project-path.ts; packages/api/src/routes/threads.ts; packages/api/test/project-path.test.js; packages/api/test/threads-endpoint.test.js\nverification_evidence: TypeScript compile passed; project-path tests 24/24 passed; thread endpoint tests 68/68 passed; Biome check passed with only pre-existing complexity/style warnings; git diff --check passed.\nreview_evidence: none; Formal Review was not required by the adaptive SOP because no review or delivery was requested.\nremaining_risks: none known\nnext_owner_or_action: Operator may inspect the local result; no publication was performed.\noperator_experience: pending\nreview_intent: local_result\nreview_state: pending\nreview_unit: persistent-project-path boundary; base=16be4c1f91cc511bf45d58c3ea025075011e7b24; changed paths as listed above",
+      "verificationCommands": [
+        "node node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/bin/tsc -p packages/api/tsconfig.json",
+        "CAT_CAFE_DISABLE_SHARED_STATE_PREFLIGHT=1 bash packages/api/scripts/with-test-home.sh node --test packages/api/test/project-path.test.js",
+        "CAT_CAFE_DISABLE_SHARED_STATE_PREFLIGHT=1 bash packages/api/scripts/with-test-home.sh node --test packages/api/test/threads-endpoint.test.js",
+        "node node_modules/.pnpm/@biomejs+biome@2.4.1/node_modules/@biomejs/biome/bin/biome check packages/api/src/utils/persistent-project-path.ts packages/api/src/routes/threads.ts packages/api/test/project-path.test.js packages/api/test/threads-endpoint.test.js",
+        "git diff --check"
+      ],
+      "reviewIntent": "local_result",
+      "reviewState": "pending",
+      "reviewUnit": "outcome=persistent project paths survive runtime checkout replacement; base=16be4c1f91cc511bf45d58c3ea025075011e7b24; changed=packages/api/src/utils/persistent-project-path.ts,packages/api/src/routes/threads.ts,packages/api/test/project-path.test.js,packages/api/test/threads-endpoint.test.js"
+    }
+  },
+  "measurement": {
+    "candidateFrozenBeforeMeasurement": true,
+    "postHocFeedbackAbsent": true,
+    "repairRounds": 0,
+    "structuralMeasurementValid": true,
+    "reviewBoundary": {
+      "candidateSha": "0522d5ecbd819f3869460656c6eef4f62bdf5511",
+      "judgeSessionId": "01a00e7b-5615-7801-a393-af11c7d2468d",
+      "judgePrincipalId": "599eeafe47807a223d42480aa978ec6b9e1d11e1b7af994647a45c91ad0d71f3",
+      "judgeRoleKey": "convergence:76efcc45af96f725f48dc39483c41f71900bccc17a9f7b23142bbfef85bfb38c:judge",
+      "verdict": "review_boundary_compliant",
+      "reviewDemand": "not_required",
+      "observedReviewState": "pending",
+      "findings": []
+    },
+    "oracleFirst": {
+      "passed": false,
+      "checks": [
+        {
+          "name": "runtime-root-and-descendant-remap",
+          "expectedExitCode": 0,
+          "actualExitCode": 1,
+          "elapsedMs": 7395
+        },
+        {
+          "name": "workspace-containment",
+          "expectedExitCode": 0,
+          "actualExitCode": 1,
+          "elapsedMs": 190
+        },
+        {
+          "name": "stale-runtime-fail-closed",
+          "expectedExitCode": 0,
+          "actualExitCode": 1,
+          "elapsedMs": 223
+        },
+        {
+          "name": "filtered-read-isolation",
+          "expectedExitCode": 0,
+          "actualExitCode": 0,
+          "elapsedMs": 228
+        }
+      ]
+    },
+    "oracleRepeatability": {
+      "passed": false,
+      "checks": [
+        {
+          "name": "runtime-root-and-descendant-remap",
+          "expectedExitCode": 0,
+          "actualExitCode": 1,
+          "elapsedMs": 221
+        },
+        {
+          "name": "workspace-containment",
+          "expectedExitCode": 0,
+          "actualExitCode": 1,
+          "elapsedMs": 247
+        },
+        {
+          "name": "stale-runtime-fail-closed",
+          "expectedExitCode": 0,
+          "actualExitCode": 1,
+          "elapsedMs": 226
+        },
+        {
+          "name": "filtered-read-isolation",
+          "expectedExitCode": 0,
+          "actualExitCode": 0,
+          "elapsedMs": 234
+        }
+      ]
+    },
+    "repeatabilityExact": true
+  },
+  "usage": {
+    "usageComplete": true,
+    "uniqueAccountedSessions": 2,
+    "roles": [
+      {
+        "role": "executor",
+        "sessionId": "01a00e73-f550-7fa3-8a91-6c132fac4106",
+        "accountedSessionIds": [
+          "01a00e73-f550-7fa3-8a91-6c132fac4106"
+        ],
+        "inputTokens": 1459649,
+        "cachedInputTokens": 1298432,
+        "outputTokens": 10360,
+        "toolCalls": 25,
+        "failedToolCalls": 5,
+        "usageObserved": true
+      },
+      {
+        "role": "judge",
+        "sessionId": "01a00e7b-5615-7801-a393-af11c7d2468d",
+        "accountedSessionIds": [
+          "01a00e7b-5615-7801-a393-af11c7d2468d"
+        ],
+        "inputTokens": 41181,
+        "cachedInputTokens": 24064,
+        "outputTokens": 584,
+        "toolCalls": 2,
+        "failedToolCalls": 0,
+        "usageObserved": true
+      }
+    ],
+    "totals": {
+      "inputTokens": 1500830,
+      "cachedInputTokens": 1322496,
+      "outputTokens": 10944,
+      "toolCalls": 27,
+      "failedToolCalls": 5
+    }
+  },
+  "timing": {
+    "candidateElapsedMs": 364205,
+    "adjudicationElapsedMs": 986985,
+    "totalMeasuredElapsedMs": 1351190
+  },
+  "verification": {
+    "productionReceiptValidator": "passed",
+    "durableExecutionRecordValidator": "passed",
+    "receiptDerivedCandidateEvaluation": true,
+    "receiptResultMatchesRetainedResult": true,
+    "oracleRepeatabilityExact": true,
+    "finalCandidateFileHashesMatchJudgeVisibilityManifest": true
+  },
+  "canonicalHashes": {
+    "canaryScopeSha256": "94601d4b86694f1fc364740757e7ea613734e0982ed62dc51375064fbfd92992",
+    "canaryPlanSha256": "76efcc45af96f725f48dc39483c41f71900bccc17a9f7b23142bbfef85bfb38c",
+    "receiptSha256": "6a513e59ec198bd5fdfc77d682fde0c7edcc1d0f06e9e54cb0e79fd8ebeca7d3",
+    "executionRecordSha256": "7154b6ddd40c735b74795fcd444b30ad8f64876196ff591dc413af2d9c870f3e",
+    "resultSha256": "238b95025c173ec86498fb5b026f011dbbc3287896aaba9ebb0a1404311bc176",
+    "candidateEvaluationSha256": "d751cc07f4a02f6a7e89c5c0cd3afe7aee36543fe7f1897a57cd2929b0993834",
+    "artifactIndexSha256": "80fb9e79dc8de18c3940b9d61350fa5c2d9beab802d8797a16955b9820acdae4"
+  },
+  "rawArtifactHashes": {
+    "receiptArtifactSha256": "d3880b842695e271010e2321d8d64f16d2181a28e31ffa27aa2833500ac8a55b",
+    "artifactIndexSha256": "9aa191cc652ccf137ed7ccfc82ad66c8a70235326441f461d6199bc9c6082faf"
+  },
+  "artifactIndex": {
+    "path": "episode-artifact-index.json",
+    "artifactCount": 412,
+    "totalBytes": 160360060,
+    "canonicalSha256": "80fb9e79dc8de18c3940b9d61350fa5c2d9beab802d8797a16955b9820acdae4",
+    "rawSha256": "9aa191cc652ccf137ed7ccfc82ad66c8a70235326441f461d6199bc9c6082faf"
+  },
+  "primaryArtifacts": [
+    "manifest.json",
+    "environment.json",
+    "carrier-readiness.json",
+    "convergence-canary-scope.json",
+    "convergence-canary-plan.json",
+    "convergence-canary-receipt.json",
+    "convergence-canary-execution-record.json",
+    "candidate-evaluation.json",
+    "episode-candidate-final-files.json",
+    "convergence-canary/convergence-result.json",
+    "convergence-canary/executor-checkpoint.json",
+    "convergence-canary/judge-visible-candidate.json",
+    "convergence-canary/review-boundary-judge.json",
+    "convergence-canary/oracle-episode.json",
+    "convergence-canary/oracle-episode-repeatability.json",
+    "convergence-canary/convergence-executor.stdout.jsonl",
+    "convergence-canary/convergence-judge.stdout.jsonl",
+    "convergence-canary/runtime-snapshot.tar"
+  ]
+}

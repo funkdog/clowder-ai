@@ -1,0 +1,29 @@
+{
+  "passed": false,
+  "checks": [
+    {
+      "name": "runtime-root-and-descendant-remap",
+      "expectedExitCode": 0,
+      "actualExitCode": 1,
+      "elapsedMs": 7395
+    },
+    {
+      "name": "workspace-containment",
+      "expectedExitCode": 0,
+      "actualExitCode": 1,
+      "elapsedMs": 190
+    },
+    {
+      "name": "stale-runtime-fail-closed",
+      "expectedExitCode": 0,
+      "actualExitCode": 1,
+      "elapsedMs": 223
+    },
+    {
+      "name": "filtered-read-isolation",
+      "expectedExitCode": 0,
+      "actualExitCode": 0,
+      "elapsedMs": 228
+    }
+  ]
+}

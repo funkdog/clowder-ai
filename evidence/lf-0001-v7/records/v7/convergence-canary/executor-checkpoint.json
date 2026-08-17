@@ -1,0 +1,14 @@
+{
+  "claimed": "achieved",
+  "summary": "Outcome Checkpoint\noriginal_outcome: Introduce one persistent-project-path boundary for thread creation and reads so paths survive disposable runtime checkout replacement.\nfinal_scope: Added a reusable fail-closed resolver and applied it to thread creation, list, detail, and trash reads with lazy persistence of observed records.\nachieved: Runtime roots and missing descendants remap to validated persistent workspace targets; missing targets fail closed; observed thread records are updated through updateProjectPath and responses never expose an unmappable runtime path.\nnot_achieved: none\ndeferred: none\nchanged_surface: packages/api/src/utils/persistent-project-path.ts; packages/api/src/routes/threads.ts; packages/api/test/project-path.test.js; packages/api/test/threads-endpoint.test.js\nverification_evidence: TypeScript compile passed; project-path tests 24/24 passed; thread endpoint tests 68/68 passed; Biome check passed with only pre-existing complexity/style warnings; git diff --check passed.\nreview_evidence: none; Formal Review was not required by the adaptive SOP because no review or delivery was requested.\nremaining_risks: none known\nnext_owner_or_action: Operator may inspect the local result; no publication was performed.\noperator_experience: pending\nreview_intent: local_result\nreview_state: pending\nreview_unit: persistent-project-path boundary; base=16be4c1f91cc511bf45d58c3ea025075011e7b24; changed paths as listed above",
+  "verificationCommands": [
+    "node node_modules/.pnpm/typescript@5.9.3/node_modules/typescript/bin/tsc -p packages/api/tsconfig.json",
+    "CAT_CAFE_DISABLE_SHARED_STATE_PREFLIGHT=1 bash packages/api/scripts/with-test-home.sh node --test packages/api/test/project-path.test.js",
+    "CAT_CAFE_DISABLE_SHARED_STATE_PREFLIGHT=1 bash packages/api/scripts/with-test-home.sh node --test packages/api/test/threads-endpoint.test.js",
+    "node node_modules/.pnpm/@biomejs+biome@2.4.1/node_modules/@biomejs/biome/bin/biome check packages/api/src/utils/persistent-project-path.ts packages/api/src/routes/threads.ts packages/api/test/project-path.test.js packages/api/test/threads-endpoint.test.js",
+    "git diff --check"
+  ],
+  "reviewIntent": "local_result",
+  "reviewState": "pending",
+  "reviewUnit": "outcome=persistent project paths survive runtime checkout replacement; base=16be4c1f91cc511bf45d58c3ea025075011e7b24; changed=packages/api/src/utils/persistent-project-path.ts,packages/api/src/routes/threads.ts,packages/api/test/project-path.test.js,packages/api/test/threads-endpoint.test.js"
+}

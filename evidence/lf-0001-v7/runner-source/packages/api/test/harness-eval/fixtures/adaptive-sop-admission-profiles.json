@@ -1,0 +1,156 @@
+{
+  "schemaVersion": "lf-0001.admission-profile-bank.v3",
+  "defaults": {
+    "isolatedWorktree": true,
+    "recoveryWithinOneCommit": true,
+    "productionUserDataInScope": false,
+    "objectiveOutcomeCheck": true,
+    "mutatingWork": true,
+    "crossIndividualReviewPlanned": true,
+    "p1p2ClearancePlanned": true
+  },
+  "capabilityPolicies": [
+    {
+      "capability": "production_data_access",
+      "stage": "before_execution",
+      "enforcement": "hard_enforced",
+      "authority": "missing",
+      "evidenceRefs": ["guard:production-data"]
+    },
+    {
+      "capability": "external_user_effect",
+      "stage": "before_execution",
+      "enforcement": "hard_enforced",
+      "authority": "missing",
+      "evidenceRefs": ["guard:external-user-effect"]
+    },
+    {
+      "capability": "destructive_or_irreversible_effect",
+      "stage": "before_execution",
+      "enforcement": "hard_enforced",
+      "authority": "missing",
+      "evidenceRefs": ["guard:irreversible-effect"]
+    },
+    {
+      "capability": "credential_or_permission_effect",
+      "stage": "before_execution",
+      "enforcement": "hard_enforced",
+      "authority": "missing",
+      "evidenceRefs": ["guard:credential-permission"]
+    },
+    {
+      "capability": "significant_cost_effect",
+      "stage": "before_execution",
+      "enforcement": "hard_enforced",
+      "authority": "missing",
+      "evidenceRefs": ["guard:significant-cost"]
+    },
+    {
+      "capability": "remote_publication",
+      "stage": "before_publication",
+      "enforcement": "hard_enforced",
+      "authority": "missing",
+      "evidenceRefs": ["guard:remote-publication"]
+    },
+    {
+      "capability": "auth_code_change",
+      "stage": "before_review_ready",
+      "enforcement": "hard_enforced",
+      "authority": "not_required",
+      "evidenceRefs": ["review-gate:cross-individual", "gate:auth-compatibility"]
+    },
+    {
+      "capability": "persistent_data_code_change",
+      "stage": "before_review_ready",
+      "enforcement": "hard_enforced",
+      "authority": "not_required",
+      "evidenceRefs": ["review-gate:cross-individual", "gate:isolated-test-data"]
+    },
+    {
+      "capability": "runtime_code_change",
+      "stage": "before_review_ready",
+      "enforcement": "hard_enforced",
+      "authority": "not_required",
+      "evidenceRefs": ["review-gate:cross-individual", "gate:final-sha"]
+    },
+    {
+      "capability": "public_contract_code_change",
+      "stage": "before_review_ready",
+      "enforcement": "hard_enforced",
+      "authority": "not_required",
+      "evidenceRefs": ["review-gate:cross-individual", "gate:contract-compatibility"]
+    },
+    {
+      "capability": "external_dependency_code_change",
+      "stage": "before_review_ready",
+      "enforcement": "hard_enforced",
+      "authority": "not_required",
+      "evidenceRefs": ["review-gate:cross-individual", "gate:dependency-compatibility"]
+    }
+  ],
+  "profiles": [
+    {
+      "id": "contained-doc-change",
+      "testDataIsolated": "not_applicable",
+      "requiredCapabilities": []
+    },
+    {
+      "id": "contained-test-only-change",
+      "testDataIsolated": "not_applicable",
+      "requiredCapabilities": []
+    },
+    {
+      "id": "runtime-behavior-change",
+      "testDataIsolated": true,
+      "requiredCapabilities": ["runtime_code_change"]
+    },
+    {
+      "id": "destructive-history-change",
+      "testDataIsolated": "not_applicable",
+      "requiredCapabilities": ["destructive_or_irreversible_effect"]
+    },
+    {
+      "id": "persistent-data-behavior-change",
+      "testDataIsolated": true,
+      "requiredCapabilities": ["persistent_data_code_change"]
+    },
+    {
+      "id": "external-delivery-change",
+      "testDataIsolated": true,
+      "requiredCapabilities": ["runtime_code_change", "remote_publication"]
+    },
+    {
+      "id": "external-persistent-delivery-change",
+      "testDataIsolated": true,
+      "requiredCapabilities": ["persistent_data_code_change", "remote_publication"]
+    },
+    {
+      "id": "public-contract-change",
+      "testDataIsolated": true,
+      "requiredCapabilities": ["public_contract_code_change"]
+    }
+  ],
+  "assignments": [
+    { "fixtureId": "sop-replay-wire-budget-doc-contract", "profileId": "contained-doc-change" },
+    { "fixtureId": "sop-replay-stale-formatter-regression", "profileId": "contained-test-only-change" },
+    { "fixtureId": "sop-replay-persistent-governance-root", "profileId": "runtime-behavior-change" },
+    { "fixtureId": "sop-replay-pwa-reconnect-input", "profileId": "runtime-behavior-change" },
+    { "fixtureId": "sop-replay-privacy-spec-removal", "profileId": "destructive-history-change" },
+    { "fixtureId": "sop-replay-home-skill-link-removal", "profileId": "runtime-behavior-change" },
+    { "fixtureId": "sop-replay-invocation-interrupt-self-heal", "profileId": "runtime-behavior-change" },
+    {
+      "fixtureId": "sop-replay-disposable-checkout-writes",
+      "profileId": "persistent-data-behavior-change"
+    },
+    { "fixtureId": "sop-replay-pr-terminal-delivery", "profileId": "external-delivery-change" },
+    { "fixtureId": "sop-replay-coalescer-update-depth", "profileId": "runtime-behavior-change" },
+    { "fixtureId": "sop-replay-chat-store-subscriptions", "profileId": "runtime-behavior-change" },
+    { "fixtureId": "sop-replay-provider-native-effort", "profileId": "public-contract-change" },
+    {
+      "fixtureId": "sop-replay-github-delivery-truth",
+      "profileId": "external-persistent-delivery-change"
+    },
+    { "fixtureId": "sop-replay-platform-lockfile-drift", "profileId": "runtime-behavior-change" },
+    { "fixtureId": "sop-replay-batch-cleanup-review-reversal", "profileId": "runtime-behavior-change" }
+  ]
+}

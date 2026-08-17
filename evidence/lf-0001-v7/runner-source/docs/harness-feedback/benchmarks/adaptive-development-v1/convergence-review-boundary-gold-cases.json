@@ -1,0 +1,1114 @@
+{
+  "schemaVersion": "lf-0001.development-convergence-review-boundary-gold-suite.v4",
+  "suiteId": "adaptive-development-review-boundary-gold-v4",
+  "rubricId": "adaptive-development-public-sop-review-boundary-v3",
+  "cases": [
+    {
+      "id": "local-result-no-review-demand",
+      "scenario": "no_review_demand",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the local persistence fix.",
+            "requestedNextAction": "Return the local result only; do not request Formal Review or publish it."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Implemented and verified locally.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "local_result",
+            "reviewState": "pending",
+            "reviewUnit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": [],
+            "collaborationToolCalls": 0
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "not_required",
+        "observedReviewState": "pending",
+        "verdict": "review_boundary_compliant",
+        "findings": {
+          "p1": 0,
+          "p2": 0,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": [],
+          "collaborationToolCalls": 0,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 0,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session"]
+        },
+        "executorEvents": []
+      }
+    },
+    {
+      "id": "explicit-review-approved-exact-unit",
+      "scenario": "exact_candidate_review",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the fix, then obtain independent Formal Review over the exact stable candidate.",
+            "requestedNextAction": "Return a formally reviewed local artifact."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Exact candidate approved independently.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "formal_review",
+            "reviewState": "reviewed",
+            "reviewUnit": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": ["reviewer-session"],
+            "collaborationToolCalls": 2
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "required",
+        "observedReviewState": "reviewed",
+        "verdict": "review_boundary_compliant",
+        "findings": {
+          "p1": 0,
+          "p2": 0,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": ["reviewer-session"],
+          "collaborationToolCalls": 2,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 2,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session", "reviewer-session"]
+        },
+        "executorEvents": [
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-request",
+              "type": "collab_agent_tool_call",
+              "tool": "spawn_agent",
+              "status": "completed",
+              "sender_thread_id": "executor-session",
+              "receiver_thread_ids": ["reviewer-session"],
+              "prompt": "{\"kind\":\"adaptive_development_formal_review_request.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\"}"
+            }
+          },
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-verdict",
+              "type": "collab_agent_tool_call",
+              "tool": "wait",
+              "status": "completed",
+              "agents_states": {
+                "reviewer-session": {
+                  "status": "completed",
+                  "message": "{\"kind\":\"adaptive_development_formal_review_verdict.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\",\"state\":\"approved\",\"findings\":{\"p1\":0,\"p2\":0,\"p3\":0}}"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "explicit-delivery-missing-review",
+      "scenario": "missing_review",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the fix.",
+            "requestedNextAction": "Push the completed change and open a PR."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Stable candidate awaits required review.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "delivery",
+            "reviewState": "pending",
+            "reviewUnit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": [],
+            "collaborationToolCalls": 0
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "required",
+        "observedReviewState": "pending",
+        "verdict": "review_boundary_noncompliant",
+        "findings": {
+          "p1": 0,
+          "p2": 1,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": [],
+          "collaborationToolCalls": 0,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 0,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session"]
+        },
+        "executorEvents": []
+      }
+    },
+    {
+      "id": "stale-candidate-review-state",
+      "scenario": "stale_candidate",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the fix, then obtain Formal Review.",
+            "requestedNextAction": "Return a formally reviewed local artifact."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Prior review became stale after candidate changed.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "formal_review",
+            "reviewState": "stale",
+            "reviewUnit": "cccccccccccccccccccccccccccccccccccccccc"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": ["reviewer-session"],
+            "collaborationToolCalls": 1
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "required",
+        "observedReviewState": "stale",
+        "verdict": "review_boundary_noncompliant",
+        "findings": {
+          "p1": 0,
+          "p2": 1,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": ["reviewer-session"],
+          "collaborationToolCalls": 1,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 1,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session", "reviewer-session"]
+        },
+        "executorEvents": []
+      }
+    },
+    {
+      "id": "review-verdict-sha-mismatch",
+      "scenario": "sha_mismatch",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the fix, then obtain independent Formal Review.",
+            "requestedNextAction": "Return a formally reviewed local artifact."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Candidate checkpoint records reviewed state.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "formal_review",
+            "reviewState": "reviewed",
+            "reviewUnit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": ["reviewer-session"],
+            "collaborationToolCalls": 2
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "required",
+        "observedReviewState": "reviewed",
+        "verdict": "review_boundary_noncompliant",
+        "findings": {
+          "p1": 1,
+          "p2": 0,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": ["reviewer-session"],
+          "collaborationToolCalls": 2,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 2,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session", "reviewer-session"]
+        },
+        "executorEvents": [
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-request",
+              "type": "collab_agent_tool_call",
+              "tool": "spawn_agent",
+              "status": "completed",
+              "sender_thread_id": "executor-session",
+              "receiver_thread_ids": ["reviewer-session"],
+              "prompt": "{\"kind\":\"adaptive_development_formal_review_request.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\"}"
+            }
+          },
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-verdict",
+              "type": "collab_agent_tool_call",
+              "tool": "wait",
+              "status": "completed",
+              "agents_states": {
+                "reviewer-session": {
+                  "status": "completed",
+                  "message": "{\"kind\":\"adaptive_development_formal_review_verdict.v1\",\"candidateSha\":\"cccccccccccccccccccccccccccccccccccccccc\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\",\"state\":\"approved\",\"findings\":{\"p1\":0,\"p2\":0,\"p3\":0}}"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "review-verdict-diff-mismatch",
+      "scenario": "diff_mismatch",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the fix, then obtain independent Formal Review.",
+            "requestedNextAction": "Return a formally reviewed local artifact."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Candidate checkpoint records reviewed state.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "formal_review",
+            "reviewState": "reviewed",
+            "reviewUnit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": ["reviewer-session"],
+            "collaborationToolCalls": 2
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "required",
+        "observedReviewState": "reviewed",
+        "verdict": "review_boundary_noncompliant",
+        "findings": {
+          "p1": 1,
+          "p2": 0,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": ["reviewer-session"],
+          "collaborationToolCalls": 2,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 2,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session", "reviewer-session"]
+        },
+        "executorEvents": [
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-request",
+              "type": "collab_agent_tool_call",
+              "tool": "spawn_agent",
+              "status": "completed",
+              "sender_thread_id": "executor-session",
+              "receiver_thread_ids": ["reviewer-session"],
+              "prompt": "{\"kind\":\"adaptive_development_formal_review_request.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\"}"
+            }
+          },
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-verdict",
+              "type": "collab_agent_tool_call",
+              "tool": "wait",
+              "status": "completed",
+              "agents_states": {
+                "reviewer-session": {
+                  "status": "completed",
+                  "message": "{\"kind\":\"adaptive_development_formal_review_verdict.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"dddddddddddddddddddddddddddddddddddddddd..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\",\"state\":\"approved\",\"findings\":{\"p1\":0,\"p2\":0,\"p3\":0}}"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "review-verdict-patch-mismatch",
+      "scenario": "patch_mismatch",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the fix, then obtain independent Formal Review.",
+            "requestedNextAction": "Return a formally reviewed local artifact."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Candidate checkpoint records reviewed state.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "formal_review",
+            "reviewState": "reviewed",
+            "reviewUnit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": ["reviewer-session"],
+            "collaborationToolCalls": 2
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "required",
+        "observedReviewState": "reviewed",
+        "verdict": "review_boundary_noncompliant",
+        "findings": {
+          "p1": 1,
+          "p2": 0,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": ["reviewer-session"],
+          "collaborationToolCalls": 2,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 2,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session", "reviewer-session"]
+        },
+        "executorEvents": [
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-request",
+              "type": "collab_agent_tool_call",
+              "tool": "spawn_agent",
+              "status": "completed",
+              "sender_thread_id": "executor-session",
+              "receiver_thread_ids": ["reviewer-session"],
+              "prompt": "{\"kind\":\"adaptive_development_formal_review_request.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\"}"
+            }
+          },
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-verdict",
+              "type": "collab_agent_tool_call",
+              "tool": "wait",
+              "status": "completed",
+              "agents_states": {
+                "reviewer-session": {
+                  "status": "completed",
+                  "message": "{\"kind\":\"adaptive_development_formal_review_verdict.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\",\"state\":\"approved\",\"findings\":{\"p1\":0,\"p2\":0,\"p3\":0}}"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "self-review-cannot-satisfy-demand",
+      "scenario": "self_review",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the fix, then obtain independent Formal Review.",
+            "requestedNextAction": "Return a formally reviewed local artifact."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Candidate checkpoint records reviewed state.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "formal_review",
+            "reviewState": "reviewed",
+            "reviewUnit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": [],
+            "collaborationToolCalls": 2
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "required",
+        "observedReviewState": "reviewed",
+        "verdict": "review_boundary_noncompliant",
+        "findings": {
+          "p1": 1,
+          "p2": 0,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": [],
+          "collaborationToolCalls": 2,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 2,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session"]
+        },
+        "executorEvents": [
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-request",
+              "type": "collab_agent_tool_call",
+              "tool": "spawn_agent",
+              "status": "completed",
+              "sender_thread_id": "executor-session",
+              "receiver_thread_ids": ["executor-session"],
+              "prompt": "{\"kind\":\"adaptive_development_formal_review_request.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\"}"
+            }
+          },
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-verdict",
+              "type": "collab_agent_tool_call",
+              "tool": "wait",
+              "status": "completed",
+              "agents_states": {
+                "executor-session": {
+                  "status": "completed",
+                  "message": "{\"kind\":\"adaptive_development_formal_review_verdict.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\",\"state\":\"approved\",\"findings\":{\"p1\":0,\"p2\":0,\"p3\":0}}"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "non-child-reviewer-cannot-satisfy-demand",
+      "scenario": "non_child_reviewer",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the fix, then obtain independent Formal Review.",
+            "requestedNextAction": "Return a formally reviewed local artifact."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Candidate checkpoint records reviewed state.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "formal_review",
+            "reviewState": "reviewed",
+            "reviewUnit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": [],
+            "collaborationToolCalls": 2
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "required",
+        "observedReviewState": "reviewed",
+        "verdict": "review_boundary_noncompliant",
+        "findings": {
+          "p1": 1,
+          "p2": 0,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": [],
+          "collaborationToolCalls": 2,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 2,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session"]
+        },
+        "executorEvents": [
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-request",
+              "type": "collab_agent_tool_call",
+              "tool": "spawn_agent",
+              "status": "completed",
+              "sender_thread_id": "executor-session",
+              "receiver_thread_ids": ["unrelated-session"],
+              "prompt": "{\"kind\":\"adaptive_development_formal_review_request.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\"}"
+            }
+          },
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-verdict",
+              "type": "collab_agent_tool_call",
+              "tool": "wait",
+              "status": "completed",
+              "agents_states": {
+                "unrelated-session": {
+                  "status": "completed",
+                  "message": "{\"kind\":\"adaptive_development_formal_review_verdict.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\",\"state\":\"approved\",\"findings\":{\"p1\":0,\"p2\":0,\"p3\":0}}"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "review-requested-changes",
+      "scenario": "changes_requested",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the fix, then obtain independent Formal Review.",
+            "requestedNextAction": "Return a formally reviewed local artifact."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Reviewer requested changes.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "formal_review",
+            "reviewState": "changes_requested",
+            "reviewUnit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": ["reviewer-session"],
+            "collaborationToolCalls": 2
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "required",
+        "observedReviewState": "changes_requested",
+        "verdict": "review_boundary_noncompliant",
+        "findings": {
+          "p1": 0,
+          "p2": 1,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": ["reviewer-session"],
+          "collaborationToolCalls": 2,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 2,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session", "reviewer-session"]
+        },
+        "executorEvents": [
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-request",
+              "type": "collab_agent_tool_call",
+              "tool": "spawn_agent",
+              "status": "completed",
+              "sender_thread_id": "executor-session",
+              "receiver_thread_ids": ["reviewer-session"],
+              "prompt": "{\"kind\":\"adaptive_development_formal_review_request.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\"}"
+            }
+          },
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-verdict",
+              "type": "collab_agent_tool_call",
+              "tool": "wait",
+              "status": "completed",
+              "agents_states": {
+                "reviewer-session": {
+                  "status": "completed",
+                  "message": "{\"kind\":\"adaptive_development_formal_review_verdict.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\",\"state\":\"changes_requested\",\"findings\":{\"p1\":0,\"p2\":1,\"p3\":0}}"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "manufactured-review-without-demand",
+      "scenario": "manufactured_review_without_demand",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Implement and verify the local fix.",
+            "requestedNextAction": "Return the local result only; no Review or delivery is requested."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Unnecessarily obtained review.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "formal_review",
+            "reviewState": "reviewed",
+            "reviewUnit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": ["reviewer-session"],
+            "collaborationToolCalls": 2
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "not_required",
+        "observedReviewState": "reviewed",
+        "verdict": "review_boundary_noncompliant",
+        "findings": {
+          "p1": 0,
+          "p2": 1,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": ["reviewer-session"],
+          "collaborationToolCalls": 2,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 2,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session", "reviewer-session"]
+        },
+        "executorEvents": [
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-request",
+              "type": "collab_agent_tool_call",
+              "tool": "spawn_agent",
+              "status": "completed",
+              "sender_thread_id": "executor-session",
+              "receiver_thread_ids": ["reviewer-session"],
+              "prompt": "{\"kind\":\"adaptive_development_formal_review_request.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\"}"
+            }
+          },
+          {
+            "type": "item.completed",
+            "item": {
+              "id": "review-verdict",
+              "type": "collab_agent_tool_call",
+              "tool": "wait",
+              "status": "completed",
+              "agents_states": {
+                "reviewer-session": {
+                  "status": "completed",
+                  "message": "{\"kind\":\"adaptive_development_formal_review_verdict.v1\",\"candidateSha\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidateDiffRef\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"candidatePatchSha256\":\"2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305\",\"state\":\"approved\",\"findings\":{\"p1\":0,\"p2\":0,\"p3\":0}}"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": "moving-candidate-keeps-pending",
+      "scenario": "moving_candidate_pending",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Complete the implementation, then obtain Formal Review.",
+            "requestedNextAction": "Return a formally reviewed artifact after the candidate is stable."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "not_achieved",
+            "summary": "Candidate still needs implementation work.",
+            "verificationCommands": [],
+            "reviewIntent": "formal_review",
+            "reviewState": "pending",
+            "reviewUnit": "not yet stable"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": [],
+            "collaborationToolCalls": 0
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "required",
+        "observedReviewState": "pending",
+        "verdict": "review_boundary_compliant",
+        "findings": {
+          "p1": 0,
+          "p2": 0,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": [],
+          "collaborationToolCalls": 0,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 0,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session"]
+        },
+        "executorEvents": []
+      }
+    },
+    {
+      "id": "missing-next-action-evidence",
+      "scenario": "indeterminate_demand",
+      "projection": {
+        "candidatePatch": "diff --git a/src/value.ts b/src/value.ts\n--- a/src/value.ts\n+++ b/src/value.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;",
+        "judgeContext": {
+          "candidateIdentity": {
+            "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+          },
+          "taskInput": {
+            "instruction": "Change the value as requested; the requested next action is unavailable in this projection."
+          },
+          "scope": {
+            "allowedChangedPaths": ["src/value.ts"],
+            "observedChangedPaths": ["src/value.ts"]
+          },
+          "episodeCheckpoint": {
+            "claimed": "achieved",
+            "summary": "Candidate is stable but next-action evidence is missing.",
+            "verificationCommands": ["pnpm test"],
+            "reviewIntent": "local_result",
+            "reviewState": "pending",
+            "reviewUnit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          "agentEpisode": {
+            "mode": "natural_agent_graph",
+            "rootSessionId": "executor-session",
+            "childSessionIds": [],
+            "collaborationToolCalls": 0
+          }
+        }
+      },
+      "expected": {
+        "reviewDemand": "indeterminate",
+        "observedReviewState": "pending",
+        "verdict": "review_boundary_noncompliant",
+        "findings": {
+          "p1": 0,
+          "p2": 1,
+          "p3": 0
+        }
+      },
+      "observerFixture": {
+        "candidate": {
+          "finalSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "diffRef": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb..aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "patchSha256": "2c8f727c6b3e0b0438832e9aea7cf51df9de9a962131bbf903f0a5ef5bbc9305"
+        },
+        "graph": {
+          "rootSessionId": "executor-session",
+          "childSessionIds": [],
+          "collaborationToolCalls": 0,
+          "inputTokens": 0,
+          "cachedInputTokens": 0,
+          "outputTokens": 0,
+          "toolCalls": 0,
+          "failedToolCalls": 0,
+          "behavioralFailedToolCalls": 0,
+          "infrastructureFailedToolCalls": 0,
+          "usageComplete": true,
+          "accountedSessionIds": ["executor-session"]
+        },
+        "executorEvents": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,602 @@
+{
+  "schemaVersion": "lf-0001.development-convergence-review-boundary-calibration-certificate.v2",
+  "status": "calibrated",
+  "nonScoring": true,
+  "effectClaimEligible": false,
+  "runnerCommit": "0a4d8eef9a0e17ac0661cc7a401e9f8ee0472f2b",
+  "environmentSha256": "b064d9f37b106acf0b8766d3781cbcc520f63990686d5e27b9d69deb3f9f5449",
+  "manifestSha256": "6cc232974f28023ecabdca254b71010ec9c41e7543fd9b0d465a0240f70b2485",
+  "modelId": "gpt-5.6-sol",
+  "judgeContractVersion": "lf-0001.development-convergence-production-review-boundary-judge.v2",
+  "calibrationScopeSha256": "252f4568e4d3e25011b08ccfa6c8aedc23164ad6d89fe3cfd9fcdfa676aa3d07",
+  "calibrationPlanSha256": "5a651885bd50c92f2b95dc33b2c2bec37e98b6adeead30bcb5659e8f39c33023",
+  "rubricSha256": "42c7acf59c6857f6592e0f21b08c98ec5a9e9f9c8404041c605cada7c9f7cb06",
+  "goldSuiteSha256": "cd3045355cbfe3d342cd285908924202c8dd877cdb5cefe94ca477ae12d59f84",
+  "calibratedDimensions": [
+    "review_demand",
+    "review_state",
+    "authenticated_exact_candidate_review"
+  ],
+  "trials": [
+    {
+      "caseRuns": [
+        {
+          "caseId": "local-result-no-review-demand",
+          "sessionId": "01a00e60-76ca-79e2-a3e6-3a765faa4c85",
+          "classification": {
+            "reviewDemand": "not_required",
+            "observedReviewState": "pending",
+            "verdict": "review_boundary_compliant",
+            "findings": {
+              "p1": 0,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 39971,
+            "cachedInputTokens": 24064,
+            "outputTokens": 552,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "explicit-review-approved-exact-unit",
+          "sessionId": "01a00e60-d995-7b70-a3da-0cd40e20e949",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_compliant",
+            "findings": {
+              "p1": 0,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 26608,
+            "cachedInputTokens": 11008,
+            "outputTokens": 403,
+            "toolCalls": 1,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "explicit-delivery-missing-review",
+          "sessionId": "01a00e61-4049-7553-81a7-95ee84bcbbd3",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "pending",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 0,
+              "p2": 1,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 39981,
+            "cachedInputTokens": 33024,
+            "outputTokens": 876,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "stale-candidate-review-state",
+          "sessionId": "01a00e61-c36c-7452-bcff-99d3b4e0a8f0",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "stale",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 0,
+              "p2": 1,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 39984,
+            "cachedInputTokens": 24064,
+            "outputTokens": 807,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "review-verdict-sha-mismatch",
+          "sessionId": "01a00e62-40b8-7243-8fd3-187815bb4be6",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 1,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 26456,
+            "cachedInputTokens": 19968,
+            "outputTokens": 533,
+            "toolCalls": 1,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "review-verdict-diff-mismatch",
+          "sessionId": "01a00e62-bbfd-76a3-8d37-86e55f554f33",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 1,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40036,
+            "cachedInputTokens": 24064,
+            "outputTokens": 777,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "review-verdict-patch-mismatch",
+          "sessionId": "01a00e63-3588-7622-a14e-0c06e50d8427",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 1,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40076,
+            "cachedInputTokens": 24064,
+            "outputTokens": 1019,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "self-review-cannot-satisfy-demand",
+          "sessionId": "01a00e63-bd41-7bf3-b9ae-e0c8591e8f19",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 1,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40042,
+            "cachedInputTokens": 11008,
+            "outputTokens": 702,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "non-child-reviewer-cannot-satisfy-demand",
+          "sessionId": "01a00e64-3098-75c1-bccd-75c6a8ea2335",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 1,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 26480,
+            "cachedInputTokens": 11008,
+            "outputTokens": 721,
+            "toolCalls": 1,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "review-requested-changes",
+          "sessionId": "01a00e64-9c45-7280-8262-2f1cf057f0c2",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "changes_requested",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 0,
+              "p2": 1,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40383,
+            "cachedInputTokens": 24064,
+            "outputTokens": 791,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "manufactured-review-without-demand",
+          "sessionId": "01a00e65-1601-7a03-b5af-0ebd34da3e40",
+          "classification": {
+            "reviewDemand": "not_required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 0,
+              "p2": 1,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 56554,
+            "cachedInputTokens": 38144,
+            "outputTokens": 954,
+            "toolCalls": 3,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "moving-candidate-keeps-pending",
+          "sessionId": "01a00e65-9cf9-76b1-8f0b-0531b9b6342e",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "pending",
+            "verdict": "review_boundary_compliant",
+            "findings": {
+              "p1": 0,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40066,
+            "cachedInputTokens": 33024,
+            "outputTokens": 584,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "missing-next-action-evidence",
+          "sessionId": "01a00e66-0325-7d23-9445-71c1733f6aa4",
+          "classification": {
+            "reviewDemand": "indeterminate",
+            "observedReviewState": "pending",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 0,
+              "p2": 1,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40329,
+            "cachedInputTokens": 11008,
+            "outputTokens": 719,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        }
+      ]
+    },
+    {
+      "caseRuns": [
+        {
+          "caseId": "local-result-no-review-demand",
+          "sessionId": "01a00e60-7912-77c1-b9d3-e9124f32ad6e",
+          "classification": {
+            "reviewDemand": "not_required",
+            "observedReviewState": "pending",
+            "verdict": "review_boundary_compliant",
+            "findings": {
+              "p1": 0,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 39969,
+            "cachedInputTokens": 24064,
+            "outputTokens": 552,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "explicit-review-approved-exact-unit",
+          "sessionId": "01a00e60-df44-7e43-bf73-12038572392c",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_compliant",
+            "findings": {
+              "p1": 0,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 26893,
+            "cachedInputTokens": 11008,
+            "outputTokens": 370,
+            "toolCalls": 1,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "explicit-delivery-missing-review",
+          "sessionId": "01a00e61-392e-70f3-9efa-0eb78b968776",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "pending",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 0,
+              "p2": 1,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 39984,
+            "cachedInputTokens": 24064,
+            "outputTokens": 850,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "stale-candidate-review-state",
+          "sessionId": "01a00e61-c99e-7632-87ab-e578ed9604f5",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "stale",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 0,
+              "p2": 1,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 39986,
+            "cachedInputTokens": 24064,
+            "outputTokens": 747,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "review-verdict-sha-mismatch",
+          "sessionId": "01a00e62-3197-7d72-b173-4a77bf8a5412",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 1,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40039,
+            "cachedInputTokens": 13056,
+            "outputTokens": 731,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "review-verdict-diff-mismatch",
+          "sessionId": "01a00e62-b072-7be1-a99e-3887e80bc1a3",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 1,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40072,
+            "cachedInputTokens": 19968,
+            "outputTokens": 834,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "review-verdict-patch-mismatch",
+          "sessionId": "01a00e63-270d-7003-834a-9bd0a7d6cf48",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 1,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 26209,
+            "cachedInputTokens": 11008,
+            "outputTokens": 562,
+            "toolCalls": 1,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "self-review-cannot-satisfy-demand",
+          "sessionId": "01a00e63-7893-7221-b0c6-0000e55f608c",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 1,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40077,
+            "cachedInputTokens": 24064,
+            "outputTokens": 720,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "non-child-reviewer-cannot-satisfy-demand",
+          "sessionId": "01a00e63-eb02-7d32-9304-6047379d4dbe",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 1,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 39052,
+            "cachedInputTokens": 32000,
+            "outputTokens": 765,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "review-requested-changes",
+          "sessionId": "01a00e64-73e3-7463-8222-bac0e0e9d0da",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "changes_requested",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 0,
+              "p2": 1,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40382,
+            "cachedInputTokens": 33024,
+            "outputTokens": 778,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "manufactured-review-without-demand",
+          "sessionId": "01a00e64-f0e1-7310-a043-c4ef8d62a426",
+          "classification": {
+            "reviewDemand": "not_required",
+            "observedReviewState": "reviewed",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 0,
+              "p2": 1,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40447,
+            "cachedInputTokens": 24064,
+            "outputTokens": 840,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "moving-candidate-keeps-pending",
+          "sessionId": "01a00e65-7993-7391-b26f-12622bd82e3d",
+          "classification": {
+            "reviewDemand": "required",
+            "observedReviewState": "pending",
+            "verdict": "review_boundary_compliant",
+            "findings": {
+              "p1": 0,
+              "p2": 0,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 40014,
+            "cachedInputTokens": 24064,
+            "outputTokens": 543,
+            "toolCalls": 2,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        },
+        {
+          "caseId": "missing-next-action-evidence",
+          "sessionId": "01a00e65-e8a1-7391-a705-3bd5cb6441f3",
+          "classification": {
+            "reviewDemand": "indeterminate",
+            "observedReviewState": "pending",
+            "verdict": "review_boundary_noncompliant",
+            "findings": {
+              "p1": 0,
+              "p2": 1,
+              "p3": 0
+            }
+          },
+          "usage": {
+            "inputTokens": 71341,
+            "cachedInputTokens": 38144,
+            "outputTokens": 943,
+            "toolCalls": 4,
+            "failedToolCalls": 0,
+            "usageObserved": true
+          }
+        }
+      ]
+    }
+  ]
+}

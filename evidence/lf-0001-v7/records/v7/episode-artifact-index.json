@@ -1,0 +1,2484 @@
+{
+  "schemaVersion": "lf-0001.development-convergence-episode-artifact-index.v1",
+  "root": "2026-08-17T06-40-00-832Z-convergence-canary",
+  "exclusions": [
+    "episode-artifact-index.json",
+    "episode-evidence-manifest.json"
+  ],
+  "artifactCount": 412,
+  "totalBytes": 160360060,
+  "entries": [
+    {
+      "path": "candidate-evaluation.json",
+      "kind": "file",
+      "bytes": 1150,
+      "sha256": "86e45a9abbcbdf3acb3db103be6114983e24fdc237fd3daa1e9d9d602de6ec9e"
+    },
+    {
+      "path": "carrier-readiness.json",
+      "kind": "file",
+      "bytes": 2289,
+      "sha256": "fe0c00670f101f3188a7e58293876e091e24f6fa55e2a232e34b179794335f84"
+    },
+    {
+      "path": "carrier-readiness/executor-control/agent-graph-carrier-output.json",
+      "kind": "file",
+      "bytes": 21,
+      "sha256": "f9171b43161ef29dad9d76a703375e5a0e4ed6b674ae50165215685a2b511d0e"
+    },
+    {
+      "path": "carrier-readiness/executor-control/carrier-output.json",
+      "kind": "file",
+      "bytes": 21,
+      "sha256": "f9171b43161ef29dad9d76a703375e5a0e4ed6b674ae50165215685a2b511d0e"
+    },
+    {
+      "path": "carrier-readiness/executor-control/carrier-output.schema.json",
+      "kind": "file",
+      "bytes": 192,
+      "sha256": "4b365044c575315230875869ca574cb646886ed873401aef73ff9e9ac179183a"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5899,
+      "sha256": "c56bfedb0614b340f2406bd1e941556428daacd4007bc678eb19ce9448678bf0"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/.sandbox_migration",
+      "kind": "file",
+      "bytes": 3,
+      "sha256": "2d27fbdf4e8ca207afbfa388ca9172fbcc6c70e534af2476b3b704f87debadcf"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/config.toml",
+      "kind": "file",
+      "bytes": 194,
+      "sha256": "41b24278bb71491b907c407fab225d0eb6d40696e6da6ddc5d67cc2822ef9e6a"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/goals_1.sqlite",
+      "kind": "file",
+      "bytes": 32768,
+      "sha256": "0edbc3648217d83b504e189cf47d4752db38eafb4c77e505b8108d2e1c7aac72"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/installation_id",
+      "kind": "file",
+      "bytes": 36,
+      "sha256": "3aa0120ba051c4c3671a76f40507623f13355b35616f05f6957a02f1597509a9"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/logs_2.sqlite",
+      "kind": "file",
+      "bytes": 49152,
+      "sha256": "62cf46416a9500d083b96dde8029d4d21c7445dae7145756556076f051bb2bc1"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/memories_1.sqlite",
+      "kind": "file",
+      "bytes": 40960,
+      "sha256": "19bea7dbb302612812a8b284aa0d4666ab3585746326aa8ed3aebbd9dac18fb0"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/sessions/2026/08/17/rollout-2026-08-17T14-40-04-01a00e72-e053-7b23-be43-a3c0d0dabc9f.jsonl",
+      "kind": "file",
+      "bytes": 40029,
+      "sha256": "ce9cce7e9c0049284feb7e35159685405c3a648411506af008b5877d5ff7e25f"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/sessions/2026/08/17/rollout-2026-08-17T14-40-05-01a00e72-e310-7f62-9a0f-26e599bbf5fb.jsonl",
+      "kind": "file",
+      "bytes": 37249,
+      "sha256": "b224b91bfb1419285586d1fa272020a2b5fe42c210efa4dd399207a3718a7d03"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/.codex-system-skills.marker",
+      "kind": "file",
+      "bytes": 17,
+      "sha256": "f50ddde5fa015d46714e76787636abfbd18b33f33e162e30529ef9911fe60fdb"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 275,
+      "sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/assets/imagegen-small.svg",
+      "kind": "file",
+      "bytes": 2889,
+      "sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/assets/imagegen.png",
+      "kind": "file",
+      "bytes": 1711,
+      "sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/LICENSE.txt",
+      "kind": "file",
+      "bytes": 10776,
+      "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/references/cli.md",
+      "kind": "file",
+      "bytes": 10188,
+      "sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/references/codex-network.md",
+      "kind": "file",
+      "bytes": 1779,
+      "sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/references/image-api.md",
+      "kind": "file",
+      "bytes": 6079,
+      "sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/references/prompting.md",
+      "kind": "file",
+      "bytes": 9896,
+      "sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/references/sample-prompts.md",
+      "kind": "file",
+      "bytes": 19239,
+      "sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/scripts/image_gen.py",
+      "kind": "file",
+      "bytes": 34271,
+      "sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/scripts/remove_chroma_key.py",
+      "kind": "file",
+      "bytes": 13836,
+      "sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/imagegen/SKILL.md",
+      "kind": "file",
+      "bytes": 24003,
+      "sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 598,
+      "sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/assets/openai-small.svg",
+      "kind": "file",
+      "bytes": 1091,
+      "sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/assets/openai.png",
+      "kind": "file",
+      "bytes": 1429,
+      "sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/LICENSE.txt",
+      "kind": "file",
+      "bytes": 10776,
+      "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/references/latest-model.md",
+      "kind": "file",
+      "bytes": 2365,
+      "sha256": "7c5a1b8cb74f6140c52df722781df4ce43bbcfa34cadc15c425276c2492783c4"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/references/prompting-guide.md",
+      "kind": "file",
+      "bytes": 17483,
+      "sha256": "d66112cbc583c4fd39952904efb2bf41c9f665368b7ba22f5ba01dc657c576f8"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/references/upgrade-guide.md",
+      "kind": "file",
+      "bytes": 1050,
+      "sha256": "ed1b75a89b8ec4d67787774ef6c4e8b98eace16c63348f42e969e6ffa67cb656"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/references/upgrading-to-gpt-5p6-sol.md",
+      "kind": "file",
+      "bytes": 23398,
+      "sha256": "4643eb48cb105140b6b9aa55c3deecb950c75e70698e5fa9cc7534db1c293828"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs",
+      "kind": "file",
+      "bytes": 16085,
+      "sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/scripts/resolve-latest-model-info",
+      "kind": "file",
+      "bytes": 1038,
+      "sha256": "7354dbb030ca0736dd633a7ca1b930cf640abd40370725dea3a458cb51d49523"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/scripts/resolve-latest-model-info.cjs",
+      "kind": "file",
+      "bytes": 3937,
+      "sha256": "eeb1bb486018e16b37edfc06b1a37179dbc672982d501040d4f7142f29dd2e64"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/openai-docs/SKILL.md",
+      "kind": "file",
+      "bytes": 22806,
+      "sha256": "9914a79e6e1bd70d780b777e9019677af0eba60bbdfac3b7fe9b0407f16b5cc4"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/plugin-creator/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 339,
+      "sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/plugin-creator/assets/plugin-creator-small.svg",
+      "kind": "file",
+      "bytes": 1319,
+      "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/plugin-creator/assets/plugin-creator.png",
+      "kind": "file",
+      "bytes": 1563,
+      "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/plugin-creator/references/installing-and-updating.md",
+      "kind": "file",
+      "bytes": 5874,
+      "sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/plugin-creator/references/plugin-json-spec.md",
+      "kind": "file",
+      "bytes": 9179,
+      "sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/plugin-creator/scripts/create_basic_plugin.py",
+      "kind": "file",
+      "bytes": 11185,
+      "sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/plugin-creator/scripts/read_marketplace_name.py",
+      "kind": "file",
+      "bytes": 1497,
+      "sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py",
+      "kind": "file",
+      "bytes": 2686,
+      "sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/plugin-creator/scripts/validate_plugin.py",
+      "kind": "file",
+      "bytes": 21180,
+      "sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/plugin-creator/SKILL.md",
+      "kind": "file",
+      "bytes": 11040,
+      "sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/review-agent/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 252,
+      "sha256": "4d867a46d15e36ac880176484aae160f59855340c6059b2ea6ab9fbc9af084de"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/review-agent/SKILL.md",
+      "kind": "file",
+      "bytes": 2661,
+      "sha256": "07079efd0dc76f05fade424e5dfb048dce1de2df7626e1a4f56292a4f3f92228"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-creator/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 183,
+      "sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-creator/assets/skill-creator-small.svg",
+      "kind": "file",
+      "bytes": 1319,
+      "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-creator/assets/skill-creator.png",
+      "kind": "file",
+      "bytes": 1563,
+      "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-creator/license.txt",
+      "kind": "file",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-creator/references/openai_yaml.md",
+      "kind": "file",
+      "bytes": 2356,
+      "sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-creator/scripts/generate_openai_yaml.py",
+      "kind": "file",
+      "bytes": 6619,
+      "sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-creator/scripts/init_skill.py",
+      "kind": "file",
+      "bytes": 14602,
+      "sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-creator/scripts/quick_validate.py",
+      "kind": "file",
+      "bytes": 3293,
+      "sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-creator/SKILL.md",
+      "kind": "file",
+      "bytes": 22047,
+      "sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-installer/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 221,
+      "sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-installer/assets/skill-installer-small.svg",
+      "kind": "file",
+      "bytes": 923,
+      "sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-installer/assets/skill-installer.png",
+      "kind": "file",
+      "bytes": 1086,
+      "sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-installer/LICENSE.txt",
+      "kind": "file",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-installer/scripts/github_utils.py",
+      "kind": "file",
+      "bytes": 659,
+      "sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-installer/scripts/install-skill-from-github.py",
+      "kind": "file",
+      "bytes": 10096,
+      "sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-installer/scripts/list-skills.py",
+      "kind": "file",
+      "bytes": 2967,
+      "sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/skills/.system/skill-installer/SKILL.md",
+      "kind": "file",
+      "bytes": 3367,
+      "sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/state_5.sqlite",
+      "kind": "file",
+      "bytes": 4096,
+      "sha256": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/state_5.sqlite-shm",
+      "kind": "file",
+      "bytes": 32768,
+      "sha256": "b99e0be292bf591d27d955987e98a85f9154dd799c0b882a9d64468e5cd87be2"
+    },
+    {
+      "path": "carrier-readiness/executor-control/codex-home/state_5.sqlite-wal",
+      "kind": "file",
+      "bytes": 2290752,
+      "sha256": "27e011f6dd557534800b30002dd4cba45ed142840771a9ea2be03747dfa28eba"
+    },
+    {
+      "path": "carrier-readiness/executor-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "carrier-readiness/executor-provider-doctor-report.json",
+      "kind": "file",
+      "bytes": 766,
+      "sha256": "3105dc42561aacdc4494402f9a75758b0f9081c9143f0e7ade2b4acf59a8bbcd"
+    },
+    {
+      "path": "carrier-readiness/post-model-freeze-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5044,
+      "sha256": "4e76a274d9c742198f02b3a215a32b1682b0d7be242bc5c40674f4edf56dc899"
+    },
+    {
+      "path": "carrier-readiness/post-model-freeze-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "carrier-readiness/post-model-oracle-phase-a-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 4446,
+      "sha256": "e6a44e936e8c6654d891e3257a18f4b46cf8db06c0226c2f5d0e082cb4efb19b"
+    },
+    {
+      "path": "carrier-readiness/post-model-oracle-phase-a-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "carrier-readiness/post-model-oracle-phase-b-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 4446,
+      "sha256": "57ff85c7de715baf5e44d3d1442bab6fdaa78767ef142512146a68700ef4e8bb"
+    },
+    {
+      "path": "carrier-readiness/post-model-oracle-phase-b-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.adaptive-carrier-smoke-tool",
+      "kind": "file",
+      "bytes": 14,
+      "sha256": "4c09e630dcd0cf96cb7bc42795937357442cf5bf87d9620de528616e5e632d8d"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/config",
+      "kind": "file",
+      "bytes": 179,
+      "sha256": "e8f1ee7f0e9d8240d1cc301d9541af6149babf59280fca7753d6d367b8f96419"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/description",
+      "kind": "file",
+      "bytes": 73,
+      "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/HEAD",
+      "kind": "file",
+      "bytes": 41,
+      "sha256": "e67887bcb2cf3aa93177daa51ebfbeef880fa264f0d3a3f900e60476cd2cead0"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/applypatch-msg.sample",
+      "kind": "file",
+      "bytes": 478,
+      "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/commit-msg.sample",
+      "kind": "file",
+      "bytes": 896,
+      "sha256": "1f74d5e9292979b573ebd59741d46cb93ff391acdd083d340b94370753d92437"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/fsmonitor-watchman.sample",
+      "kind": "file",
+      "bytes": 4726,
+      "sha256": "e0549964e93897b519bd8e333c037e51fff0f88ba13e086a331592bf801fa1d0"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/post-update.sample",
+      "kind": "file",
+      "bytes": 189,
+      "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/pre-applypatch.sample",
+      "kind": "file",
+      "bytes": 424,
+      "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/pre-commit.sample",
+      "kind": "file",
+      "bytes": 1643,
+      "sha256": "f9af7d95eb1231ecf2eba9770fedfa8d4797a12b02d7240e98d568201251244a"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/pre-merge-commit.sample",
+      "kind": "file",
+      "bytes": 416,
+      "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/pre-push.sample",
+      "kind": "file",
+      "bytes": 1374,
+      "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/pre-rebase.sample",
+      "kind": "file",
+      "bytes": 4898,
+      "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/pre-receive.sample",
+      "kind": "file",
+      "bytes": 544,
+      "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/prepare-commit-msg.sample",
+      "kind": "file",
+      "bytes": 1492,
+      "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/push-to-checkout.sample",
+      "kind": "file",
+      "bytes": 2783,
+      "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/hooks/update.sample",
+      "kind": "file",
+      "bytes": 3650,
+      "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/index",
+      "kind": "file",
+      "bytes": 241,
+      "sha256": "d94000f988583518e72f3de2ef5155be119470a541e26d199974646ef19f397a"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/info/exclude",
+      "kind": "file",
+      "bytes": 240,
+      "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/logs/HEAD",
+      "kind": "file",
+      "bytes": 535,
+      "sha256": "a08ba0f30e539acad430239b13249637cdf30507032bcc85b5c4e231bbc2b012"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/logs/refs/heads/carrier-readiness",
+      "kind": "file",
+      "bytes": 310,
+      "sha256": "fff3fc94a47a9df3852b783a5322f512e02a6b201c3814ac14419c39694939e5"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/objects/pack/pack-fa828aeb10aeafa6d22ef45c35fbe6ecf43bd164.idx",
+      "kind": "file",
+      "bytes": 1184,
+      "sha256": "fde6e14f8ec0be391fbe13642354bc4ab73dbb9706cfff86cddfd256d491bf98"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/objects/pack/pack-fa828aeb10aeafa6d22ef45c35fbe6ecf43bd164.pack",
+      "kind": "file",
+      "bytes": 379,
+      "sha256": "d5891b09d8d1605d239b65ac7478acf0459f450bbb145e91533d35efd9d3b524"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/packed-refs",
+      "kind": "file",
+      "bytes": 46,
+      "sha256": "6110899c7adc374885f9552bddfb76fa28a7f7ca3c05fb8b74471a457e1e57c8"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/.git/refs/heads/carrier-readiness",
+      "kind": "file",
+      "bytes": 41,
+      "sha256": "e67887bcb2cf3aa93177daa51ebfbeef880fa264f0d3a3f900e60476cd2cead0"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-a/workspace/package.json",
+      "kind": "file",
+      "bytes": 53,
+      "sha256": "b3d60d0f15780d5cc4a19739a089390cc36feeba53180cd50b4d7e2860927b0e"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.adaptive-carrier-smoke-tool",
+      "kind": "file",
+      "bytes": 14,
+      "sha256": "4c09e630dcd0cf96cb7bc42795937357442cf5bf87d9620de528616e5e632d8d"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/config",
+      "kind": "file",
+      "bytes": 179,
+      "sha256": "e8f1ee7f0e9d8240d1cc301d9541af6149babf59280fca7753d6d367b8f96419"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/description",
+      "kind": "file",
+      "bytes": 73,
+      "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/HEAD",
+      "kind": "file",
+      "bytes": 41,
+      "sha256": "e67887bcb2cf3aa93177daa51ebfbeef880fa264f0d3a3f900e60476cd2cead0"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/applypatch-msg.sample",
+      "kind": "file",
+      "bytes": 478,
+      "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/commit-msg.sample",
+      "kind": "file",
+      "bytes": 896,
+      "sha256": "1f74d5e9292979b573ebd59741d46cb93ff391acdd083d340b94370753d92437"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/fsmonitor-watchman.sample",
+      "kind": "file",
+      "bytes": 4726,
+      "sha256": "e0549964e93897b519bd8e333c037e51fff0f88ba13e086a331592bf801fa1d0"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/post-update.sample",
+      "kind": "file",
+      "bytes": 189,
+      "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/pre-applypatch.sample",
+      "kind": "file",
+      "bytes": 424,
+      "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/pre-commit.sample",
+      "kind": "file",
+      "bytes": 1643,
+      "sha256": "f9af7d95eb1231ecf2eba9770fedfa8d4797a12b02d7240e98d568201251244a"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/pre-merge-commit.sample",
+      "kind": "file",
+      "bytes": 416,
+      "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/pre-push.sample",
+      "kind": "file",
+      "bytes": 1374,
+      "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/pre-rebase.sample",
+      "kind": "file",
+      "bytes": 4898,
+      "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/pre-receive.sample",
+      "kind": "file",
+      "bytes": 544,
+      "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/prepare-commit-msg.sample",
+      "kind": "file",
+      "bytes": 1492,
+      "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/push-to-checkout.sample",
+      "kind": "file",
+      "bytes": 2783,
+      "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/hooks/update.sample",
+      "kind": "file",
+      "bytes": 3650,
+      "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/index",
+      "kind": "file",
+      "bytes": 241,
+      "sha256": "2d0271ee0c7d814a7f9aff986d9fb85592d152d7a9fcaf272059850325e89289"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/info/exclude",
+      "kind": "file",
+      "bytes": 240,
+      "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/logs/HEAD",
+      "kind": "file",
+      "bytes": 535,
+      "sha256": "a08ba0f30e539acad430239b13249637cdf30507032bcc85b5c4e231bbc2b012"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/logs/refs/heads/carrier-readiness",
+      "kind": "file",
+      "bytes": 310,
+      "sha256": "fff3fc94a47a9df3852b783a5322f512e02a6b201c3814ac14419c39694939e5"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/objects/pack/pack-fa828aeb10aeafa6d22ef45c35fbe6ecf43bd164.idx",
+      "kind": "file",
+      "bytes": 1184,
+      "sha256": "fde6e14f8ec0be391fbe13642354bc4ab73dbb9706cfff86cddfd256d491bf98"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/objects/pack/pack-fa828aeb10aeafa6d22ef45c35fbe6ecf43bd164.pack",
+      "kind": "file",
+      "bytes": 379,
+      "sha256": "d5891b09d8d1605d239b65ac7478acf0459f450bbb145e91533d35efd9d3b524"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/packed-refs",
+      "kind": "file",
+      "bytes": 46,
+      "sha256": "6110899c7adc374885f9552bddfb76fa28a7f7ca3c05fb8b74471a457e1e57c8"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/.git/refs/heads/carrier-readiness",
+      "kind": "file",
+      "bytes": 41,
+      "sha256": "e67887bcb2cf3aa93177daa51ebfbeef880fa264f0d3a3f900e60476cd2cead0"
+    },
+    {
+      "path": "carrier-readiness/post-model-phase-b/workspace/package.json",
+      "kind": "file",
+      "bytes": 53,
+      "sha256": "b3d60d0f15780d5cc4a19739a089390cc36feeba53180cd50b4d7e2860927b0e"
+    },
+    {
+      "path": "carrier-readiness/provider-transport-ca.pem",
+      "kind": "file",
+      "bytes": 218939,
+      "sha256": "6eaed8dbe88761b9e56757ab5fea294ba8c57233e398e10fe044d5fd90c78bf5"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/carrier-output.json",
+      "kind": "file",
+      "bytes": 21,
+      "sha256": "f9171b43161ef29dad9d76a703375e5a0e4ed6b674ae50165215685a2b511d0e"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/carrier-output.schema.json",
+      "kind": "file",
+      "bytes": 192,
+      "sha256": "4b365044c575315230875869ca574cb646886ed873401aef73ff9e9ac179183a"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5637,
+      "sha256": "44b90897168620065bd7a4cf7bacb4da157e9a4b698a330b6ffd725fe52de617"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/.sandbox_migration",
+      "kind": "file",
+      "bytes": 3,
+      "sha256": "2d27fbdf4e8ca207afbfa388ca9172fbcc6c70e534af2476b3b704f87debadcf"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/config.toml",
+      "kind": "file",
+      "bytes": 194,
+      "sha256": "41b24278bb71491b907c407fab225d0eb6d40696e6da6ddc5d67cc2822ef9e6a"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/goals_1.sqlite",
+      "kind": "file",
+      "bytes": 4096,
+      "sha256": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/goals_1.sqlite-shm",
+      "kind": "file",
+      "bytes": 32768,
+      "sha256": "0a684f4bc7b92550f030a91520a8b7cbdcfbffab434b1fc1007163f30e4b654a"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/goals_1.sqlite-wal",
+      "kind": "file",
+      "bytes": 78312,
+      "sha256": "fd6ac3c524817358c3bd867e032964871ac57412fd678677d487ee34494dbe10"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/installation_id",
+      "kind": "file",
+      "bytes": 36,
+      "sha256": "36876ab92f61d40926b4980a6749ebdd56398374cf62653fed4e1c31f2657d52"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/logs_2.sqlite",
+      "kind": "file",
+      "bytes": 49152,
+      "sha256": "ca011ac5f300f90c1abbf6cb6465544fb6899e8c4126459aa8503428901b009a"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/memories_1.sqlite",
+      "kind": "file",
+      "bytes": 40960,
+      "sha256": "2d366d7d159c9bebd15602aa5c14c9cf8c7d1183cb4c70f4a2d2eb2bb4fed4da"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/.codex-system-skills.marker",
+      "kind": "file",
+      "bytes": 17,
+      "sha256": "f50ddde5fa015d46714e76787636abfbd18b33f33e162e30529ef9911fe60fdb"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 275,
+      "sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/assets/imagegen-small.svg",
+      "kind": "file",
+      "bytes": 2889,
+      "sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/assets/imagegen.png",
+      "kind": "file",
+      "bytes": 1711,
+      "sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/LICENSE.txt",
+      "kind": "file",
+      "bytes": 10776,
+      "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/references/cli.md",
+      "kind": "file",
+      "bytes": 10188,
+      "sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/references/codex-network.md",
+      "kind": "file",
+      "bytes": 1779,
+      "sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/references/image-api.md",
+      "kind": "file",
+      "bytes": 6079,
+      "sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/references/prompting.md",
+      "kind": "file",
+      "bytes": 9896,
+      "sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/references/sample-prompts.md",
+      "kind": "file",
+      "bytes": 19239,
+      "sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/scripts/image_gen.py",
+      "kind": "file",
+      "bytes": 34271,
+      "sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/scripts/remove_chroma_key.py",
+      "kind": "file",
+      "bytes": 13836,
+      "sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/imagegen/SKILL.md",
+      "kind": "file",
+      "bytes": 24003,
+      "sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 598,
+      "sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/assets/openai-small.svg",
+      "kind": "file",
+      "bytes": 1091,
+      "sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/assets/openai.png",
+      "kind": "file",
+      "bytes": 1429,
+      "sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/LICENSE.txt",
+      "kind": "file",
+      "bytes": 10776,
+      "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/references/latest-model.md",
+      "kind": "file",
+      "bytes": 2365,
+      "sha256": "7c5a1b8cb74f6140c52df722781df4ce43bbcfa34cadc15c425276c2492783c4"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/references/prompting-guide.md",
+      "kind": "file",
+      "bytes": 17483,
+      "sha256": "d66112cbc583c4fd39952904efb2bf41c9f665368b7ba22f5ba01dc657c576f8"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/references/upgrade-guide.md",
+      "kind": "file",
+      "bytes": 1050,
+      "sha256": "ed1b75a89b8ec4d67787774ef6c4e8b98eace16c63348f42e969e6ffa67cb656"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/references/upgrading-to-gpt-5p6-sol.md",
+      "kind": "file",
+      "bytes": 23398,
+      "sha256": "4643eb48cb105140b6b9aa55c3deecb950c75e70698e5fa9cc7534db1c293828"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs",
+      "kind": "file",
+      "bytes": 16085,
+      "sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/scripts/resolve-latest-model-info",
+      "kind": "file",
+      "bytes": 1038,
+      "sha256": "7354dbb030ca0736dd633a7ca1b930cf640abd40370725dea3a458cb51d49523"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/scripts/resolve-latest-model-info.cjs",
+      "kind": "file",
+      "bytes": 3937,
+      "sha256": "eeb1bb486018e16b37edfc06b1a37179dbc672982d501040d4f7142f29dd2e64"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/openai-docs/SKILL.md",
+      "kind": "file",
+      "bytes": 22806,
+      "sha256": "9914a79e6e1bd70d780b777e9019677af0eba60bbdfac3b7fe9b0407f16b5cc4"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/plugin-creator/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 339,
+      "sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/plugin-creator/assets/plugin-creator-small.svg",
+      "kind": "file",
+      "bytes": 1319,
+      "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/plugin-creator/assets/plugin-creator.png",
+      "kind": "file",
+      "bytes": 1563,
+      "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/plugin-creator/references/installing-and-updating.md",
+      "kind": "file",
+      "bytes": 5874,
+      "sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/plugin-creator/references/plugin-json-spec.md",
+      "kind": "file",
+      "bytes": 9179,
+      "sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/plugin-creator/scripts/create_basic_plugin.py",
+      "kind": "file",
+      "bytes": 11185,
+      "sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/plugin-creator/scripts/read_marketplace_name.py",
+      "kind": "file",
+      "bytes": 1497,
+      "sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py",
+      "kind": "file",
+      "bytes": 2686,
+      "sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/plugin-creator/scripts/validate_plugin.py",
+      "kind": "file",
+      "bytes": 21180,
+      "sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/plugin-creator/SKILL.md",
+      "kind": "file",
+      "bytes": 11040,
+      "sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/review-agent/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 252,
+      "sha256": "4d867a46d15e36ac880176484aae160f59855340c6059b2ea6ab9fbc9af084de"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/review-agent/SKILL.md",
+      "kind": "file",
+      "bytes": 2661,
+      "sha256": "07079efd0dc76f05fade424e5dfb048dce1de2df7626e1a4f56292a4f3f92228"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-creator/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 183,
+      "sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-creator/assets/skill-creator-small.svg",
+      "kind": "file",
+      "bytes": 1319,
+      "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-creator/assets/skill-creator.png",
+      "kind": "file",
+      "bytes": 1563,
+      "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-creator/license.txt",
+      "kind": "file",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-creator/references/openai_yaml.md",
+      "kind": "file",
+      "bytes": 2356,
+      "sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-creator/scripts/generate_openai_yaml.py",
+      "kind": "file",
+      "bytes": 6619,
+      "sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-creator/scripts/init_skill.py",
+      "kind": "file",
+      "bytes": 14602,
+      "sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-creator/scripts/quick_validate.py",
+      "kind": "file",
+      "bytes": 3293,
+      "sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-creator/SKILL.md",
+      "kind": "file",
+      "bytes": 22047,
+      "sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-installer/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 221,
+      "sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-installer/assets/skill-installer-small.svg",
+      "kind": "file",
+      "bytes": 923,
+      "sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-installer/assets/skill-installer.png",
+      "kind": "file",
+      "bytes": 1086,
+      "sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-installer/LICENSE.txt",
+      "kind": "file",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-installer/scripts/github_utils.py",
+      "kind": "file",
+      "bytes": 659,
+      "sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-installer/scripts/install-skill-from-github.py",
+      "kind": "file",
+      "bytes": 10096,
+      "sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-installer/scripts/list-skills.py",
+      "kind": "file",
+      "bytes": 2967,
+      "sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/skills/.system/skill-installer/SKILL.md",
+      "kind": "file",
+      "bytes": 3367,
+      "sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/state_5.sqlite",
+      "kind": "file",
+      "bytes": 4096,
+      "sha256": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/state_5.sqlite-shm",
+      "kind": "file",
+      "bytes": 32768,
+      "sha256": "b455b64dba9bc218dd66340aba8a715b5447148d7550e76434e370ff55817fae"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/codex-home/state_5.sqlite-wal",
+      "kind": "file",
+      "bytes": 1462632,
+      "sha256": "eaf05f9f4bdb6b19937c93da891f3ed04fb5a04da0ad8000fbbf97c30d645ab5"
+    },
+    {
+      "path": "carrier-readiness/reviewer-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "carrier-readiness/reviewer-provider-doctor-report.json",
+      "kind": "file",
+      "bytes": 766,
+      "sha256": "9705e27d631ff85fbb3c2a4272163a318f69e9dd3bf268eff92631e15acba424"
+    },
+    {
+      "path": "carrier-readiness/workspace/.adaptive-carrier-smoke-tool",
+      "kind": "file",
+      "bytes": 14,
+      "sha256": "4c09e630dcd0cf96cb7bc42795937357442cf5bf87d9620de528616e5e632d8d"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/COMMIT_EDITMSG",
+      "kind": "file",
+      "bytes": 49,
+      "sha256": "448936a1801a7543a273da10817b4e1f92c4b1fba4d665b4ee5d082dae15bf34"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/config",
+      "kind": "file",
+      "bytes": 137,
+      "sha256": "cae33efdb02cf774435c1ff9cb16bcc1014606908530c6e1dc727615fe3e8cda"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/description",
+      "kind": "file",
+      "bytes": 73,
+      "sha256": "85ab6c163d43a17ea9cf7788308bca1466f1b0a8d1cc92e26e9bf63da4062aee"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/HEAD",
+      "kind": "file",
+      "bytes": 34,
+      "sha256": "1f08725833f3aa709b53a8c329bfd6a2f0657b982d0a44d8e0b1c61c5da66317"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/applypatch-msg.sample",
+      "kind": "file",
+      "bytes": 478,
+      "sha256": "0223497a0b8b033aa58a3a521b8629869386cf7ab0e2f101963d328aa62193f7"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/commit-msg.sample",
+      "kind": "file",
+      "bytes": 896,
+      "sha256": "1f74d5e9292979b573ebd59741d46cb93ff391acdd083d340b94370753d92437"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/fsmonitor-watchman.sample",
+      "kind": "file",
+      "bytes": 4726,
+      "sha256": "e0549964e93897b519bd8e333c037e51fff0f88ba13e086a331592bf801fa1d0"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/post-update.sample",
+      "kind": "file",
+      "bytes": 189,
+      "sha256": "81765af2daef323061dcbc5e61fc16481cb74b3bac9ad8a174b186523586f6c5"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/pre-applypatch.sample",
+      "kind": "file",
+      "bytes": 424,
+      "sha256": "e15c5b469ea3e0a695bea6f2c82bcf8e62821074939ddd85b77e0007ff165475"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/pre-commit.sample",
+      "kind": "file",
+      "bytes": 1643,
+      "sha256": "f9af7d95eb1231ecf2eba9770fedfa8d4797a12b02d7240e98d568201251244a"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/pre-merge-commit.sample",
+      "kind": "file",
+      "bytes": 416,
+      "sha256": "d3825a70337940ebbd0a5c072984e13245920cdf8898bd225c8d27a6dfc9cb53"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/pre-push.sample",
+      "kind": "file",
+      "bytes": 1374,
+      "sha256": "ecce9c7e04d3f5dd9d8ada81753dd1d549a9634b26770042b58dda00217d086a"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/pre-rebase.sample",
+      "kind": "file",
+      "bytes": 4898,
+      "sha256": "4febce867790052338076f4e66cc47efb14879d18097d1d61c8261859eaaa7b3"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/pre-receive.sample",
+      "kind": "file",
+      "bytes": 544,
+      "sha256": "a4c3d2b9c7bb3fd8d1441c31bd4ee71a595d66b44fcf49ddb310252320169989"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/prepare-commit-msg.sample",
+      "kind": "file",
+      "bytes": 1492,
+      "sha256": "e9ddcaa4189fddd25ed97fc8c789eca7b6ca16390b2392ae3276f0c8e1aa4619"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/push-to-checkout.sample",
+      "kind": "file",
+      "bytes": 2783,
+      "sha256": "a53d0741798b287c6dd7afa64aee473f305e65d3f49463bb9d7408ec3b12bf5f"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/hooks/update.sample",
+      "kind": "file",
+      "bytes": 3650,
+      "sha256": "8d5f2fa83e103cf08b57eaa67521df9194f45cbdbcb37da52ad586097a14d106"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/index",
+      "kind": "file",
+      "bytes": 241,
+      "sha256": "e7767233ae3ef1f22586126272f18bef4f5a8ba88a900e87896fa8e909d71079"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/info/exclude",
+      "kind": "file",
+      "bytes": 240,
+      "sha256": "6671fe83b7a07c8932ee89164d1f2793b2318058eb8b98dc5c06ee0a5a3b0ec1"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/logs/HEAD",
+      "kind": "file",
+      "bytes": 221,
+      "sha256": "2d3e23abf5b74937ca865dabd0ae13f0cdc0e46099794847896c627767292a7c"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/logs/refs/heads/carrier-readiness",
+      "kind": "file",
+      "bytes": 221,
+      "sha256": "2d3e23abf5b74937ca865dabd0ae13f0cdc0e46099794847896c627767292a7c"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/objects/5d/46c484b0406ba3afd6a3c1aedd997ad2745640",
+      "kind": "file",
+      "bytes": 30,
+      "sha256": "fbfb53be0ebc2cd9def2d5f56f63bb9b201c1aca310e02c7160c361684412565"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/objects/78/d8a2c300bbfea1e1b90c0d835d9223950efec7",
+      "kind": "file",
+      "bytes": 163,
+      "sha256": "e7d334c0aa0d43b71a7b00f37c6670f7784f79712b35f021dcfa973bf82ba948"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/objects/92/67191138ba3f70d0a745642968c9907c55ee6b",
+      "kind": "file",
+      "bytes": 110,
+      "sha256": "6d7f4f3c15f5f2f48692b87103a61e8481180665f0731ecf03d100253df7af1e"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/objects/b8/d13ea83bff89c8ee77e737a34cefbbb0d74577",
+      "kind": "file",
+      "bytes": 68,
+      "sha256": "a726c529c2038786121e59f563b5fe54ccf2a566bc5a63eb24606a23aee0ff04"
+    },
+    {
+      "path": "carrier-readiness/workspace/.git/refs/heads/carrier-readiness",
+      "kind": "file",
+      "bytes": 41,
+      "sha256": "e67887bcb2cf3aa93177daa51ebfbeef880fa264f0d3a3f900e60476cd2cead0"
+    },
+    {
+      "path": "carrier-readiness/workspace/package.json",
+      "kind": "file",
+      "bytes": 53,
+      "sha256": "b3d60d0f15780d5cc4a19739a089390cc36feeba53180cd50b4d7e2860927b0e"
+    },
+    {
+      "path": "convergence-canary-execution-record.json",
+      "kind": "file",
+      "bytes": 106792,
+      "sha256": "b938ca6ace4c211e2fadba6e76ffe4986943064235a66625159b5fc87e266483"
+    },
+    {
+      "path": "convergence-canary-plan.json",
+      "kind": "file",
+      "bytes": 93310,
+      "sha256": "3cb67010ff75f389263c484b38839e1d07462b1bcafa1584ec656a71c7ad4f1d"
+    },
+    {
+      "path": "convergence-canary-receipt.json",
+      "kind": "file",
+      "bytes": 7532,
+      "sha256": "d3880b842695e271010e2321d8d64f16d2181a28e31ffa27aa2833500ac8a55b"
+    },
+    {
+      "path": "convergence-canary-scope.json",
+      "kind": "file",
+      "bytes": 88314,
+      "sha256": "26b8b6ef34042d2e075ca7f9ae9936901388138b4919448127b3450460328ec7"
+    },
+    {
+      "path": "convergence-canary/convergence-executor.stderr.log",
+      "kind": "file",
+      "bytes": 460,
+      "sha256": "7d3a26bd55bee286375cf1e87967a6e7456906cda40c8f268e7fe6fce25d81ca"
+    },
+    {
+      "path": "convergence-canary/convergence-executor.stdout.jsonl",
+      "kind": "file",
+      "bytes": 249036,
+      "sha256": "4571fe35e67a7473c02c5f61c9e6533d715771307c56a1c03cf9155408d5a81c"
+    },
+    {
+      "path": "convergence-canary/convergence-judge.stderr.log",
+      "kind": "file",
+      "bytes": 616,
+      "sha256": "3a44ad0d52b45af1ff3cbb269d7acb16133821461c42fb2f3310b82467a0499c"
+    },
+    {
+      "path": "convergence-canary/convergence-judge.stdout.jsonl",
+      "kind": "file",
+      "bytes": 18493,
+      "sha256": "2aa47c5209f5fbb5dea1e00cb9aefd433fe198d5fe0fc4e2b286c7ce6d79b68b"
+    },
+    {
+      "path": "convergence-canary/convergence-result.json",
+      "kind": "file",
+      "bytes": 5197,
+      "sha256": "b2d7a8788290a1ced92b21dc880c2a688b35508bcf658b0bef3a2ed1d769d3a2"
+    },
+    {
+      "path": "convergence-canary/executor-checkpoint.json",
+      "kind": "file",
+      "bytes": 2602,
+      "sha256": "2c32dd681c2a41d3a3496cb2d8a9b3e63c6c6609a12451c72de6d9833d12b6ce"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 6211,
+      "sha256": "d9c81fabda18cc70af37c378f85cc56713a51efffcdce2d7822e526c12b1d934"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/.sandbox_migration",
+      "kind": "file",
+      "bytes": 3,
+      "sha256": "2d27fbdf4e8ca207afbfa388ca9172fbcc6c70e534af2476b3b704f87debadcf"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/config.toml",
+      "kind": "file",
+      "bytes": 203,
+      "sha256": "0b2df068eca7a119a310b877f2560dc057c4107eb718f34c24f381253fe76094"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/goals_1.sqlite",
+      "kind": "file",
+      "bytes": 32768,
+      "sha256": "acdc1d0f9937cbbada0bcb2def777f35d7ce777d8bfa438c5cb2ce6986f56056"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/installation_id",
+      "kind": "file",
+      "bytes": 36,
+      "sha256": "3ab33df937a276df291bc7927ba9fde854ccb194d7c468d20c8a3d3404672c19"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/logs_2.sqlite",
+      "kind": "file",
+      "bytes": 49152,
+      "sha256": "bb2bef5e1b1efb831933c3e72f2020bcfcaebf8887600957d72afc4c730d25a1"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/memories_1.sqlite",
+      "kind": "file",
+      "bytes": 40960,
+      "sha256": "db004ef4b80eafefb05ea6e5aae32751170e98b1d661818a684b9c72df9f4110"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/sessions/2026/08/17/rollout-2026-08-17T14-41-15-01a00e73-f550-7fa3-8a91-6c132fac4106.jsonl",
+      "kind": "file",
+      "bytes": 430028,
+      "sha256": "377a39f4c698822b4813f0669824980159889fe71deb35171e6940bdb01cb389"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/.codex-system-skills.marker",
+      "kind": "file",
+      "bytes": 17,
+      "sha256": "f50ddde5fa015d46714e76787636abfbd18b33f33e162e30529ef9911fe60fdb"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 275,
+      "sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/assets/imagegen-small.svg",
+      "kind": "file",
+      "bytes": 2889,
+      "sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/assets/imagegen.png",
+      "kind": "file",
+      "bytes": 1711,
+      "sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/LICENSE.txt",
+      "kind": "file",
+      "bytes": 10776,
+      "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/references/cli.md",
+      "kind": "file",
+      "bytes": 10188,
+      "sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/references/codex-network.md",
+      "kind": "file",
+      "bytes": 1779,
+      "sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/references/image-api.md",
+      "kind": "file",
+      "bytes": 6079,
+      "sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/references/prompting.md",
+      "kind": "file",
+      "bytes": 9896,
+      "sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/references/sample-prompts.md",
+      "kind": "file",
+      "bytes": 19239,
+      "sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/scripts/image_gen.py",
+      "kind": "file",
+      "bytes": 34271,
+      "sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/scripts/remove_chroma_key.py",
+      "kind": "file",
+      "bytes": 13836,
+      "sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/imagegen/SKILL.md",
+      "kind": "file",
+      "bytes": 24003,
+      "sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 598,
+      "sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/assets/openai-small.svg",
+      "kind": "file",
+      "bytes": 1091,
+      "sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/assets/openai.png",
+      "kind": "file",
+      "bytes": 1429,
+      "sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/LICENSE.txt",
+      "kind": "file",
+      "bytes": 10776,
+      "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/references/latest-model.md",
+      "kind": "file",
+      "bytes": 2365,
+      "sha256": "7c5a1b8cb74f6140c52df722781df4ce43bbcfa34cadc15c425276c2492783c4"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/references/prompting-guide.md",
+      "kind": "file",
+      "bytes": 17483,
+      "sha256": "d66112cbc583c4fd39952904efb2bf41c9f665368b7ba22f5ba01dc657c576f8"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/references/upgrade-guide.md",
+      "kind": "file",
+      "bytes": 1050,
+      "sha256": "ed1b75a89b8ec4d67787774ef6c4e8b98eace16c63348f42e969e6ffa67cb656"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/references/upgrading-to-gpt-5p6-sol.md",
+      "kind": "file",
+      "bytes": 23398,
+      "sha256": "4643eb48cb105140b6b9aa55c3deecb950c75e70698e5fa9cc7534db1c293828"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs",
+      "kind": "file",
+      "bytes": 16085,
+      "sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/scripts/resolve-latest-model-info",
+      "kind": "file",
+      "bytes": 1038,
+      "sha256": "7354dbb030ca0736dd633a7ca1b930cf640abd40370725dea3a458cb51d49523"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/scripts/resolve-latest-model-info.cjs",
+      "kind": "file",
+      "bytes": 3937,
+      "sha256": "eeb1bb486018e16b37edfc06b1a37179dbc672982d501040d4f7142f29dd2e64"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/openai-docs/SKILL.md",
+      "kind": "file",
+      "bytes": 22806,
+      "sha256": "9914a79e6e1bd70d780b777e9019677af0eba60bbdfac3b7fe9b0407f16b5cc4"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/plugin-creator/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 339,
+      "sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/plugin-creator/assets/plugin-creator-small.svg",
+      "kind": "file",
+      "bytes": 1319,
+      "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/plugin-creator/assets/plugin-creator.png",
+      "kind": "file",
+      "bytes": 1563,
+      "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/plugin-creator/references/installing-and-updating.md",
+      "kind": "file",
+      "bytes": 5874,
+      "sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/plugin-creator/references/plugin-json-spec.md",
+      "kind": "file",
+      "bytes": 9179,
+      "sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/plugin-creator/scripts/create_basic_plugin.py",
+      "kind": "file",
+      "bytes": 11185,
+      "sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/plugin-creator/scripts/read_marketplace_name.py",
+      "kind": "file",
+      "bytes": 1497,
+      "sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py",
+      "kind": "file",
+      "bytes": 2686,
+      "sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/plugin-creator/scripts/validate_plugin.py",
+      "kind": "file",
+      "bytes": 21180,
+      "sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/plugin-creator/SKILL.md",
+      "kind": "file",
+      "bytes": 11040,
+      "sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/review-agent/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 252,
+      "sha256": "4d867a46d15e36ac880176484aae160f59855340c6059b2ea6ab9fbc9af084de"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/review-agent/SKILL.md",
+      "kind": "file",
+      "bytes": 2661,
+      "sha256": "07079efd0dc76f05fade424e5dfb048dce1de2df7626e1a4f56292a4f3f92228"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-creator/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 183,
+      "sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-creator/assets/skill-creator-small.svg",
+      "kind": "file",
+      "bytes": 1319,
+      "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-creator/assets/skill-creator.png",
+      "kind": "file",
+      "bytes": 1563,
+      "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-creator/license.txt",
+      "kind": "file",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-creator/references/openai_yaml.md",
+      "kind": "file",
+      "bytes": 2356,
+      "sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-creator/scripts/generate_openai_yaml.py",
+      "kind": "file",
+      "bytes": 6619,
+      "sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-creator/scripts/init_skill.py",
+      "kind": "file",
+      "bytes": 14602,
+      "sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-creator/scripts/quick_validate.py",
+      "kind": "file",
+      "bytes": 3293,
+      "sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-creator/SKILL.md",
+      "kind": "file",
+      "bytes": 22047,
+      "sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-installer/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 221,
+      "sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-installer/assets/skill-installer-small.svg",
+      "kind": "file",
+      "bytes": 923,
+      "sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-installer/assets/skill-installer.png",
+      "kind": "file",
+      "bytes": 1086,
+      "sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-installer/LICENSE.txt",
+      "kind": "file",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-installer/scripts/github_utils.py",
+      "kind": "file",
+      "bytes": 659,
+      "sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-installer/scripts/install-skill-from-github.py",
+      "kind": "file",
+      "bytes": 10096,
+      "sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-installer/scripts/list-skills.py",
+      "kind": "file",
+      "bytes": 2967,
+      "sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/skills/.system/skill-installer/SKILL.md",
+      "kind": "file",
+      "bytes": 3367,
+      "sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/state_5.sqlite",
+      "kind": "file",
+      "bytes": 180224,
+      "sha256": "85b1a2cb7c0e8cee7e59ac4df90663fb3544d26d50e1fc8326138970fa67b0a2"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/state_5.sqlite-shm",
+      "kind": "file",
+      "bytes": 32768,
+      "sha256": "2962d49460551c717a7fb690b7e210070c93a07bef415e1c43d71a73663d0c3a"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/codex-home/state_5.sqlite-wal",
+      "kind": "file",
+      "bytes": 4128272,
+      "sha256": "86b04fc03e2479f9a717646443f7df782eec86f6c9c53c175fcd58a0ee812032"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/executor-output.json",
+      "kind": "file",
+      "bytes": 2548,
+      "sha256": "037fcd196ea51c303bd6fafa5924f49b45dc68b8ab4850f7762c6541f6d34079"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/executor-output.schema.json",
+      "kind": "file",
+      "bytes": 881,
+      "sha256": "7ef36df08dce345f3442bb8f13cc46a46019af09361e7a5431bf29766c870a1c"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/tool-tmp/node-compile-cache/v24.16.0-arm64-cf738c9d-501/012894fa",
+      "kind": "file",
+      "bytes": 101860,
+      "sha256": "5391621ad6ab75dff90ff28a80efdcb78312228e9256a64f83d0a91cc7100c0b"
+    },
+    {
+      "path": "convergence-canary/executor-convergence-candidate-control/tool-tmp/node-compile-cache/v24.16.0-arm64-cf738c9d-501/d5493a8d",
+      "kind": "file",
+      "bytes": 1357924,
+      "sha256": "8b5a93e9eb829d847d615d50ea984762646916a2ca36d86d45e0ed59eaf06832"
+    },
+    {
+      "path": "convergence-canary/judge-visible-candidate.json",
+      "kind": "file",
+      "bytes": 1196595,
+      "sha256": "ff913641f6669651fb762f1a6bf15edde5e505ab33f974d5cf637b7caa3413ff"
+    },
+    {
+      "path": "convergence-canary/oracle-episode-repeatability.json",
+      "kind": "file",
+      "bytes": 582,
+      "sha256": "9c62a40e7c6385b317add4af9e3c884d18b03592b416245253a8dc7e449acc48"
+    },
+    {
+      "path": "convergence-canary/oracle-episode.json",
+      "kind": "file",
+      "bytes": 583,
+      "sha256": "aa52c5c3d5c5c9d6d0db4a19547442b01cbdcb3f30f105822ae1719043cb17c4"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 6565,
+      "sha256": "3b6434d278c273311d0ec678e4807138ab2ee0b3cf4b93b03cdfefdd0f2150ae"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/.sandbox_migration",
+      "kind": "file",
+      "bytes": 3,
+      "sha256": "2d27fbdf4e8ca207afbfa388ca9172fbcc6c70e534af2476b3b704f87debadcf"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/config.toml",
+      "kind": "file",
+      "bytes": 216,
+      "sha256": "6bd35f2940d12b54725e9d7d248ef564ce6a8a28a2e9ee6ab6273849ef409d6c"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/goals_1.sqlite",
+      "kind": "file",
+      "bytes": 4096,
+      "sha256": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/goals_1.sqlite-shm",
+      "kind": "file",
+      "bytes": 32768,
+      "sha256": "891e34b915b3e414226205c5b2586877b0ef24c21dc704cd614c00d8414ebd2b"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/goals_1.sqlite-wal",
+      "kind": "file",
+      "bytes": 78312,
+      "sha256": "329c31c9952762c3cdf03fbd019c55665385f4e7adc5f37f0f6ad09cb319e31e"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/installation_id",
+      "kind": "file",
+      "bytes": 36,
+      "sha256": "f962fc69885dfda6175331c4f4dcaf7c70011b37893bd4a325acbc7e8eddefdc"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/logs_2.sqlite",
+      "kind": "file",
+      "bytes": 49152,
+      "sha256": "028b1cf892a7e1b4b2748650c34d7515a250a60ef1553b13c9b23bb0128c151c"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/memories_1.sqlite",
+      "kind": "file",
+      "bytes": 40960,
+      "sha256": "048a062ee50f68ba48e1f014077fe4c87b36d117252405c899ddf0bdb8828af2"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/.codex-system-skills.marker",
+      "kind": "file",
+      "bytes": 17,
+      "sha256": "f50ddde5fa015d46714e76787636abfbd18b33f33e162e30529ef9911fe60fdb"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 275,
+      "sha256": "9ca574af14580dc7a2a3dc37a1796d17f93cb8850be66501f0799ef8603e9dc0"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/assets/imagegen-small.svg",
+      "kind": "file",
+      "bytes": 2889,
+      "sha256": "cff5f34f57ff60b3ee92eaedd17b15e96dd4b9e776df3e78936c9e00d42be294"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/assets/imagegen.png",
+      "kind": "file",
+      "bytes": 1711,
+      "sha256": "95952f644064eb9e890f98d8db07216347186526e4c41ad66d3420629eb86e20"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/LICENSE.txt",
+      "kind": "file",
+      "bytes": 10776,
+      "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/references/cli.md",
+      "kind": "file",
+      "bytes": 10188,
+      "sha256": "38d92cdbec5f3430439a3868ced0a3c5694e0e84a75e46d6e7f7a00aca6e673b"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/references/codex-network.md",
+      "kind": "file",
+      "bytes": 1779,
+      "sha256": "c88298ca4481f6116a16fa7987434fc977f8b311c1bbc0c3d862ffd0c5981148"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/references/image-api.md",
+      "kind": "file",
+      "bytes": 6079,
+      "sha256": "ca5424dfcad5a4c87b4401d1cffb70bfcc18c7ca2c281d12045f822e59fa4093"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/references/prompting.md",
+      "kind": "file",
+      "bytes": 9896,
+      "sha256": "a88c459a0306051535d1b68eb899925f08a175cbbcd07d72a9d0c43f330cb81f"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/references/sample-prompts.md",
+      "kind": "file",
+      "bytes": 19239,
+      "sha256": "43307821f1db18e06be50189a078f3e1ccc3ee6b5523934614e22e64d27597ab"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/scripts/image_gen.py",
+      "kind": "file",
+      "bytes": 34271,
+      "sha256": "35e8f9fa47deca111e46c63c4ac2008e09198ef664c0926a9dfdcd6745aa37ed"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/scripts/remove_chroma_key.py",
+      "kind": "file",
+      "bytes": 13836,
+      "sha256": "3f7b9b14ad5c90f37618bc1c16a039a2076abca12ddc41b3ae470e2b1cad6c0e"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/imagegen/SKILL.md",
+      "kind": "file",
+      "bytes": 24003,
+      "sha256": "59981d23519222bcecf1be48bb37730bbc50539ceb0e35ad09fcef98a3df19d3"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 598,
+      "sha256": "004c73f6e01409cfd7db699e815f5fed4ced3b63dd2cc25874f6791eae7fd4bc"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/assets/openai-small.svg",
+      "kind": "file",
+      "bytes": 1091,
+      "sha256": "45be1f0757eb18889eefb1e7db79668ef46a275dc4e0e78e8df5ebd7f6cdeadc"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/assets/openai.png",
+      "kind": "file",
+      "bytes": 1429,
+      "sha256": "156cc84d7332bfe95b310350bd470b690d22aa33d65340cc6c2e06022946194c"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/LICENSE.txt",
+      "kind": "file",
+      "bytes": 10776,
+      "sha256": "4dd13869245e356246a5b770723247bbb80a8f07a181d1d3d873a1734297cdb9"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/references/latest-model.md",
+      "kind": "file",
+      "bytes": 2365,
+      "sha256": "7c5a1b8cb74f6140c52df722781df4ce43bbcfa34cadc15c425276c2492783c4"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/references/prompting-guide.md",
+      "kind": "file",
+      "bytes": 17483,
+      "sha256": "d66112cbc583c4fd39952904efb2bf41c9f665368b7ba22f5ba01dc657c576f8"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/references/upgrade-guide.md",
+      "kind": "file",
+      "bytes": 1050,
+      "sha256": "ed1b75a89b8ec4d67787774ef6c4e8b98eace16c63348f42e969e6ffa67cb656"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/references/upgrading-to-gpt-5p6-sol.md",
+      "kind": "file",
+      "bytes": 23398,
+      "sha256": "4643eb48cb105140b6b9aa55c3deecb950c75e70698e5fa9cc7534db1c293828"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/scripts/fetch-codex-manual.mjs",
+      "kind": "file",
+      "bytes": 16085,
+      "sha256": "f53eb6d2f286e9efcc397e8bee93a938e37296c90953e4e06e94899ef1b6c363"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/scripts/resolve-latest-model-info",
+      "kind": "file",
+      "bytes": 1038,
+      "sha256": "7354dbb030ca0736dd633a7ca1b930cf640abd40370725dea3a458cb51d49523"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/scripts/resolve-latest-model-info.cjs",
+      "kind": "file",
+      "bytes": 3937,
+      "sha256": "eeb1bb486018e16b37edfc06b1a37179dbc672982d501040d4f7142f29dd2e64"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/openai-docs/SKILL.md",
+      "kind": "file",
+      "bytes": 22806,
+      "sha256": "9914a79e6e1bd70d780b777e9019677af0eba60bbdfac3b7fe9b0407f16b5cc4"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/plugin-creator/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 339,
+      "sha256": "fecaf35d692bd3d33d1a065648258d12e393afa9055d78adf6e57b42f4142f6d"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/plugin-creator/assets/plugin-creator-small.svg",
+      "kind": "file",
+      "bytes": 1319,
+      "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/plugin-creator/assets/plugin-creator.png",
+      "kind": "file",
+      "bytes": 1563,
+      "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/plugin-creator/references/installing-and-updating.md",
+      "kind": "file",
+      "bytes": 5874,
+      "sha256": "b030517fe05b12dda71babe2890656d7c6db6a0111797e1d20d208804427276d"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/plugin-creator/references/plugin-json-spec.md",
+      "kind": "file",
+      "bytes": 9179,
+      "sha256": "eeb640130f69636affaa299d4170d5a7ae6a0ff978296ddf75c409ce6dd87b91"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/plugin-creator/scripts/create_basic_plugin.py",
+      "kind": "file",
+      "bytes": 11185,
+      "sha256": "b5aa34f7f9dcec4bb007a66d65cff0c5c77a67042ae6c4de57d8ab7f4ef737d2"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/plugin-creator/scripts/read_marketplace_name.py",
+      "kind": "file",
+      "bytes": 1497,
+      "sha256": "7659216759152f83087020b4d2971b4ad3cc13851e2614efc30fc2317ad59d96"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/plugin-creator/scripts/update_plugin_cachebuster.py",
+      "kind": "file",
+      "bytes": 2686,
+      "sha256": "4fe3c5a49212f6e30a2306e245c460e01aaf5e36bc8ad3dd2852c199257eff89"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/plugin-creator/scripts/validate_plugin.py",
+      "kind": "file",
+      "bytes": 21180,
+      "sha256": "ebda00d55d7518b127f675f062fb5c6e7a1ffdc0a99df1a55ac594400d7d3228"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/plugin-creator/SKILL.md",
+      "kind": "file",
+      "bytes": 11040,
+      "sha256": "8fd56316b2c49cbdc657a5d197967a233018e1fada65b00a5dd030dce6499a6e"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/review-agent/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 252,
+      "sha256": "4d867a46d15e36ac880176484aae160f59855340c6059b2ea6ab9fbc9af084de"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/review-agent/SKILL.md",
+      "kind": "file",
+      "bytes": 2661,
+      "sha256": "07079efd0dc76f05fade424e5dfb048dce1de2df7626e1a4f56292a4f3f92228"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-creator/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 183,
+      "sha256": "d07d21b93fcf3d4dc8d9a3399c05fc226a49a333a96d3e1c68b451b8dd9eade6"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-creator/assets/skill-creator-small.svg",
+      "kind": "file",
+      "bytes": 1319,
+      "sha256": "6591bf8ea9bb9435890dbdea299e0d2bd05f3aa893a335d26e4c535e93c8e7fb"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-creator/assets/skill-creator.png",
+      "kind": "file",
+      "bytes": 1563,
+      "sha256": "a4024b0306ddb05847e1012879d37aaf1e658205199da596f5145ed7a88d9162"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-creator/license.txt",
+      "kind": "file",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-creator/references/openai_yaml.md",
+      "kind": "file",
+      "bytes": 2356,
+      "sha256": "ffac39318e408108141d40f820968e59f70434a891694f9bf1d25be8237b150c"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-creator/scripts/generate_openai_yaml.py",
+      "kind": "file",
+      "bytes": 6619,
+      "sha256": "ddaf9abdfb3e762ed3c82571e9c607ce964188f49f2146281beb2cb8a553a93d"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-creator/scripts/init_skill.py",
+      "kind": "file",
+      "bytes": 14602,
+      "sha256": "f40cb8fafc34e2d5dbbb8b6b04297af128b70844b67bc9445ef69790e0cdb49e"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-creator/scripts/quick_validate.py",
+      "kind": "file",
+      "bytes": 3293,
+      "sha256": "6cc9dc3199c935916cf6f73fcbbbb0e3bb1b58c8f5109fefa499978908164f51"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-creator/SKILL.md",
+      "kind": "file",
+      "bytes": 22047,
+      "sha256": "da44c88f6b3845a8fa8c60792ec9a722110a55a9793c279757b48fefb11f819c"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-installer/agents/openai.yaml",
+      "kind": "file",
+      "bytes": 221,
+      "sha256": "5ce223d8b1070b82c42298538f1b8d376f788eb9e7a42a987e8c094070d73f0e"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-installer/assets/skill-installer-small.svg",
+      "kind": "file",
+      "bytes": 923,
+      "sha256": "3928703ff00dc1a681e7a22401843b7edcbd4b2051651ce4c43b75f7e140504e"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-installer/assets/skill-installer.png",
+      "kind": "file",
+      "bytes": 1086,
+      "sha256": "d0a230b1a79b71b858b7c215a0fbb0768d6459c14ea4ef80c61592629bf0e605"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-installer/LICENSE.txt",
+      "kind": "file",
+      "bytes": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-installer/scripts/github_utils.py",
+      "kind": "file",
+      "bytes": 659,
+      "sha256": "61c1bbe2ae217433b4b6f9f09f21aca4df52c12598068343ade719f706e4859b"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-installer/scripts/install-skill-from-github.py",
+      "kind": "file",
+      "bytes": 10096,
+      "sha256": "0fbbd36e8ea294442c0bd48d6f610a2e8656216bfef5c322f1dcf448ef2f09f1"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-installer/scripts/list-skills.py",
+      "kind": "file",
+      "bytes": 2967,
+      "sha256": "e4e1f78ca3d045827f2a05cfd99fae57cc7c1a1bfeba8704029108834debff35"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/skills/.system/skill-installer/SKILL.md",
+      "kind": "file",
+      "bytes": 3367,
+      "sha256": "d68b77e5bbb34dedab89d134da52855f140fc4b4299b80104f534e3b9e98f8ee"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/state_5.sqlite",
+      "kind": "file",
+      "bytes": 4096,
+      "sha256": "4eeb710c739848e62f0d53d04057e17375b4af741c9b441f2a546f6ed860c79f"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/state_5.sqlite-shm",
+      "kind": "file",
+      "bytes": 32768,
+      "sha256": "adb2d2fd00b19fd16db54e1019d0a72181b064d2fcf1c068169ad82954f81a55"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/codex-home/state_5.sqlite-wal",
+      "kind": "file",
+      "bytes": 1462632,
+      "sha256": "7a28c6d2256cc54cbe03d27831854219404f0c91ab0cc1828b675241e7fd4899"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/review-boundary-output.json",
+      "kind": "file",
+      "bytes": 438,
+      "sha256": "01ced64f8163db06e620c339c52b945d777f7a2d1e57d59f8479ca9c91bccf19"
+    },
+    {
+      "path": "convergence-canary/post-hoc-judge-convergence-judge-control/review-boundary-output.schema.json",
+      "kind": "file",
+      "bytes": 2343,
+      "sha256": "3e21ed3cedabf51827d7de1c74a82cae58cc2fa73affa722af3f97ae318b073b"
+    },
+    {
+      "path": "convergence-canary/post-model-freeze-convergence-candidate-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5424,
+      "sha256": "93a931bf711d4753c25e5088afbcb12e7b65f24aa8d2820c4d376a67b469c79e"
+    },
+    {
+      "path": "convergence-canary/post-model-freeze-convergence-candidate-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-filtered-read-isolation-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5653,
+      "sha256": "3ba72aa8dd2892ac69550f6ed2552aace9a00d5f293d4143d3435cc2c94fb34c"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-filtered-read-isolation-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-repeatability-filtered-read-isolation-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5807,
+      "sha256": "d5bff88b502b2ebe17371c2faf50ab2515861c2a09f08d2f5f513b664f88c043"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-repeatability-filtered-read-isolation-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-repeatability-runtime-root-and-descendant-remap-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5917,
+      "sha256": "84f3c85c28f8b9c3483099a074cc23fa0380b3e34e69ae3983d534b626a16d07"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-repeatability-runtime-root-and-descendant-remap-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-repeatability-stale-runtime-fail-closed-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5829,
+      "sha256": "6512d00b3f547c10d01ef0554f487aeeb60da0fd9eb4fd20dcca7de5d6cc5b37"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-repeatability-stale-runtime-fail-closed-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-repeatability-workspace-containment-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5785,
+      "sha256": "7e840a288fcae0aaae5d2e8d53680b612436f81df3b90ae3ac07dfc487ca0980"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-repeatability-workspace-containment-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-runtime-root-and-descendant-remap-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5763,
+      "sha256": "2dabcd50c42372a9636171ebb8eec7d145448993fa00aee858746f89eec97153"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-runtime-root-and-descendant-remap-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-stale-runtime-fail-closed-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5675,
+      "sha256": "bfaad755a9c46501dc4471d1811bc0c14c4d33c1755c84ef5815875f3eacb226"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-stale-runtime-fail-closed-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-workspace-containment-control/codex-container.sb",
+      "kind": "file",
+      "bytes": 5631,
+      "sha256": "7c3f5bf45c0b7574398fb4337e8167ddc44a180421b4a32bdd6f10af844ec34e"
+    },
+    {
+      "path": "convergence-canary/post-model-oracle-convergence-episode-workspace-containment-control/model-catalog.json",
+      "kind": "file",
+      "bytes": 38720,
+      "sha256": "a6c8ec846647a8d944a2c67e0dd3cc67f3654d7868e994aa31c9aadb61d69115"
+    },
+    {
+      "path": "convergence-canary/provider-transport-ca.pem",
+      "kind": "file",
+      "bytes": 218939,
+      "sha256": "6eaed8dbe88761b9e56757ab5fea294ba8c57233e398e10fe044d5fd90c78bf5"
+    },
+    {
+      "path": "convergence-canary/review-boundary-judge.json",
+      "kind": "file",
+      "bytes": 460,
+      "sha256": "cfa32c74ad82a1edd49efae554e759bacabcf20c8d2c328e9905c89d0c33d6f5"
+    },
+    {
+      "path": "convergence-canary/runtime-snapshot.tar",
+      "kind": "file",
+      "bytes": 132884480,
+      "sha256": "31b9ce080a042ce341a719b61664b84a85771c79a74708e0bc84eade9b634133"
+    },
+    {
+      "path": "convergence-canary/worktree-path.txt",
+      "kind": "file",
+      "bytes": 166,
+      "sha256": "3b2739c84d2bf1bae12736eba7197e5cb595f607602b669682f6370f81dcb891"
+    },
+    {
+      "path": "environment.json",
+      "kind": "file",
+      "bytes": 46679,
+      "sha256": "f6decb8668f76bf1d70bebb0ef5960570305a2ade7eb41527f50c6c95b433bcf"
+    },
+    {
+      "path": "episode-candidate-final-files.json",
+      "kind": "file",
+      "bytes": 112993,
+      "sha256": "af9e18ac09e101f11493487787e487ca6e1a7d1bf59b02cff9bc2efcbf6fe4d1"
+    },
+    {
+      "path": "manifest.json",
+      "kind": "file",
+      "bytes": 37439,
+      "sha256": "5de1beff15f6eda35f36f0a3218925ef3d84df1ce5a2e29e33f6f30f06152b76"
+    },
+    {
+      "path": "oracle-toolchain/compiler/esbuild",
+      "kind": "file",
+      "bytes": 10368562,
+      "sha256": "796e1017a10d3e853f24116af980df30d87dbd93c6b996e7af7021616eb6723d"
+    },
+    {
+      "path": "oracle-toolchain/sources/000-4963e0d5ca36c9667cb3dbcef48fe2de6e9e0abd8a05764c32f7a2f77f38e12e.tsx",
+      "kind": "file",
+      "bytes": 1817,
+      "sha256": "4963e0d5ca36c9667cb3dbcef48fe2de6e9e0abd8a05764c32f7a2f77f38e12e"
+    },
+    {
+      "path": "oracle-toolchain/sources/001-f42d36d08ff96095f046d6a603ec5baf3cb8d27fe19f15c95119cdc9ff4bd40f.tsx",
+      "kind": "file",
+      "bytes": 2027,
+      "sha256": "f42d36d08ff96095f046d6a603ec5baf3cb8d27fe19f15c95119cdc9ff4bd40f"
+    },
+    {
+      "path": "oracle-toolchain/sources/002-6b49e04497e0f85b4862c9e2af0a8c235c0085f99e0b11dc7106742540f40756.tsx",
+      "kind": "file",
+      "bytes": 3486,
+      "sha256": "6b49e04497e0f85b4862c9e2af0a8c235c0085f99e0b11dc7106742540f40756"
+    },
+    {
+      "path": "oracle-toolchain/sources/003-e99ad413526126c61e5fa1bea1cd15a4e3ca93a5e5d440d41f180d052770380f.tsx",
+      "kind": "file",
+      "bytes": 2686,
+      "sha256": "e99ad413526126c61e5fa1bea1cd15a4e3ca93a5e5d440d41f180d052770380f"
+    }
+  ]
+}

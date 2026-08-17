@@ -1,0 +1,804 @@
+{
+  "schemaVersion": "lf-0001.development-benchmark-manifest.v5",
+  "benchmarkId": "lf-0001-adaptive-development-v1",
+  "causalQuestion": "With the same runtime, model, task input, tools, gates, isolation and post-hoc measurement boundary, does the treatment SOP improve externally verified completion of one real Agent SOP episode over the baseline SOP?",
+  "runtimeCommit": "d931cf22d49a71389fb2188fca49949bae302c1e",
+  "model": {
+    "provider": "openai",
+    "modelId": "gpt-5.6-sol"
+  },
+  "randomizationSeed": "lf-0001-paired-order-v2",
+  "arms": [
+    {
+      "id": "baseline_old_sop",
+      "label": "Adaptive Development before first-principles optimization",
+      "skillSnapshot": {
+        "commit": "3a99ae9b185dddd17d663f964e3c972c300db534",
+        "blobObjectId": "09d7eccd4f16eb3fb435072af65d64697bac390c",
+        "path": "cat-cafe-skills/adaptive-development-sop/SKILL.md"
+      }
+    },
+    {
+      "id": "treatment_new_sop",
+      "label": "Reviewed passive and outcome-aligned Adaptive Development",
+      "skillSnapshot": {
+        "commit": "ce684d151aafa18c876f1dba02eadd9a2e240b6f",
+        "blobObjectId": "ac1a3bde71a66d20da1fa0070029f43d0d41bea1",
+        "path": "cat-cafe-skills/adaptive-development-sop/SKILL.md"
+      }
+    }
+  ],
+  "controls": {
+    "sameRuntime": true,
+    "sameModel": true,
+    "sameTaskInput": true,
+    "sameToolPermissions": true,
+    "sameHardGates": true,
+    "sameDataIsolation": true,
+    "sameMeasurementBoundary": true,
+    "freshSessionPerRun": true,
+    "blindJudge": true
+  },
+  "budgetPolicy": {
+    "tokenPolicy": "unbounded",
+    "sameTokenPolicyWithinTaskPair": true,
+    "automaticScale": false,
+    "nextStageRequiresOperatorDecision": true,
+    "infrastructureRetryLimit": 1
+  },
+  "convergenceCanary": {
+    "id": "real-agent-sop-outcome-v3",
+    "taskId": "long-disposable-checkout-writes",
+    "armId": "treatment_new_sop",
+    "maximumRepairRounds": 0,
+    "effectClaimEligible": false,
+    "candidateExecution": {
+      "mode": "single_real_sop_episode",
+      "formalReview": "conditional_inside_episode"
+    },
+    "postHocJudge": {
+      "timing": "after_candidate_freeze",
+      "purpose": "sop_compliance_measurement",
+      "candidateIntervention": "none",
+      "feedbackToCandidate": "none",
+      "workspace": "isolated_candidate_snapshot",
+      "filesystemAccess": "write",
+      "acceptanceSource": "original_task",
+      "armIdentity": "hidden",
+      "requiredEvidence": [
+        "reproduced_test_failure",
+        "static_proof"
+      ]
+    },
+    "oracleBehaviorRationale": [
+      "Existing runtime roots and descendants map to their corresponding persistent workspace paths at every public route boundary.",
+      "A mapped descendant must resolve inside the persistent workspace even when symlinks are present.",
+      "A stored missing runtime descendant is reset and persisted as the safe default project without failing unrelated list results.",
+      "A project-filtered list migrates only matching records; an unrelated unmappable record cannot fail or mutate that request."
+    ],
+    "successGate": [
+      "behavior_oracle_passed",
+      "sop_judge_passed",
+      "hard_invariants_passed"
+    ],
+    "oracleSpecificity": {
+      "candidateKinds": [
+        "baseline",
+        "gold_projection",
+        "behavior_equivalent_alternate"
+      ],
+      "singleFaultMutations": [
+        {
+          "id": "collapse-runtime-descendant-remap",
+          "targetBehaviorIds": [
+            "runtime-root-and-descendant-remap"
+          ]
+        },
+        {
+          "id": "allow-workspace-symlink-escape",
+          "targetBehaviorIds": [
+            "workspace-containment"
+          ]
+        },
+        {
+          "id": "migrate-unrelated-filtered-records",
+          "targetBehaviorIds": [
+            "filtered-read-isolation"
+          ]
+        },
+        {
+          "id": "expose-stale-runtime-descendant",
+          "targetBehaviorIds": [
+            "stale-runtime-fail-closed"
+          ]
+        }
+      ]
+    }
+  },
+  "tasks": [
+    {
+      "id": "local-stale-formatter-regression",
+      "title": "Replace a stale formatter truncation assertion after ownership moved",
+      "readiness": "ready",
+      "complexity": "small",
+      "source": {
+        "kind": "local_history",
+        "fixtureManifestPath": "packages/api/test/harness-eval/fixtures/adaptive-sop-replay-manifest.json",
+        "fixtureId": "sop-replay-stale-formatter-regression",
+        "sourcePullRequest": 655,
+        "baseCommit": "8335b91253f690324f29739ef12ad8575fdb897b"
+      },
+      "executorInput": {
+        "taskPrompt": "Fix the focused Telegram HTML formatter regression after long-message splitting moved to the adapter. The formatter test must prove that long content is preserved instead of enforcing the obsolete 4096-character truncation behavior.",
+        "desiredOutcomes": [
+          "The focused regression reflects the formatter/adapter ownership boundary.",
+          "Long formatter output remains present and exceeds the obsolete truncation ceiling.",
+          "No runtime source is changed to satisfy a stale test."
+        ],
+        "knownFacts": [
+          "Long-message splitting is already owned by the Telegram adapter.",
+          "The formatter regression still expects the former truncation behavior.",
+          "The task is a test-only correction with an executable focused oracle."
+        ],
+        "repositorySnapshot": {
+          "mode": "base_commit_paths",
+          "visiblePaths": [
+            "packages/api/test/telegram-html-formatter.test.js"
+          ]
+        },
+        "constraints": [
+          "Do not modify formatter or adapter runtime code.",
+          "Do not delete or weaken the long-content assertion.",
+          "Keep verification scoped to the real formatter boundary."
+        ]
+      },
+      "oraclePolicy": {
+        "id": "focused-formatter-regression-v1",
+        "commandOrTool": "node --test packages/api/test/telegram-html-formatter.test.js",
+        "successExitCode": 0,
+        "hiddenFromExecutor": true
+      },
+      "allowedChangedPaths": [
+        "packages/api/test/telegram-html-formatter.test.js"
+      ]
+    },
+    {
+      "id": "local-pwa-reconnect-input",
+      "title": "PWA reconnect must preserve draft input",
+      "readiness": "ready",
+      "complexity": "small",
+      "source": {
+        "kind": "local_history",
+        "fixtureManifestPath": "packages/api/test/harness-eval/fixtures/adaptive-sop-replay-manifest.json",
+        "fixtureId": "sop-replay-pwa-reconnect-input",
+        "sourcePullRequest": 1089,
+        "baseCommit": "d93677cb94057aacd6cb6821699b08ecb7e079d4"
+      },
+      "executorInput": {
+        "taskPrompt": "Stop transient online recovery from hard-reloading the chat application and erasing in-progress input while preserving normal real-time reconnection behavior.",
+        "desiredOutcomes": [
+          "Draft input survives a transient connectivity recovery.",
+          "The PWA option responsible for reload behavior is covered by a focused regression check."
+        ],
+        "knownFacts": [
+          "The application uses next-pwa configuration.",
+          "The failure is triggered by an online recovery event rather than normal navigation."
+        ],
+        "repositorySnapshot": {
+          "mode": "base_commit_paths",
+          "visiblePaths": [
+            "packages/web/next.config.js",
+            "packages/web/test/next-config.test.cjs"
+          ]
+        },
+        "constraints": [
+          "Do not disable offline support wholesale.",
+          "Do not require a live production session for the regression test."
+        ]
+      },
+      "oraclePolicy": {
+        "id": "pwa-reconnect-config-regression-v1",
+        "commandOrTool": "adaptive-development-s0-runner:pwa-reconnect-config-v1",
+        "successExitCode": 0,
+        "hiddenFromExecutor": true
+      },
+      "allowedChangedPaths": [
+        "packages/web/next.config.js",
+        "packages/web/test/next-config.test.cjs"
+      ]
+    },
+    {
+      "id": "long-invocation-interrupt-self-heal",
+      "title": "Interrupted invocation self-heal and terminal backstop",
+      "readiness": "ready",
+      "complexity": "large",
+      "source": {
+        "kind": "local_history",
+        "fixtureManifestPath": "packages/api/test/harness-eval/fixtures/adaptive-sop-replay-manifest.json",
+        "fixtureId": "sop-replay-invocation-interrupt-self-heal",
+        "sourcePullRequest": 1146,
+        "baseCommit": "fae08774a573d7c49ccc614edfdbfcc065b78a47"
+      },
+      "materializationMode": "full_base_commit",
+      "executorInput": {
+        "taskPrompt": "Recover invocations whose CLI sessions were interrupted and ensure queue records cannot remain running when the normal failure write is lost, without false-matching unrelated interrupt errors.",
+        "desiredOutcomes": [
+          "Missing or interrupted sessions can retry through the supported self-heal path.",
+          "Every queue execution reaches a durable terminal status or emits actionable failure evidence."
+        ],
+        "knownFacts": [
+          "Idle-silent inference can be mistaken for a stalled CLI.",
+          "A failed store update can leave an invocation record in running state."
+        ],
+        "repositorySnapshot": {
+          "mode": "base_commit_paths",
+          "visiblePaths": [
+            "packages/api/src/domains/cats/services/agents/invocation/QueueProcessor.ts",
+            "packages/api/src/domains/cats/services/agents/invocation/invoke-helpers.ts",
+            "packages/api/test/queue-processor.test.js",
+            "packages/api/test/invoke-single-cat.test.js"
+          ]
+        },
+        "constraints": [
+          "Do not kill the active runtime process during testing.",
+          "Keep terminal writes CAS-guarded and preserve negative classifier cases."
+        ]
+      },
+      "oraclePolicy": {
+        "id": "invocation-liveness-hidden-replay-v1",
+        "commandOrTool": "hidden historical invocation and queue regressions",
+        "successExitCode": 0,
+        "hiddenFromExecutor": true,
+        "goldOutcomeCommit": "fecbffeb2bfd40533ed032432fbd0f77f2b89f55",
+        "goldProjectionPaths": [
+          "packages/api/src/domains/cats/services/agents/invocation/QueueProcessor.ts",
+          "packages/api/src/domains/cats/services/agents/invocation/invoke-helpers.ts",
+          "packages/api/src/domains/cats/services/agents/invocation/invoke-single-cat.ts",
+          "packages/api/test/invoke-single-cat.test.js",
+          "packages/api/test/queue-processor.test.js"
+        ],
+        "setupCommands": [
+          {
+            "kind": "pnpm",
+            "args": [
+              "--filter",
+              "@cat-cafe/api",
+              "build"
+            ]
+          }
+        ],
+        "checks": [
+          {
+            "id": "invocation-liveness",
+            "nodeArgs": [
+              "--import",
+              "./packages/api/test/helpers/setup-cat-registry.js",
+              "--test",
+              "--test-isolation=none",
+              "--test-timeout=60000",
+              "--test-name-pattern=(#1145: (buildStallAutoKillConfig|ensureTerminalStatus)|resume failure classification)",
+              "packages/api/test/invoke-single-cat.test.js",
+              "packages/api/test/queue-processor.test.js"
+            ]
+          }
+        ],
+        "hiddenTestPatch": {
+          "commit": "fecbffeb2bfd40533ed032432fbd0f77f2b89f55",
+          "paths": [
+            "packages/api/test/invoke-single-cat.test.js",
+            "packages/api/test/queue-processor.test.js"
+          ]
+        }
+      },
+      "allowedChangedPaths": [
+        "packages/api/src/domains/cats/services/agents/invocation/QueueProcessor.ts",
+        "packages/api/src/domains/cats/services/agents/invocation/invoke-helpers.ts",
+        "packages/api/src/domains/cats/services/agents/invocation/invoke-single-cat.ts",
+        "packages/api/test/invoke-single-cat.test.js",
+        "packages/api/test/queue-processor.test.js"
+      ],
+      "horizonProfile": {
+        "decisionDepth": "long",
+        "requiredDimensions": [
+          "diagnosis",
+          "replanning",
+          "cross_layer_change",
+          "verification_review_convergence"
+        ]
+      }
+    },
+    {
+      "id": "long-disposable-checkout-writes",
+      "title": "Keep thread project paths out of disposable checkouts",
+      "readiness": "ready",
+      "complexity": "large",
+      "source": {
+        "kind": "local_history",
+        "fixtureManifestPath": "packages/api/test/harness-eval/fixtures/adaptive-sop-replay-manifest.json",
+        "fixtureId": "sop-replay-disposable-checkout-writes",
+        "sourcePullRequest": 1149,
+        "baseCommit": "704bb735cae01be4bcd4089427bc6983c99a43a3"
+      },
+      "materializationMode": "full_base_commit",
+      "executorInput": {
+        "taskPrompt": "Introduce one persistent-project-path boundary for thread creation and reads so thread project paths survive disposable runtime checkout replacement.",
+        "desiredOutcomes": [
+          "A reusable utility remaps runtime roots and descendants to the persistent workspace and fails closed when no persistent target exists.",
+          "Thread create, list, detail and trash reads persist the remapped project path instead of exposing a disposable checkout."
+        ],
+        "knownFacts": [
+          "The runtime may execute from a disposable checkout while project state lives elsewhere.",
+          "Existing thread records may still name the runtime root or a missing runtime descendant."
+        ],
+        "repositorySnapshot": {
+          "mode": "base_commit_paths",
+          "visiblePaths": [
+            "packages/api/src/routes/threads.ts",
+            "packages/api/src/utils/project-path.ts",
+            "packages/api/test/project-path.test.js",
+            "packages/api/test/threads-endpoint.test.js"
+          ]
+        },
+        "constraints": [
+          "Do not run a bulk migration or access production user data; migrate only thread records observed at the route boundary.",
+          "Do not copy path-mapping logic into individual thread handlers."
+        ]
+      },
+      "oraclePolicy": {
+        "id": "persistent-project-path-hidden-replay-v1",
+        "commandOrTool": "hidden historical persistent-path and thread-route regressions",
+        "successExitCode": 0,
+        "hiddenFromExecutor": true,
+        "goldOutcomeCommit": "fae08774a573d7c49ccc614edfdbfcc065b78a47",
+        "goldProjectionPaths": [
+          "packages/api/src/utils/persistent-project-path.ts",
+          "packages/api/src/routes/threads.ts",
+          "packages/api/test/project-path.test.js",
+          "packages/api/test/threads-endpoint.test.js"
+        ],
+        "setupCommands": [
+          {
+            "kind": "pnpm",
+            "args": [
+              "--filter",
+              "@cat-cafe/api",
+              "build"
+            ]
+          }
+        ],
+        "checks": [
+          {
+            "id": "runtime-root-and-descendant-remap",
+            "behaviorBundle": {
+              "packageDirectory": "packages/api",
+              "tsconfigPath": "packages/api/tsconfig.json",
+              "sourcePath": "packages/api/test/harness-eval/fixtures/adaptive-development-disposable-remap.oracle.ts"
+            }
+          },
+          {
+            "id": "workspace-containment",
+            "behaviorBundle": {
+              "packageDirectory": "packages/api",
+              "tsconfigPath": "packages/api/tsconfig.json",
+              "sourcePath": "packages/api/test/harness-eval/fixtures/adaptive-development-disposable-containment.oracle.ts"
+            }
+          },
+          {
+            "id": "stale-runtime-fail-closed",
+            "behaviorBundle": {
+              "packageDirectory": "packages/api",
+              "tsconfigPath": "packages/api/tsconfig.json",
+              "sourcePath": "packages/api/test/harness-eval/fixtures/adaptive-development-disposable-stale.oracle.ts"
+            }
+          },
+          {
+            "id": "filtered-read-isolation",
+            "behaviorBundle": {
+              "packageDirectory": "packages/api",
+              "tsconfigPath": "packages/api/tsconfig.json",
+              "sourcePath": "packages/api/test/harness-eval/fixtures/adaptive-development-disposable-filtered.oracle.ts"
+            }
+          }
+        ],
+        "observableBehaviors": [
+          {
+            "id": "runtime-root-and-descendant-remap",
+            "requirement": "Create and read boundaries map an existing runtime root or descendant to the corresponding existing persistent-workspace directory and persist the mapped value.",
+            "adjudication": "Exercise POST, unfiltered list, detail and trash responses through the registered Thread routes; compare response and ThreadStore state to canonical persistent paths."
+          },
+          {
+            "id": "workspace-containment",
+            "requirement": "A runtime descendant whose corresponding workspace entry resolves through a symlink outside the persistent workspace is rejected rather than exposed or persisted.",
+            "adjudication": "Create an external directory and a workspace symlink to it, submit the matching runtime descendant through POST, and require a non-success response with no external path persisted."
+          },
+          {
+            "id": "stale-runtime-fail-closed",
+            "requirement": "An observed stored path lexically owned by the runtime but missing on disk is reset and persisted as the safe default project without failing the enclosing read.",
+            "adjudication": "Seed a stale runtime descendant, read it through list, detail and trash boundaries, and require a successful response plus persisted projectPath=default."
+          },
+          {
+            "id": "filtered-read-isolation",
+            "requirement": "A project-filtered list migrates matching legacy records without loading, mutating or failing because of unrelated records.",
+            "adjudication": "Seed one matching runtime record and one unrelated unmappable record, issue the filtered request, and require only the matching record to migrate while the unrelated record remains unchanged."
+          }
+        ],
+        "hiddenTestPatch": {
+          "commit": "fae08774a573d7c49ccc614edfdbfcc065b78a47",
+          "paths": [
+            "packages/api/test/project-path.test.js",
+            "packages/api/test/threads-endpoint.test.js"
+          ]
+        }
+      },
+      "allowedChangedPaths": [
+        "packages/api/src/utils/persistent-project-path.ts",
+        "packages/api/src/routes/threads.ts",
+        "packages/api/test/project-path.test.js",
+        "packages/api/test/threads-endpoint.test.js"
+      ],
+      "horizonProfile": {
+        "decisionDepth": "long",
+        "requiredDimensions": [
+          "diagnosis",
+          "replanning",
+          "cross_layer_change",
+          "verification_review_convergence"
+        ]
+      }
+    },
+    {
+      "id": "long-provider-native-effort",
+      "title": "Provider-native CLI effort values",
+      "readiness": "ready",
+      "complexity": "large",
+      "source": {
+        "kind": "local_history",
+        "fixtureManifestPath": "packages/api/test/harness-eval/fixtures/adaptive-sop-replay-manifest.json",
+        "fixtureId": "sop-replay-provider-native-effort",
+        "sourcePullRequest": 1152,
+        "baseCommit": "e5ff2401aaa8e0bed6068d3fc28715bf94ef52fb"
+      },
+      "materializationMode": "full_base_commit",
+      "executorInput": {
+        "taskPrompt": "Allow effort-aware provider CLIs to preserve supported native effort values that are newer than maintained presets, while rejecting effort for clients that do not consume it.",
+        "desiredOutcomes": [
+          "Known presets remain ergonomic and unknown native values round-trip for capable providers.",
+          "Unsupported clients fail explicitly instead of silently persisting unused configuration."
+        ],
+        "knownFacts": [
+          "Provider CLIs evolve independently of the local preset catalog.",
+          "Only a subset of provider adapters currently consume CLI effort."
+        ],
+        "repositorySnapshot": {
+          "mode": "base_commit_paths",
+          "visiblePaths": [
+            "packages/shared/src/cli-effort.ts",
+            "packages/api/src/config/cat-config-loader.ts",
+            "packages/api/src/routes/cats.ts",
+            "packages/web/src/components/hub-cat-editor.model.ts"
+          ]
+        },
+        "constraints": [
+          "Preserve model-aware recommendations.",
+          "Do not accept configuration that no adapter consumes."
+        ]
+      },
+      "oraclePolicy": {
+        "id": "provider-native-effort-hidden-replay-v1",
+        "commandOrTool": "hidden historical shared, API, and provider regressions",
+        "successExitCode": 0,
+        "hiddenFromExecutor": true,
+        "goldOutcomeCommit": "591a9dc9aa421601452ae54f2fa370b46b2f8fd6",
+        "goldProjectionPaths": [
+          "packages/shared/src/cli-effort.ts",
+          "packages/shared/src/types/cat-breed.ts",
+          "packages/shared/vitest.config.js",
+          "packages/api/src/config/cat-config-loader.ts",
+          "packages/api/src/domains/cats/services/agents/providers/CodexAgentService.ts",
+          "packages/api/src/routes/cats.ts",
+          "packages/api/test/cat-config-loader.test.js",
+          "packages/api/test/cats-routes-runtime-crud.test.js",
+          "packages/api/test/codex-agent-service.test.js",
+          "packages/web/src/components/__tests__/hub-cat-editor.test.tsx",
+          "packages/web/src/components/hub-cat-editor-advanced.tsx",
+          "packages/web/src/components/hub-cat-editor-fields.tsx",
+          "packages/web/src/components/hub-cat-editor.model.ts"
+        ],
+        "setupCommands": [
+          {
+            "kind": "pnpm",
+            "args": [
+              "--filter",
+              "@cat-cafe/api",
+              "build"
+            ]
+          }
+        ],
+        "checks": [
+          {
+            "id": "provider-effort-shared",
+            "workingDirectory": "packages/shared",
+            "nodeArgs": [
+              "--input-type=module",
+              "--eval",
+              "const { getCliEffortOptionsForProvider: options } = await import('./dist/cli-effort.js'); const expected = ['low','medium','high','xhigh','max','ultra']; const actual = options('openai', 'openai/gpt-5.6-sol'); if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`unexpected GPT-5.6 effort options: ${JSON.stringify(actual)}`); if (options('openai', 'gpt-5.5').includes('ultra')) throw new Error('ultra leaked to older models'); if (options('google', 'gemini-3-pro') !== null) throw new Error('unsupported provider accepted effort options');"
+            ]
+          },
+          {
+            "id": "provider-effort-api",
+            "nodeArgs": [
+              "--import",
+              "./packages/api/test/helpers/setup-cat-registry.js",
+              "--test",
+              "--test-isolation=none",
+              "--test-timeout=60000",
+              "--test-name-pattern=(native structured cli\\.effort|blank cli\\.effort|clients without an effort adapter|native Codex effort|unfamiliar native effort)",
+              "packages/api/test/cat-config-loader.test.js",
+              "packages/api/test/cats-routes-runtime-crud.test.js",
+              "packages/api/test/codex-agent-service.test.js"
+            ]
+          },
+          {
+            "id": "provider-effort-hub",
+            "workingDirectory": "packages/web",
+            "behaviorBundle": {
+              "packageDirectory": "packages/web",
+              "tsconfigPath": "packages/web/tsconfig.json",
+              "source": "import assert from 'node:assert/strict';import React from '$CANDIDATE_ROOT/packages/web/node_modules/react/index.js';import{initialState}from'$CANDIDATE_ROOT/packages/web/src/components/hub-cat-editor.model.ts';import{AdvancedRuntimeSection}from'$CANDIDATE_ROOT/packages/web/src/components/hub-cat-editor-advanced.tsx';import{TextField}from'$CANDIDATE_ROOT/packages/web/src/components/hub-cat-editor-fields.tsx';globalThis.React=React;const expectedSuggestions=['low','medium','high','xhigh','max','ultra'];const form=initialState({id:'runtime-codex-ultra',displayName:'Runtime Codex',color:{primary:'#16a34a',secondary:'#bbf7d0'},mentionPatterns:['@runtime-codex-ultra'],clientId:'openai',defaultModel:'gpt-5.6-terra',avatar:'/avatars/codex.png',roleDescription:'review',personality:'careful',cli:{effort:'ultra'}});assert.equal(form.cliEffort,'ultra');let patch;const tree=AdvancedRuntimeSection({cat:null,form,strategyForm:null,loadingStrategy:false,strategyError:null,codexSettings:null,loadingCodexSettings:false,codexSettingsError:null,codexSettingsEditable:false,showCodexSettings:false,onChange:value=>{patch=value},onStrategyChange:()=>{},onCodexChange:()=>{}});function find(node,predicate){if(Array.isArray(node)){for(const child of node){const found=find(child,predicate);if(found)return found}return null}if(!node||typeof node!=='object'||!('props'in node))return null;if(predicate(node))return node;return find(node.props.children,predicate)}const field=find(tree,node=>node.type===TextField&&node.props.label==='CLI Effort');assert.ok(field);assert.equal(field.props.value,'ultra');assert.deepEqual([...field.props.suggestions],expectedSuggestions);const rendered=TextField(field.props);const input=find(rendered,node=>node.type==='input');const datalist=find(rendered,node=>node.type==='datalist');assert.ok(input);assert.ok(datalist);assert.equal(input.props.list,datalist.props.id);const optionNodes=Array.isArray(datalist.props.children)?datalist.props.children:[datalist.props.children];assert.deepEqual(optionNodes.map(option=>option.props.value),expectedSuggestions);input.props.onChange({target:{value:'max'}});assert.deepEqual(patch,{cliEffort:'max'});"
+            }
+          }
+        ],
+        "hiddenTestPatch": {
+          "commit": "591a9dc9aa421601452ae54f2fa370b46b2f8fd6",
+          "paths": [
+            "packages/shared/src/__tests__/cli-effort.test.ts",
+            "packages/api/test/cat-config-loader.test.js",
+            "packages/api/test/cats-routes-runtime-crud.test.js",
+            "packages/api/test/codex-agent-service.test.js",
+            "packages/web/src/components/__tests__/hub-cat-editor.test.tsx"
+          ]
+        }
+      },
+      "allowedChangedPaths": [
+        "packages/shared/src/cli-effort.ts",
+        "packages/shared/src/types/cat-breed.ts",
+        "packages/shared/vitest.config.js",
+        "packages/api/src/config/cat-config-loader.ts",
+        "packages/api/src/domains/cats/services/agents/providers/CodexAgentService.ts",
+        "packages/api/src/routes/cats.ts",
+        "packages/api/test/cat-config-loader.test.js",
+        "packages/api/test/cats-routes-runtime-crud.test.js",
+        "packages/api/test/codex-agent-service.test.js",
+        "packages/web/src/components/__tests__/hub-cat-editor.test.tsx",
+        "packages/web/src/components/hub-cat-editor-advanced.tsx",
+        "packages/web/src/components/hub-cat-editor-fields.tsx",
+        "packages/web/src/components/hub-cat-editor.model.ts"
+      ],
+      "horizonProfile": {
+        "decisionDepth": "long",
+        "requiredDimensions": [
+          "diagnosis",
+          "replanning",
+          "cross_layer_change",
+          "verification_review_convergence"
+        ]
+      }
+    },
+    {
+      "id": "long-github-delivery-truth",
+      "title": "Durable GitHub tracking delivery truth",
+      "readiness": "ready",
+      "complexity": "large",
+      "source": {
+        "kind": "local_history",
+        "fixtureManifestPath": "packages/api/test/harness-eval/fixtures/adaptive-sop-replay-manifest.json",
+        "fixtureId": "sop-replay-github-delivery-truth",
+        "sourcePullRequest": 1181,
+        "baseCommit": "dff66bdb4a4b31b9942785cd8dd35bc8640637fa"
+      },
+      "materializationMode": "full_base_commit",
+      "executorInput": {
+        "taskPrompt": "Repair PR and issue tracking so registration, cursor migration, comment identity, queued owner wakes, and closure revalidation preserve durable exactly-once delivery truth.",
+        "desiredOutcomes": [
+          "Existing relevant feedback is not silently skipped or duplicated.",
+          "Issue completion waits for a durably accepted wake and a fresh closure check."
+        ],
+        "knownFacts": [
+          "GitHub issue comments and review comments use independent numeric ID spaces.",
+          "Queue admission can fail after a poll has observed new external state."
+        ],
+        "repositorySnapshot": {
+          "mode": "base_commit_paths",
+          "visiblePaths": [
+            "packages/api/src/infrastructure/github/comment-cursors.ts",
+            "packages/api/src/infrastructure/email/IssueCommentTaskSpec.ts",
+            "packages/api/src/infrastructure/email/ReviewFeedbackTaskSpec.ts",
+            "packages/api/src/domains/cats/services/stores/ports/TaskStore.ts"
+          ]
+        },
+        "constraints": [
+          "Do not access live GitHub during tests.",
+          "Do not claim delivery before wake admission is durable.",
+          "Preserve legacy event identity during migration."
+        ]
+      },
+      "oraclePolicy": {
+        "id": "github-delivery-truth-hidden-replay-v1",
+        "commandOrTool": "hidden historical cursor, task-store, and wake regressions",
+        "successExitCode": 0,
+        "hiddenFromExecutor": true,
+        "goldOutcomeCommit": "e2ff1fb6fbedfc078fb417cba3993cd1786f84bd",
+        "goldProjectionPaths": [
+          "packages/api/src/domains/cats/services/stores/ports/TaskStore.ts",
+          "packages/api/src/domains/cats/services/stores/redis/RedisTaskStore.ts",
+          "packages/api/src/domains/plugin/github-schedule-factories.ts",
+          "packages/api/src/index.ts",
+          "packages/api/src/infrastructure/email/ConnectorInvokeTrigger.ts",
+          "packages/api/src/infrastructure/email/IssueCommentRouter.ts",
+          "packages/api/src/infrastructure/email/IssueCommentTaskSpec.ts",
+          "packages/api/src/infrastructure/email/ReviewFeedbackTaskSpec.ts",
+          "packages/api/src/infrastructure/github/comment-cursors.ts",
+          "packages/api/test/connector-invoke-trigger.test.js",
+          "packages/api/test/f168-phase-b-dual-cursor.test.js",
+          "packages/api/test/f168-phase-b-review-feedback-event-log.test.js",
+          "packages/api/test/f202-phase2-d.test.js",
+          "packages/api/test/github-comment-cursors.test.js",
+          "packages/api/test/redis-task-store.test.js",
+          "packages/api/test/scheduler/review-feedback-spec.test.js",
+          "packages/api/test/task-store.test.js",
+          "packages/shared/src/types/index.ts",
+          "packages/shared/src/types/task.ts"
+        ],
+        "setupCommands": [
+          {
+            "kind": "pnpm",
+            "args": [
+              "--filter",
+              "@cat-cafe/api",
+              "build"
+            ]
+          }
+        ],
+        "checks": [
+          {
+            "id": "github-delivery-truth",
+            "nodeArgs": [
+              "--import",
+              "./packages/api/test/helpers/setup-cat-registry.js",
+              "--test",
+              "--test-isolation=none",
+              "--test-timeout=60000",
+              "--test-name-pattern=(PR #1181 P1:|route success without an accepted wake|accepted wake advances|explicit issue tracking routes|collection and delivery both include|delivery cursor|failed wake|final batch|final wake|mixed batch|legacy comment identity|trigger rejection|full invocation queue|marks notification only|refreshed closure check|fetchInitialPrTrackingBoundary starts review cursors|upsertBySubject preserves independent review cursor|explicit null clears|does not lower independent)",
+              "packages/api/test/connector-invoke-trigger.test.js",
+              "packages/api/test/f168-phase-b-dual-cursor.test.js",
+              "packages/api/test/f168-phase-b-review-feedback-event-log.test.js",
+              "packages/api/test/f202-phase2-d.test.js",
+              "packages/api/test/github-comment-cursors.test.js",
+              "packages/api/test/redis-task-store.test.js",
+              "packages/api/test/scheduler/review-feedback-spec.test.js",
+              "packages/api/test/task-store.test.js"
+            ]
+          }
+        ],
+        "hiddenTestPatch": {
+          "commit": "e2ff1fb6fbedfc078fb417cba3993cd1786f84bd",
+          "paths": [
+            "packages/api/test/connector-invoke-trigger.test.js",
+            "packages/api/test/f168-phase-b-dual-cursor.test.js",
+            "packages/api/test/f168-phase-b-review-feedback-event-log.test.js",
+            "packages/api/test/f202-phase2-d.test.js",
+            "packages/api/test/github-comment-cursors.test.js",
+            "packages/api/test/redis-task-store.test.js",
+            "packages/api/test/scheduler/review-feedback-spec.test.js",
+            "packages/api/test/task-store.test.js"
+          ]
+        }
+      },
+      "allowedChangedPaths": [
+        "packages/api/src/domains/cats/services/stores/ports/TaskStore.ts",
+        "packages/api/src/domains/cats/services/stores/redis/RedisTaskStore.ts",
+        "packages/api/src/domains/plugin/github-schedule-factories.ts",
+        "packages/api/src/index.ts",
+        "packages/api/src/infrastructure/email/ConnectorInvokeTrigger.ts",
+        "packages/api/src/infrastructure/email/IssueCommentRouter.ts",
+        "packages/api/src/infrastructure/email/IssueCommentTaskSpec.ts",
+        "packages/api/src/infrastructure/email/ReviewFeedbackTaskSpec.ts",
+        "packages/api/src/infrastructure/github/comment-cursors.ts",
+        "packages/api/test/connector-invoke-trigger.test.js",
+        "packages/api/test/f168-phase-b-dual-cursor.test.js",
+        "packages/api/test/f168-phase-b-review-feedback-event-log.test.js",
+        "packages/api/test/f202-phase2-d.test.js",
+        "packages/api/test/github-comment-cursors.test.js",
+        "packages/api/test/redis-task-store.test.js",
+        "packages/api/test/scheduler/review-feedback-spec.test.js",
+        "packages/api/test/task-store.test.js",
+        "packages/shared/src/types/index.ts",
+        "packages/shared/src/types/task.ts"
+      ],
+      "horizonProfile": {
+        "decisionDepth": "long",
+        "requiredDimensions": [
+          "diagnosis",
+          "replanning",
+          "cross_layer_change",
+          "verification_review_convergence"
+        ]
+      }
+    },
+    {
+      "id": "external-swebench-multilingual-axios-4738",
+      "title": "Axios timeoutErrorMessage regression",
+      "readiness": "candidate",
+      "complexity": "small",
+      "source": {
+        "kind": "external_dataset",
+        "datasetId": "SWE-bench/SWE-bench_Multilingual",
+        "datasetRevision": "e5c585e008e2cb5eecc7c64192d855c53279d788",
+        "instanceId": "axios__axios-4738",
+        "repository": "axios/axios",
+        "baseCommit": "9bb016f95e6de871a44f3276fd06562704a0abb0",
+        "license": "MIT dataset; preserve the upstream repository license and attribution",
+        "sourceUrl": "https://huggingface.co/datasets/SWE-bench/SWE-bench_Multilingual"
+      },
+      "executorInput": {
+        "taskPrompt": "Fix Axios on Node.js so a configured timeoutErrorMessage is used instead of the generic timeout of Nms exceeded message.",
+        "desiredOutcomes": [
+          "Node.js requests respect the configured timeoutErrorMessage.",
+          "Existing timeout parsing and timeout behavior remain intact."
+        ],
+        "knownFacts": [
+          "The regression is present in Axios 0.27.2 on Node.js.",
+          "The task comes from SWE-bench Multilingual instance axios__axios-4738."
+        ],
+        "repositorySnapshot": {
+          "mode": "external_dataset_base_commit",
+          "repository": "axios/axios",
+          "baseCommit": "9bb016f95e6de871a44f3276fd06562704a0abb0"
+        },
+        "constraints": [
+          "Do not access the gold patch or hidden test patch.",
+          "Keep evaluation offline inside the pinned benchmark environment."
+        ]
+      },
+      "oraclePolicy": {
+        "id": "swebench-multilingual-f2p-p2p-v1",
+        "commandOrTool": "SWE-bench evaluator for pinned instance axios__axios-4738",
+        "successExitCode": 0,
+        "hiddenFromExecutor": true
+      }
+    }
+  ],
+  "stages": [
+    {
+      "id": "s0-measurement-smoke",
+      "kind": "measurement_smoke",
+      "horizon": "smoke",
+      "taskIds": [
+        "local-stale-formatter-regression",
+        "local-pwa-reconnect-input"
+      ],
+      "repetitionsPerArm": 1,
+      "maximumRuns": 4,
+      "wallTimeMsCap": 600000,
+      "effectClaimEligible": false,
+      "automaticScale": false
+    },
+    {
+      "id": "s1-long-horizon-directional",
+      "kind": "exploratory",
+      "horizon": "long",
+      "taskIds": [
+        "long-invocation-interrupt-self-heal",
+        "long-disposable-checkout-writes",
+        "long-provider-native-effort",
+        "long-github-delivery-truth"
+      ],
+      "repetitionsPerArm": 1,
+      "admissionRepetitions": 1,
+      "maximumRuns": 8,
+      "wallTimeMsCap": 2700000,
+      "effectClaimEligible": false,
+      "automaticScale": false
+    }
+  ]
+}
