@@ -2152,6 +2152,7 @@ async function main(): Promise<void> {
     ...(actionSuccessorLeaseStore ? { actionSuccessorLeaseStore } : {}),
     ...(ballCustodyProjectionStore ? { ballCustodyProjectionStore } : {}),
     ...(ballCustodyEventLog ? { ballCustodyEventLog } : {}),
+    messageStore,
   });
   let a2aDispatchDispositionService:
     | import('./domains/ball-custody/A2ADispatchDispositionService.js').A2ADispatchDispositionService

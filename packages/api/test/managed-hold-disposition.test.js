@@ -13,7 +13,8 @@ import { BallCustodyProjector } from '../dist/domains/ball-custody/BallCustodyPr
 import {
   buildHandedEvent,
   buildHeldEvent,
-  buildInvocationDiedEvent,
+  buildInvocationStartedEvent,
+  buildVoidPassEvent,
   buildWakeConditionMetEvent,
 } from '../dist/domains/ball-custody/ball-custody-events.js';
 import {
@@ -124,6 +125,7 @@ function managedTask(overrides = {}) {
 async function harness({
   failDispositionAppendOnce = false,
   failDispositionProjectionOnce = false,
+  failReceiptOnce = false,
   beforeDispositionRecord,
 } = {}) {
   const now = Date.now() + 1_000;
@@ -200,13 +202,23 @@ async function harness({
 
   const tasks = new Map([['task-1', task]]);
   let latest = true;
-  const receiptService = new ManagedHoldReceiptService({ queue, messageStore, coordinator, now: () => now });
+  const durableReceiptService = new ManagedHoldReceiptService({ queue, messageStore, coordinator, now: () => now });
+  let shouldFailReceipt = failReceiptOnce;
+  const receiptService = {
+    async complete(input) {
+      if (shouldFailReceipt) {
+        shouldFailReceipt = false;
+        throw new Error('receipt write failed');
+      }
+      return durableReceiptService.complete(input);
+    },
+  };
   const fencedIngest = beforeDispositionRecord
     ? {
         record: (event) => ingest.record(event),
         async recordFenced(event, expectedSequence) {
           if (event.kind === 'ball.hold_dispositioned') {
-            await beforeDispositionRecord({ event, ingest });
+            await beforeDispositionRecord({ event, ingest, setLatest: (value) => (latest = value) });
           }
           return ingest.recordFenced(event, expectedSequence);
         },
@@ -338,6 +350,7 @@ describe('F167 × F254 managed hold disposition', () => {
       const gate = new TurnCustodyProjectionService({
         ballCustodyProjectionStore: h.projectionStore,
         ballCustodyEventLog: h.eventLog,
+        messageStore: h.messageStore,
       });
       const opened = await gate.open({
         kind: 'structured',
@@ -356,14 +369,14 @@ describe('F167 × F254 managed hold disposition', () => {
       }
 
       const first = await h.service.complete(auth(h), 'completed');
-      assert.equal(first.outcome, 'applied');
+      assert.equal(first.outcome, 'stale');
       assert.equal((await gate.close(opened)).shouldBlock, false);
-      assert.equal((await h.projectionStore.get('ball:thread:thread-1')).state, 'resolved');
+      assert.equal((await h.projectionStore.get('ball:thread:thread-1')).state, 'active');
       assert.deepEqual(h.messageStore.getById(h.stored.id).queueCustody.handledByCatIds, ['codex-sol']);
 
       h.setLatest(false);
       const replay = await h.service.complete(auth(h), 'completed');
-      assert.equal(replay.outcome, 'replayed');
+      assert.equal(replay.outcome, 'stale');
       assert.equal(
         (await h.eventLog.read('ball:thread:thread-1')).filter((event) => event.kind === 'ball.hold_dispositioned')
           .length,
@@ -379,6 +392,7 @@ describe('F167 × F254 managed hold disposition', () => {
     const gate = new TurnCustodyProjectionService({
       ballCustodyProjectionStore: h.projectionStore,
       ballCustodyEventLog: h.eventLog,
+      messageStore: h.messageStore,
     });
     const opened = await gate.open({
       kind: 'structured',
@@ -433,18 +447,16 @@ describe('F167 × F254 managed hold disposition', () => {
     h.task.params.holdLifecycle.managedCommand.state = 'consumed';
     h.task.enabled = false;
     await h.ingest.record(
-      buildInvocationDiedEvent({
-        invocationId: 'prior-work',
+      buildVoidPassEvent({
         threadId: 'thread-1',
-        catId: 'codex-sol',
-        reason: 'terminal',
-        lastScanAt: 3_000,
+        messageId: 'void-after-old-wake',
         at: 3_000,
       }),
     );
     const gate = new TurnCustodyProjectionService({
       ballCustodyProjectionStore: h.projectionStore,
       ballCustodyEventLog: h.eventLog,
+      messageStore: h.messageStore,
     });
     const opened = await gate.open({
       kind: 'structured',
@@ -459,7 +471,7 @@ describe('F167 × F254 managed hold disposition', () => {
     const result = await h.service.complete(auth(h), 'handled');
     assert.equal(result.outcome, 'stale');
     assert.equal((await gate.close(opened)).shouldBlock, false);
-    assert.equal((await h.projectionStore.get('ball:thread:thread-1')).state, 'dead');
+    assert.equal((await h.projectionStore.get('ball:thread:thread-1')).state, 'void');
   });
 
   test('a new managed hold reopens the same thread after a prior disposition and can complete', async () => {
@@ -518,6 +530,7 @@ describe('F167 × F254 managed hold disposition', () => {
     const gate = new TurnCustodyProjectionService({
       ballCustodyProjectionStore: h.projectionStore,
       ballCustodyEventLog: h.eventLog,
+      messageStore: h.messageStore,
     });
     const opened = await gate.open({
       kind: 'structured',
@@ -614,6 +627,79 @@ describe('F167 × F254 managed hold disposition', () => {
     assert.deepEqual(h.messageStore.getById(h.stored.id).queueCustody.handledByCatIds, ['codex-sol']);
   });
 
+  test('a newer same-holder invocation replaces the old wake without resolving the newer work', async () => {
+    const h = await harness();
+    await h.ingest.record(
+      buildInvocationStartedEvent({
+        invocationId: 'newer-work-invocation',
+        threadId: 'thread-1',
+        catId: 'codex-sol',
+        at: 2_500,
+      }),
+    );
+    await h.ingest.record(
+      buildInvocationStartedEvent({
+        invocationId: 'inv-1',
+        threadId: 'thread-1',
+        catId: 'codex-sol',
+        at: 3_000,
+      }),
+    );
+
+    const result = await h.service.complete(auth(h), 'completed');
+    assert.equal(result.outcome, 'replaced');
+    const projection = await h.projectionStore.get('ball:thread:thread-1');
+    assert.equal(projection.state, 'active');
+    assert.equal(projection.holder, 'codex-sol');
+  });
+
+  test('a fence retry revalidates latest invocation before writing a replacement terminal', async () => {
+    const h = await harness({
+      beforeDispositionRecord: async ({ ingest, setLatest }) => {
+        setLatest(false);
+        await ingest.record(buildHeldEvent({ threadId: 'thread-1', catId: 'codex-sol', fireAt: 199_000, at: 4_000 }));
+      },
+    });
+
+    await assert.rejects(
+      () => h.service.complete(auth(h), 'completed'),
+      (error) =>
+        error instanceof ManagedHoldDispositionError && error.code === 'managed_hold_disposition_stale_invocation',
+    );
+    const projection = await h.projectionStore.get('ball:thread:thread-1');
+    assert.equal(projection.state, 'active');
+    assert.equal(projection.heldUntil, 199_000);
+    assert.equal(
+      (await h.eventLog.read('ball:thread:thread-1')).some((event) => event.kind === 'ball.hold_dispositioned'),
+      false,
+    );
+    assert.deepEqual(h.messageStore.getById(h.stored.id).queueCustody.handledByCatIds, []);
+  });
+
+  test('a newer invocation serialized after the old disposition reopens custody for the newer work', async () => {
+    const h = await harness({
+      beforeDispositionRecord: async ({ setLatest }) => {
+        setLatest(false);
+      },
+    });
+
+    const result = await h.service.complete(auth(h), 'completed');
+    assert.equal(result.outcome, 'applied');
+    assert.equal((await h.projectionStore.get('ball:thread:thread-1')).state, 'resolved');
+
+    await h.ingest.record(
+      buildInvocationStartedEvent({
+        invocationId: 'newer-work-invocation',
+        threadId: 'thread-1',
+        catId: 'codex-sol',
+        at: 4_000,
+      }),
+    );
+    const projection = await h.projectionStore.get('ball:thread:thread-1');
+    assert.equal(projection.state, 'active');
+    assert.equal(projection.holder, 'codex-sol');
+  });
+
   test('repairs projection when the exact event append wins before projection persistence fails', async () => {
     const h = await harness({ failDispositionProjectionOnce: true });
 
@@ -627,6 +713,37 @@ describe('F167 × F254 managed hold disposition', () => {
         .length,
       1,
     );
+  });
+
+  test('an appended disposition does not release the stop gate until its exact receipt converges', async () => {
+    const h = await harness({ failReceiptOnce: true });
+    const gate = new TurnCustodyProjectionService({
+      ballCustodyProjectionStore: h.projectionStore,
+      ballCustodyEventLog: h.eventLog,
+      messageStore: h.messageStore,
+    });
+    const opened = await gate.open({
+      kind: 'structured',
+      protocol: 'hold',
+      subjectKey: 'ball:thread:thread-1',
+      holderCatId: 'codex-sol',
+      sourceMessageId: h.stored.id,
+      taskId: 'task-1',
+    });
+
+    await assert.rejects(() => h.service.complete(auth(h), 'completed'), /receipt write failed/);
+    assert.equal(
+      (await h.eventLog.read('ball:thread:thread-1')).filter((event) => event.kind === 'ball.hold_dispositioned')
+        .length,
+      1,
+    );
+    assert.deepEqual(h.messageStore.getById(h.stored.id).queueCustody.handledByCatIds, []);
+    assert.equal((await gate.close(opened)).shouldBlock, true);
+
+    const replay = await h.service.complete(auth(h), 'completed');
+    assert.equal(replay.outcome, 'replayed');
+    assert.deepEqual(h.messageStore.getById(h.stored.id).queueCustody.handledByCatIds, ['codex-sol']);
+    assert.equal((await gate.close(opened)).shouldBlock, false);
   });
 
   test('does not consume the exact receipt when the custody event was not appended', async () => {
@@ -691,6 +808,7 @@ describe('F167 × F254 managed hold disposition', () => {
     const gate = new TurnCustodyProjectionService({
       ballCustodyProjectionStore: h.projectionStore,
       ballCustodyEventLog: h.eventLog,
+      messageStore: h.messageStore,
     });
     const opened = await gate.open({
       kind: 'structured',

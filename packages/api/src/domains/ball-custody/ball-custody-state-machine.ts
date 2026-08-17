@@ -148,7 +148,9 @@ const STATIC_TABLE: Partial<Record<BallCustodyEvent['kind'], StaticRule>> = {
   // A fresh structured hold is a new custody acquisition on the thread subject.
   // It must reopen a prior terminal disposition just as a new A2A handoff does.
   'ball.held': { from: set('new', 'active', 'resolved'), to: 'active' }, // heldUntil 由 projector 设
-  'invocation.started': { from: set('active', 'blocked'), to: 'active' },
+  // A newly durable invocation is later custody than any disposition already
+  // serialized for the prior turn, so it can reopen a resolved thread ball.
+  'invocation.started': { from: set('active', 'blocked', 'resolved'), to: 'active' },
   'invocation.died': { from: set('active', 'blocked'), to: 'dead' }, // lastScanAt 由 projector 设
   'task.blocked': { from: set('new', 'active', 'void', 'zombie', 'parked'), to: 'blocked' }, // 不落 active（P1-3）
   'task.unblocked': { from: set('blocked', 'zombie'), to: 'active' },

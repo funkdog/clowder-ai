@@ -25,9 +25,33 @@ function lease(overrides = {}) {
   };
 }
 
-function harness({ currentLease = lease(), projection = { state: 'active', holder: 'codex-sol' }, events = [] } = {}) {
+function managedHoldMessage({ invocationId = 'inv-1', handled = true } = {}) {
+  return {
+    source: { connector: 'hold-ball', meta: { taskId: 'task-1' } },
+    queueCustody: {
+      handledByCatIds: handled ? ['codex-sol'] : [],
+      targetOutcomeByCatId: handled
+        ? {
+            'codex-sol': {
+              invocationId,
+              disposition: 'managed_hold_disposition',
+              evidenceRef: { kind: 'invocation_lineage', invocationId },
+            },
+          }
+        : {},
+    },
+  };
+}
+
+function harness({
+  currentLease = lease(),
+  projection = { state: 'active', holder: 'codex-sol' },
+  events = [],
+  messages = {},
+} = {}) {
   let activeLease = currentLease;
   const eventLog = [...events];
+  const messageStore = new Map(Object.entries(messages));
   let threadProjection = projection;
   const service = new TurnCustodyProjectionService({
     actionSuccessorLeaseStore: {
@@ -45,6 +69,11 @@ function harness({ currentLease = lease(), projection = { state: 'active', holde
         return eventLog.slice(fromSequence);
       },
     },
+    messageStore: {
+      async getById(id) {
+        return messageStore.get(id) ?? null;
+      },
+    },
   });
   return {
     service,
@@ -56,6 +85,9 @@ function harness({ currentLease = lease(), projection = { state: 'active', holde
     },
     addEvent(event) {
       eventLog.push(event);
+    },
+    setMessage(id, message) {
+      messageStore.set(id, message);
     },
   };
 }
@@ -187,7 +219,7 @@ describe('F167 Phase T TurnCustodyProjectionService', () => {
     });
     assert.equal((await h.service.close(opened)).shouldBlock, true, 'receiving the wake is not turn progress');
 
-    const exact = harness();
+    const exact = harness({ messages: { 'message-1': managedHoldMessage() } });
     const exactOpened = await exact.service.open({
       kind: 'structured',
       protocol: 'hold',
@@ -214,6 +246,30 @@ describe('F167 Phase T TurnCustodyProjectionService', () => {
       structuredTransitionKind: 'hold_dispositioned',
       evidenceRefs: ['hold:ball:thread:thread-1'],
     });
+
+    const orphan = harness({ messages: { 'message-1': managedHoldMessage({ handled: false }) } });
+    const orphanOpened = await orphan.service.open({
+      kind: 'structured',
+      protocol: 'hold',
+      subjectKey: 'ball:thread:thread-1',
+      holderCatId: 'codex-sol',
+      sourceMessageId: 'message-1',
+      taskId: 'task-1',
+    });
+    orphan.addEvent({
+      kind: 'ball.hold_dispositioned',
+      sourceEventId: 'hold-disposition:inv-1:message-1:task-1',
+      payload: {
+        catId: 'codex-sol',
+        invocationId: 'inv-1',
+        sourceMessageId: 'message-1',
+        taskId: 'task-1',
+        disposition: 'completed',
+      },
+    });
+    assert.equal((await orphan.service.close(orphanOpened)).shouldBlock, true);
+    orphan.setMessage('message-1', managedHoldMessage());
+    assert.equal((await orphan.service.close(orphanOpened)).shouldBlock, false);
 
     for (const kind of ['ball.held', 'ball.handed', 'ball.handed_cvo']) {
       const next = harness();
@@ -254,6 +310,50 @@ describe('F167 Phase T TurnCustodyProjectionService', () => {
       assert.equal(opened.state, 'unknown_legacy');
       assert.equal((await service.close(opened)).shouldBlock, true);
     }
+  });
+
+  test('a pre-existing hold disposition releases only after its exact F264 receipt is durable', async () => {
+    const events = [
+      {
+        kind: 'ball.wake_condition_met',
+        sourceEventId: 'wakecond:task-1',
+        payload: { catId: 'codex-sol', taskId: 'task-1' },
+      },
+      {
+        kind: 'ball.handed',
+        sourceEventId: 'route:message-1:codex-sol',
+        payload: { toCatId: 'codex-sol' },
+      },
+      {
+        kind: 'ball.hold_dispositioned',
+        sourceEventId: 'hold-disposition:inv-1:message-1:task-1',
+        payload: {
+          catId: 'codex-sol',
+          invocationId: 'inv-1',
+          sourceMessageId: 'message-1',
+          taskId: 'task-1',
+          disposition: 'completed',
+        },
+      },
+    ];
+    const pending = harness({
+      events,
+      messages: { 'message-1': managedHoldMessage({ handled: false }) },
+    });
+    const wake = {
+      kind: 'structured',
+      protocol: 'hold',
+      subjectKey: 'ball:thread:thread-1',
+      holderCatId: 'codex-sol',
+      sourceMessageId: 'message-1',
+      taskId: 'task-1',
+    };
+    assert.equal((await pending.service.open(wake)).state, 'covered_active');
+
+    const settled = harness({ events, messages: { 'message-1': managedHoldMessage() } });
+    const opened = await settled.service.open(wake);
+    assert.equal(opened.state, 'covered_empty');
+    assert.equal((await settled.service.close(opened)).shouldBlock, false);
   });
 
   test('an exact structured wake released by a later handoff is covered_empty for the stale carrier', async () => {

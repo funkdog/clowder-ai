@@ -1,4 +1,5 @@
-import type { BallCustodyEvent, WaitContinuationCarrierV1 } from '@cat-cafe/shared';
+import type { BallCustodyEvent, CatId, WaitContinuationCarrierV1 } from '@cat-cafe/shared';
+import type { IMessageStore } from '../cats/services/stores/ports/MessageStore.js';
 import type { ActionSuccessorLeaseStore } from './ActionSuccessorLeaseStore.js';
 import type { ActionSuccessorLease } from './action-successor-state-machine.js';
 import type { IBallCustodyEventLog } from './BallCustodyEventLog.js';
@@ -108,6 +109,7 @@ interface TurnCustodyProjectionDeps {
   readonly actionSuccessorLeaseStore?: Pick<ActionSuccessorLeaseStore, 'get'>;
   readonly ballCustodyProjectionStore?: Pick<IBallCustodyProjectionStore, 'get'>;
   readonly ballCustodyEventLog?: Pick<IBallCustodyEventLog, 'read'>;
+  readonly messageStore?: Pick<IMessageStore, 'getById'>;
 }
 
 function candidateFingerprint(lease: ActionSuccessorLease, holderCatId: string): unknown {
@@ -250,7 +252,7 @@ export class TurnCustodyProjectionService {
     if (wake.protocol === 'dispatch' && exactWakeIndex === -1) {
       return unknown('dispatch_handoff_missing');
     }
-    const priorDisposition = this.disposedManagedHoldWake(wake, events);
+    const priorDisposition = await this.disposedManagedHoldWake(wake, events);
     if (priorDisposition) return priorDisposition;
     const released = this.releasedStructuredWake(wake, events, exactWakeIndex);
     if (released) return released;
@@ -296,27 +298,58 @@ export class TurnCustodyProjectionService {
     return wake.protocol === 'hold' && exactWakeIndex !== -1;
   }
 
-  private disposedManagedHoldWake(
+  private async disposedManagedHoldWake(
     wake: Extract<TurnCustodyWakeProvenance, { kind: 'structured' }>,
     events: readonly BallCustodyEvent[],
-  ): TurnCustodyProjection | undefined {
+  ): Promise<TurnCustodyProjection | undefined> {
     if (wake.protocol !== 'hold') return undefined;
-    const disposition = events.find(
-      (event) =>
+    for (const event of events) {
+      if (
         event.kind === 'ball.hold_dispositioned' &&
         event.payload.catId === wake.holderCatId &&
         event.payload.sourceMessageId === wake.sourceMessageId &&
-        event.payload.taskId === wake.taskId,
+        event.payload.taskId === wake.taskId &&
+        (await this.hasCommittedManagedHoldReceipt(event))
+      ) {
+        return {
+          state: 'covered_empty',
+          evidenceRefs: [
+            `${wake.protocol}:${wake.subjectKey}`,
+            handedEventSourceId(wake.sourceMessageId, wake.holderCatId),
+            `released:${event.sourceEventId}`,
+          ],
+        };
+      }
+    }
+    return undefined;
+  }
+
+  private async hasCommittedManagedHoldReceipt(event: BallCustodyEvent): Promise<boolean> {
+    if (event.kind !== 'ball.hold_dispositioned' || !this.deps.messageStore) return false;
+    const sourceMessageId = event.payload.sourceMessageId;
+    const catId = event.payload.catId;
+    const invocationId = event.payload.invocationId;
+    const taskId = event.payload.taskId;
+    if (
+      typeof sourceMessageId !== 'string' ||
+      typeof catId !== 'string' ||
+      typeof invocationId !== 'string' ||
+      typeof taskId !== 'string'
+    ) {
+      return false;
+    }
+    const message = await this.deps.messageStore.getById(sourceMessageId);
+    const custody = message?.queueCustody;
+    const outcome = custody?.targetOutcomeByCatId?.[catId];
+    return Boolean(
+      message?.source?.connector === 'hold-ball' &&
+        message.source.meta?.taskId === taskId &&
+        custody?.handledByCatIds.includes(catId as CatId) &&
+        outcome?.invocationId === invocationId &&
+        outcome.disposition === 'managed_hold_disposition' &&
+        outcome.evidenceRef.kind === 'invocation_lineage' &&
+        outcome.evidenceRef.invocationId === invocationId,
     );
-    if (!disposition) return undefined;
-    return {
-      state: 'covered_empty',
-      evidenceRefs: [
-        `${wake.protocol}:${wake.subjectKey}`,
-        handedEventSourceId(wake.sourceMessageId, wake.holderCatId),
-        `released:${disposition.sourceEventId}`,
-      ],
-    };
   }
 
   private releasedStructuredWake(
@@ -399,22 +432,23 @@ export class TurnCustodyProjectionService {
   ): Promise<StructuredTransitionObservation | undefined> {
     const events = await this.deps.ballCustodyEventLog?.read(baseline.subjectKey, baseline.fromSequence);
     for (const event of events ?? []) {
-      const kind = this.structuredTransitionKind(event, baseline);
+      const kind = await this.structuredTransitionKind(event, baseline);
       if (kind) return kind;
     }
     return undefined;
   }
 
-  private structuredTransitionKind(
+  private async structuredTransitionKind(
     event: BallCustodyEvent,
     baseline: StructuredTransitionBaseline,
-  ): StructuredTransitionObservation | undefined {
+  ): Promise<StructuredTransitionObservation | undefined> {
     const holderCatId = baseline.holderCatId;
     if (event.kind === 'ball.hold_dispositioned') {
       return baseline.protocol === 'hold' &&
         event.payload.catId === holderCatId &&
         event.payload.sourceMessageId === baseline.sourceMessageId &&
-        event.payload.taskId === baseline.taskId
+        event.payload.taskId === baseline.taskId &&
+        (await this.hasCommittedManagedHoldReceipt(event))
         ? { structuredTransitionKind: 'hold_dispositioned' }
         : undefined;
     }

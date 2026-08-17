@@ -59,6 +59,17 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+function isOtherHolderInvocationEvent(event: BallCustodyEvent, catId: string, invocationId: string): boolean {
+  return (
+    (event.kind === 'invocation.started' ||
+      event.kind === 'invocation.heartbeat' ||
+      event.kind === 'invocation.died') &&
+    event.payload.catId === catId &&
+    typeof event.payload.invocationId === 'string' &&
+    event.payload.invocationId !== invocationId
+  );
+}
+
 /** Invocation-bound terminal producer for an exact managed hold wake. */
 export class ManagedHoldDispositionService {
   private readonly now: () => number;
@@ -75,9 +86,9 @@ export class ManagedHoldDispositionService {
     const subjectKey = `ball:thread:${auth.threadId}`;
     const replay = await this.replayExistingDisposition(auth, disposition, subjectKey, sourceMessageId, taskId);
     if (replay) return replay;
-    await this.assertLatestInvocation(auth.invocationId);
 
     for (let attempt = 0; attempt < MAX_SNAPSHOT_ATTEMPTS; attempt += 1) {
+      await this.assertLatestInvocation(auth.invocationId);
       try {
         return await this.completeAgainstSnapshot(auth, disposition, subjectKey, sourceMessageId, taskId);
       } catch (error) {
@@ -152,6 +163,7 @@ export class ManagedHoldDispositionService {
       events,
       subjectKey,
       auth.catId,
+      auth.invocationId,
       sourceMessageId,
       taskId,
       taskState,
@@ -258,6 +270,7 @@ export class ManagedHoldDispositionService {
     events: readonly BallCustodyEvent[],
     subjectKey: string,
     catId: string,
+    invocationId: string,
     sourceMessageId: string,
     taskId: string,
     taskState: ManagedHoldTaskState,
@@ -277,16 +290,13 @@ export class ManagedHoldDispositionService {
           (event.kind === 'ball.handed' &&
             event.sourceEventId !== ownReceiverHandoffSourceId &&
             (event.payload.fromCatId === catId || event.payload.toCatId === catId)) ||
-          (event.kind === 'ball.handed_cvo' && event.payload.fromCatId === catId),
+          (event.kind === 'ball.handed_cvo' && event.payload.fromCatId === catId) ||
+          isOtherHolderInvocationEvent(event, catId, invocationId),
       );
     if (wasReplaced) return 'replaced';
-    try {
-      await this.assertCurrentHolder(subjectKey, catId);
-      return undefined;
-    } catch (error) {
-      if (taskState !== 'live' && error instanceof ManagedHoldDispositionError) return 'stale';
-      throw error;
-    }
+    if (taskState !== 'live') return 'stale';
+    await this.assertCurrentHolder(subjectKey, catId);
+    return undefined;
   }
 
   private assertMatchingDispositionEvent(

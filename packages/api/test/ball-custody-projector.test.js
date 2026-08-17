@@ -93,6 +93,20 @@ describe('BallCustodyProjector — apply 字段 effect', () => {
     assert.strictEqual(p.state, 'dead');
     assert.strictEqual(p.lastScanAt, 888);
   });
+  it('a later invocation reopens resolved custody and installs its holder', async () => {
+    const { proj, store } = setup();
+    await proj.apply(ev('ball.handed', { payload: { toCatId: 'codex-sol' } }));
+    await proj.apply(ev('task.done', { at: 2 }));
+    await proj.apply(
+      ev('invocation.started', {
+        at: 3,
+        payload: { invocationId: 'inv-new', catId: 'opus' },
+      }),
+    );
+    const projection = await store.get('ball:task:t1');
+    assert.equal(projection.state, 'active');
+    assert.equal(projection.holder, 'opus');
+  });
 
   it('ball.wake_sent on blocked → lastWakeAt 更新；新 blocked episode 清空（砚砚卡点）', async () => {
     const { proj, store } = setup();

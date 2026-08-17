@@ -315,16 +315,27 @@ function emitBallHandedCvo(
     .catch((err) => log.warn({ threadId, fromCatId, err }, 'ball.handed_cvo ingest failed'));
 }
 
-function emitBallInvocationStarted(
+function invocationCreatedId(content: string): string | undefined {
+  try {
+    const parsed = JSON.parse(content);
+    return parsed.type === 'invocation_created' &&
+      typeof parsed.invocationId === 'string' &&
+      parsed.invocationId.length > 0
+      ? parsed.invocationId
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function emitBallInvocationStarted(
   ballCustody: IBallCustodyIngest | undefined,
   threadId: string,
   invocationId: string | undefined,
   catId: string,
-): void {
+): Promise<void> {
   if (!ballCustody || !invocationId) return;
-  ballCustody
-    .record(buildInvocationStartedEvent({ invocationId, threadId, catId, at: Date.now() }))
-    .catch((err) => log.warn({ threadId, invocationId, catId, err }, 'invocation.started ingest failed'));
+  await ballCustody.record(buildInvocationStartedEvent({ invocationId, threadId, catId, at: Date.now() }));
 }
 
 function emitBallInvocationHeartbeat(
@@ -2072,39 +2083,31 @@ export async function* routeSerial(
           // F22 R2 P1-1: Capture invocationId from the initial system_info.
           // Keep forwarding this boundary event so frontend can reset stale task progress.
           if (effectiveMsg.type === 'system_info' && effectiveMsg.content && !ownInvocationId) {
-            try {
-              const parsed = JSON.parse(effectiveMsg.content);
-              if (
-                parsed.type === 'invocation_created' &&
-                typeof parsed.invocationId === 'string' &&
-                parsed.invocationId.length > 0
-              ) {
-                ownInvocationId = parsed.invocationId;
-                unregisterTurnCustodyAdoption = turnCustodyAdoptionRegistry.register(
-                  parsed.invocationId,
-                  adoptTurnCustodyWakes,
-                );
-                rememberTurnExecutionProjection(parsed.invocationId, initialExecutionKind);
-                if (!isFreshnessSupplement) {
-                  emitBallInvocationStarted(deps.ballCustody, threadId, ownInvocationId, catId as string);
-                }
-                // F111 Phase B: Start streaming TTS when we have an invocationId.
-                if (voiceMode) {
-                  voiceChunker = createVoiceChunker(ownInvocationId!);
-                }
-                // Issue #83: Start keepalive timer once we have an invocationId.
-                // This ensures draft TTL is renewed even during long silent tool calls.
-                if (deps.draftStore && !keepaliveTimer) {
-                  const keepInvId = ownInvocationId!;
-                  keepaliveTimer = setInterval(() => {
-                    const now = Date.now();
-                    deps.draftStore!.touch(userId, threadId, keepInvId)?.catch?.(noop);
-                    emitThrottledBallInvocationHeartbeat(now);
-                  }, KEEPALIVE_INTERVAL_MS);
-                }
+            const createdInvocationId = invocationCreatedId(effectiveMsg.content);
+            if (createdInvocationId) {
+              ownInvocationId = createdInvocationId;
+              unregisterTurnCustodyAdoption = turnCustodyAdoptionRegistry.register(
+                createdInvocationId,
+                adoptTurnCustodyWakes,
+              );
+              rememberTurnExecutionProjection(createdInvocationId, initialExecutionKind);
+              if (!isFreshnessSupplement) {
+                await emitBallInvocationStarted(deps.ballCustody, threadId, ownInvocationId, catId as string);
               }
-            } catch {
-              /* ignore parse errors */
+              // F111 Phase B: Start streaming TTS when we have an invocationId.
+              if (voiceMode) {
+                voiceChunker = createVoiceChunker(ownInvocationId!);
+              }
+              // Issue #83: Start keepalive timer once we have an invocationId.
+              // This ensures draft TTL is renewed even during long silent tool calls.
+              if (deps.draftStore && !keepaliveTimer) {
+                const keepInvId = ownInvocationId!;
+                keepaliveTimer = setInterval(() => {
+                  const now = Date.now();
+                  deps.draftStore!.touch(userId, threadId, keepInvId)?.catch?.(noop);
+                  emitThrottledBallInvocationHeartbeat(now);
+                }, KEEPALIVE_INTERVAL_MS);
+              }
             }
           }
 
@@ -2906,24 +2909,16 @@ export async function* routeSerial(
           for (const effectiveMsg of remedialMsgs) {
             observePostDispositionProgress(effectiveMsg);
             if (effectiveMsg.type === 'system_info' && effectiveMsg.content && !ownInvocationId) {
-              try {
-                const parsed = JSON.parse(effectiveMsg.content);
-                if (
-                  parsed.type === 'invocation_created' &&
-                  typeof parsed.invocationId === 'string' &&
-                  parsed.invocationId.length > 0
-                ) {
-                  ownInvocationId = parsed.invocationId;
-                  rememberTurnExecutionProjection(parsed.invocationId, 'routing_guard');
-                  if (!isFreshnessSupplement) {
-                    emitBallInvocationStarted(deps.ballCustody, threadId, ownInvocationId, catId as string);
-                  }
-                  if (voiceMode) {
-                    deferredVoiceInvocationId = ownInvocationId;
-                  }
+              const createdInvocationId = invocationCreatedId(effectiveMsg.content);
+              if (createdInvocationId) {
+                ownInvocationId = createdInvocationId;
+                rememberTurnExecutionProjection(createdInvocationId, 'routing_guard');
+                if (!isFreshnessSupplement) {
+                  await emitBallInvocationStarted(deps.ballCustody, threadId, ownInvocationId, catId as string);
                 }
-              } catch {
-                /* ignore parse errors */
+                if (voiceMode) {
+                  deferredVoiceInvocationId = ownInvocationId;
+                }
               }
             }
 
