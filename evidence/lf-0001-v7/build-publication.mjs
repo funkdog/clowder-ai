@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { lstat, mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, relative, resolve, sep } from 'node:path';
 
 const root = resolve(import.meta.dirname);
 const finalFilesPath = join(root, 'records/v7/episode-candidate-final-files.json');
@@ -25,14 +25,25 @@ const excluded = new Set(['PUBLICATION-MANIFEST.json']);
 const entries = [];
 
 async function walk(directory) {
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const absolute = join(directory, entry.name);
+  for (const name of await readdir(directory)) {
+    const absolute = join(directory, name);
     const path = relative(root, absolute).replaceAll('\\', '/');
-    if (entry.isDirectory()) {
+    const metadata = await lstat(absolute);
+    if (metadata.isSymbolicLink()) {
+      throw new Error(`publication tree contains a symlink: ${path}`);
+    }
+    if (metadata.isDirectory()) {
       await walk(absolute);
       continue;
     }
-    if (!entry.isFile() || excluded.has(path)) continue;
+    if (!metadata.isFile()) {
+      throw new Error(`publication tree contains a special file: ${path}`);
+    }
+    if (excluded.has(path)) continue;
+    const resolved = resolve(root, path);
+    if (!resolved.startsWith(`${root}${sep}`)) {
+      throw new Error(`publication path escapes root: ${path}`);
+    }
     const bytes = await readFile(absolute);
     entries.push({ path, size: bytes.length, sha256: sha256(bytes) });
   }
@@ -41,9 +52,7 @@ async function walk(directory) {
 await walk(root);
 entries.sort((left, right) => left.path.localeCompare(right.path));
 
-const originalManifest = JSON.parse(
-  await readFile(join(root, 'records/v7/episode-evidence-manifest.json'), 'utf8'),
-);
+const originalManifest = JSON.parse(await readFile(join(root, 'records/v7/episode-evidence-manifest.json'), 'utf8'));
 const totalBytes = entries.reduce((sum, entry) => sum + entry.size, 0);
 
 const publication = {
@@ -55,8 +64,7 @@ const publication = {
     candidatePatchSha256: originalManifest.candidate.candidatePatchSha256,
   },
   fullLocalPackage: {
-    manifestCanonicalSha256:
-      '9d1c42ec4332e33230dbec10f584ddc2947e7eb9d5c5219c1efa8104ea02b413',
+    manifestCanonicalSha256: '9d1c42ec4332e33230dbec10f584ddc2947e7eb9d5c5219c1efa8104ea02b413',
     artifactIndexRawSha256: originalManifest.artifactIndex.rawSha256,
     artifactIndexCanonicalSha256: originalManifest.artifactIndex.canonicalSha256,
     artifactCount: originalManifest.artifactIndex.artifactCount,
@@ -87,10 +95,7 @@ const publication = {
   },
 };
 
-await writeFile(
-  join(root, 'PUBLICATION-MANIFEST.json'),
-  `${JSON.stringify(publication, null, 2)}\n`,
-);
+await writeFile(join(root, 'PUBLICATION-MANIFEST.json'), `${JSON.stringify(publication, null, 2)}\n`);
 
 const manifestStat = await stat(join(root, 'PUBLICATION-MANIFEST.json'));
 console.log(

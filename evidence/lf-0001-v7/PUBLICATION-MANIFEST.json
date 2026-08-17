@@ -16,13 +16,13 @@
   },
   "publicSubset": {
     "completeOriginalPackage": false,
-    "entryCount": 107,
-    "totalBytes": 4221270,
+    "entryCount": 108,
+    "totalBytes": 4231204,
     "entries": [
       {
         "path": "build-publication.mjs",
-        "size": 3586,
-        "sha256": "4c2ac59036de15c8f1f049f36964966745def3a65122baea4a3b8cfae8ece473"
+        "size": 3964,
+        "sha256": "c3656904aa0cc59cbf4848dd709b40a8b1bbdca9c8a01c877bb8f2de80d47c97"
       },
       {
         "path": "candidate-final-files/packages/api/src/routes/threads.ts",
@@ -551,8 +551,13 @@
       },
       {
         "path": "verify-public-evidence.mjs",
-        "size": 1515,
-        "sha256": "f0a11d77dd057d04cbd4351934bfd030858287b0e20bdce775caae65ac665301"
+        "size": 8404,
+        "sha256": "4195c8ca89c6db85e42394f0f621ce788b6cd8b771a7fdc834a5c6ce58e22bd5"
+      },
+      {
+        "path": "verify-public-evidence.test.mjs",
+        "size": 2667,
+        "sha256": "0a541e4ffdc3fb8d0aaf0b68147ce22f6fd3e47684ef30f02626f3d193aad2f5"
       }
     ]
   },
