@@ -4,7 +4,7 @@ related_features: [F064, F027, F055, F122, F246, F280]
 topics: [a2a, collaboration, harness-engineering, agent-readiness]
 doc_kind: spec
 created: 2026-04-17
-updated: 2026-08-14
+updated: 2026-08-17
 tips_exempt: action-custody protocol is exposed to cats through the typed MCP action schema; no separate operator-facing capability action
 user_journey_exempt: protocol behavior has no direct UI surface; end-to-end custody is dogfooded through the real MCP/task path
 mcp_admission_status: accepted
@@ -61,7 +61,9 @@ operator experience：
 
 Architecture cell: `ball-custody` + `dispatch` + `mcp-surface-governance`
 
-operator decision `[thread-id]#0001786347630932-000025-ab3cdda3` accepts narrow terminal producers for structured wakes already exposed to the current invocation. `cat_cafe_complete_managed_hold` closes an exact managed hold using callback-authenticated invocation identity plus server-derived source message/task/thread/holder coordinates. The live regression in `[thread-id]` extends the same accepted F167 boundary to ordinary A2A dispatch: `cat_cafe_complete_a2a_dispatch` derives source message, previous cat, thread, holder, and invocation from the current callback record and exact `ball.handed` event. The caller selects only `handled | completed`; stale, replaced, cross-thread, cross-holder, cross-source, or cross-task attempts fail closed. Read, command exit, tests, merge truth, ACK, unrelated task completion, and another coordination terminal remain non-terminal.
+operator decision `[thread-id]#0001786347630932-000025-ab3cdda3` accepts narrow terminal producers for structured wakes already exposed to the current invocation. `cat_cafe_complete_managed_hold` closes an exact managed hold using callback-authenticated invocation identity plus server-derived source message/task/thread/holder coordinates. The live regression in `[thread-id]` extends the same accepted F167 boundary to ordinary A2A dispatch: `cat_cafe_complete_a2a_dispatch` derives source message, previous cat, thread, holder, and invocation from the current callback record and exact `ball.handed` event. The caller selects only `handled | completed`; cross-thread, cross-holder, cross-source, cross-task, and stale invocations without a prior exact disposition fail closed. Read, command exit, tests, merge truth, ACK, unrelated task completion, and another coordination terminal remain non-terminal.
+
+Issue #1366 adds the late-delivery terminal rule without widening caller authority. Once the source message and exact `ball.wake_condition_met` event prove the original wake, a missing or terminal dynamic-task row is no longer allowed to hide its terminal result. If the old wake still owns the live ball, the normal disposition resolves it. If a newer hold/handoff already replaced it, or its projection is otherwise stale, the same append-only event family records an informational `replaced | stale` terminal witness and completes only the old wake's exact Queue receipt; it never resolves the newer ball. The stop gate recognizes both a newly appended witness and a pre-existing duplicate witness, while the event fence and source ID keep duplicate calls idempotent across restart/rebuild. An already-committed exact disposition may replay after its invocation stops being latest, but an uncommitted stale invocation still fails closed.
 
 2026-08-14 same-cat clarification: `catId` identifies a persona, not one invocation. A same-cat
 cross-thread carrier may disposition only when the stored trigger has canonical distinct-thread
@@ -111,6 +113,7 @@ The same repair boundary also owns two dispatch invariants exposed by the post-m
 - `forced-pass/review-verdict-no-mention` → `route-serial-verdict-hint.test.js`（C2 verdict detection）
 - `hold-ball/zombie-hold` → Maine Coon原话 "Hold 不是对外协议状态"（C1 设计动机）
 - `hold-ball/event-satisfied-retirement` → Phase Q：review/CI/issue/user event 先满足等待时，subject + normalized signal matching hold retired 且旧 timer 不再 wake；signal 不匹配时不退休；前端不再显示可取消 pending 状态；AC-Q7 eval fixture 将 `hold_lifecycle.expired_after_satisfied_total` 设为 zero-tolerance，任何非零值标红并附抽样 evidence
+- `hold-ball/late-managed-disposition` → #1366：dynamic task terminal/缺失、newer hold/handoff、stale projection、duplicate callback 与 projector rebuild 均必须收敛到一个可验证 terminal；旧 wake 不重投，新 hold 不被关闭
 
 ### 4. Sunset Signal
 

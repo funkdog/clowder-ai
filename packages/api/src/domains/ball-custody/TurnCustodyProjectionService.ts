@@ -157,6 +157,10 @@ function unknown(reason: string): TurnCustodyProjection {
   return { state: 'unknown_legacy', evidenceRefs: [`unknown:${reason}`] };
 }
 
+function isLiveBallProjection(projection: { state: string } | null): boolean {
+  return projection?.state === 'active' || projection?.state === 'blocked';
+}
+
 function decision(
   projection: TurnCustodyProjection,
   transitionObserved: boolean,
@@ -242,15 +246,20 @@ export class TurnCustodyProjectionService {
       this.deps.ballCustodyProjectionStore.get(wake.subjectKey),
       this.deps.ballCustodyEventLog.read(wake.subjectKey),
     ]);
-    if (projection?.state !== 'active' && projection?.state !== 'blocked') {
-      return unknown('structured_projection_missing');
-    }
     const exactWakeIndex = this.exactStructuredWakeIndex(wake, events);
     if (wake.protocol === 'dispatch' && exactWakeIndex === -1) {
       return unknown('dispatch_handoff_missing');
     }
-    if (projection.holder !== wake.holderCatId) {
-      return this.releasedStructuredWake(wake, events, exactWakeIndex) ?? unknown('structured_holder_mismatch');
+    const priorDisposition = this.disposedManagedHoldWake(wake, events);
+    if (priorDisposition) return priorDisposition;
+    const released = this.releasedStructuredWake(wake, events, exactWakeIndex);
+    if (released) return released;
+    const tracksLateManagedWake = this.tracksLateManagedWake(wake, exactWakeIndex);
+    if (!isLiveBallProjection(projection) && !tracksLateManagedWake) {
+      return unknown('structured_projection_missing');
+    }
+    if (projection?.holder !== wake.holderCatId) {
+      if (!tracksLateManagedWake) return unknown('structured_holder_mismatch');
     }
     return {
       state: 'covered_active',
@@ -277,6 +286,36 @@ export class TurnCustodyProjectionService {
             }
           : {}),
       },
+    };
+  }
+
+  private tracksLateManagedWake(
+    wake: Extract<TurnCustodyWakeProvenance, { kind: 'structured' }>,
+    exactWakeIndex: number,
+  ): boolean {
+    return wake.protocol === 'hold' && exactWakeIndex !== -1;
+  }
+
+  private disposedManagedHoldWake(
+    wake: Extract<TurnCustodyWakeProvenance, { kind: 'structured' }>,
+    events: readonly BallCustodyEvent[],
+  ): TurnCustodyProjection | undefined {
+    if (wake.protocol !== 'hold') return undefined;
+    const disposition = events.find(
+      (event) =>
+        event.kind === 'ball.hold_dispositioned' &&
+        event.payload.catId === wake.holderCatId &&
+        event.payload.sourceMessageId === wake.sourceMessageId &&
+        event.payload.taskId === wake.taskId,
+    );
+    if (!disposition) return undefined;
+    return {
+      state: 'covered_empty',
+      evidenceRefs: [
+        `${wake.protocol}:${wake.subjectKey}`,
+        handedEventSourceId(wake.sourceMessageId, wake.holderCatId),
+        `released:${disposition.sourceEventId}`,
+      ],
     };
   }
 

@@ -113,6 +113,28 @@ function resolveDisposition(
   return ok('resolved');
 }
 
+function resolveHoldDisposition(
+  event: BallCustodyEvent,
+  snapshot: BallTransitionSnapshot,
+  current: BallState,
+): BallTransitionResult {
+  const terminalReason = event.payload.terminalReason;
+  if (terminalReason === undefined) return resolveDisposition(event, snapshot, current);
+  if (terminalReason !== 'replaced' && terminalReason !== 'stale') return reject('bad_payload');
+  if (
+    typeof event.payload.catId !== 'string' ||
+    typeof event.payload.invocationId !== 'string' ||
+    typeof event.payload.sourceMessageId !== 'string' ||
+    typeof event.payload.taskId !== 'string' ||
+    (event.payload.disposition !== 'handled' && event.payload.disposition !== 'completed')
+  ) {
+    return reject('bad_payload');
+  }
+  // This event terminalizes an exact old wake for its stop gate. It is not a
+  // disposition of the current thread ball, which may already be a newer hold.
+  return ok(current);
+}
+
 // ─── 转移表（静态 from→to）+ resolver 出口（动态）────────────────────────
 
 type StaticRule = { from: Set<BallState> | '*'; to: BallState };
@@ -151,7 +173,7 @@ const DYNAMIC_TABLE: Partial<Record<BallCustodyEvent['kind'], DynamicRule>> = {
   'invocation.heartbeat': { resolve: resolveHeartbeat },
   // The event-log sequence fence protects the check-to-append window. This
   // holder guard is the projector/rebuild backstop for every event producer.
-  'ball.hold_dispositioned': { resolve: resolveDisposition },
+  'ball.hold_dispositioned': { resolve: resolveHoldDisposition },
   'ball.dispatch_dispositioned': { resolve: resolveDisposition },
 };
 

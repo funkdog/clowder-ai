@@ -164,6 +164,7 @@ export function buildWakeConditionMetEvent(input: WakeConditionMetEventInput): B
 }
 
 export type ManagedHoldDisposition = 'handled' | 'completed';
+export type ManagedHoldDispositionTerminalReason = 'replaced' | 'stale';
 
 export interface HoldDispositionEventInput {
   threadId: string;
@@ -172,6 +173,7 @@ export interface HoldDispositionEventInput {
   sourceMessageId: string;
   taskId: string;
   disposition: ManagedHoldDisposition;
+  terminalReason?: ManagedHoldDispositionTerminalReason;
   at: number;
 }
 
@@ -189,13 +191,14 @@ export function buildHoldDispositionEvent(input: HoldDispositionEventInput): Bal
     sourceEventId: holdDispositionEventSourceId(input),
     subjectKey: `ball:thread:${input.threadId}`,
     kind: 'ball.hold_dispositioned',
-    classification: 'state-changing',
+    classification: input.terminalReason ? 'informational' : 'state-changing',
     payload: {
       catId: input.catId,
       invocationId: input.invocationId,
       sourceMessageId: input.sourceMessageId,
       taskId: input.taskId,
       disposition: input.disposition,
+      ...(input.terminalReason ? { terminalReason: input.terminalReason } : {}),
     },
     at: input.at,
   };

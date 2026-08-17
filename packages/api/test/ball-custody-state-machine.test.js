@@ -251,6 +251,28 @@ describe('ball-custody transition — 虚空 + 唤醒', () => {
       { ok: false, reason: 'invalid_transition' },
     );
   });
+  it('late managed-hold terminal witness does not close a replacement ball', () => {
+    for (const from of ALL_BALL_STATES) {
+      assert.deepStrictEqual(
+        transition(
+          from,
+          ev('ball.hold_dispositioned', {
+            classification: 'informational',
+            payload: {
+              catId: 'codex-sol',
+              invocationId: 'inv-1',
+              sourceMessageId: 'message-1',
+              taskId: 'task-1',
+              disposition: 'completed',
+              terminalReason: 'replaced',
+            },
+          }),
+          snap(),
+        ),
+        { ok: true, next: from },
+      );
+    }
+  });
   it('ball.dispatch_dispositioned 只从 live A2A dispatch 终结原球，resolved replay 不复活', () => {
     for (const from of ['active', 'blocked']) {
       assert.deepStrictEqual(

@@ -9,13 +9,14 @@ import {
   handedEventSourceId,
   holdDispositionEventSourceId,
   type ManagedHoldDisposition,
+  type ManagedHoldDispositionTerminalReason,
 } from './ball-custody-events.js';
 import { ManagedHoldReceiptError, type ManagedHoldReceiptService } from './ManagedHoldReceiptService.js';
 import type { ManagedCommandWakeDynamicTaskStore } from './managed-command-wake-lifecycle.js';
-import { parseManagedCommandWakeTask } from './managed-command-wake-lifecycle.js';
+import { readManagedCommandWakeProjection } from './managed-command-wake-lifecycle.js';
 
 export interface ManagedHoldDispositionResult {
-  readonly outcome: 'applied' | 'replayed';
+  readonly outcome: 'applied' | 'replayed' | ManagedHoldDispositionTerminalReason;
   readonly disposition: ManagedHoldDisposition;
   readonly invocationId: string;
   readonly sourceMessageId: string;
@@ -46,8 +47,16 @@ type ManagedHoldDispositionAuth = Pick<
   'invocationId' | 'userId' | 'catId' | 'threadId' | 'originTriggerMessageId'
 >;
 
+type ManagedHoldTaskState = 'live' | 'terminal' | 'missing';
+
+const MAX_SNAPSHOT_ATTEMPTS = 2;
+
 function stringMeta(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /** Invocation-bound terminal producer for an exact managed hold wake. */
@@ -62,11 +71,62 @@ export class ManagedHoldDispositionService {
     auth: ManagedHoldDispositionAuth,
     disposition: ManagedHoldDisposition,
   ): Promise<ManagedHoldDispositionResult> {
-    await this.assertLatestInvocation(auth.invocationId);
     const { sourceMessageId, taskId } = await this.resolveSource(auth);
-    this.assertTask(auth, sourceMessageId, taskId);
-
     const subjectKey = `ball:thread:${auth.threadId}`;
+    const replay = await this.replayExistingDisposition(auth, disposition, subjectKey, sourceMessageId, taskId);
+    if (replay) return replay;
+    await this.assertLatestInvocation(auth.invocationId);
+
+    for (let attempt = 0; attempt < MAX_SNAPSHOT_ATTEMPTS; attempt += 1) {
+      try {
+        return await this.completeAgainstSnapshot(auth, disposition, subjectKey, sourceMessageId, taskId);
+      } catch (error) {
+        if (
+          !(error instanceof ManagedHoldDispositionError) ||
+          error.code !== 'managed_hold_disposition_fence_conflict' ||
+          attempt === MAX_SNAPSHOT_ATTEMPTS - 1
+        ) {
+          throw error;
+        }
+      }
+    }
+    throw new ManagedHoldDispositionError('managed_hold_disposition_fence_conflict');
+  }
+
+  private async replayExistingDisposition(
+    auth: ManagedHoldDispositionAuth,
+    disposition: ManagedHoldDisposition,
+    subjectKey: string,
+    sourceMessageId: string,
+    taskId: string,
+  ): Promise<ManagedHoldDispositionResult | undefined> {
+    const events = await this.deps.ballCustodyEventLog.read(subjectKey);
+    const eventSourceId = holdDispositionEventSourceId({
+      invocationId: auth.invocationId,
+      sourceMessageId,
+      taskId,
+    });
+    const prior = events.find((event) => event.sourceEventId === eventSourceId);
+    if (!prior) return undefined;
+    const terminalReason = this.assertMatchingDispositionEvent(prior, auth, sourceMessageId, taskId, disposition);
+    if (!terminalReason) await this.repairProjectionIfNeeded(subjectKey, events, prior);
+    await this.completeReceipt(auth, sourceMessageId, taskId);
+    return {
+      outcome: terminalReason ?? 'replayed',
+      disposition,
+      invocationId: auth.invocationId,
+      sourceMessageId,
+      taskId,
+    };
+  }
+
+  private async completeAgainstSnapshot(
+    auth: ManagedHoldDispositionAuth,
+    disposition: ManagedHoldDisposition,
+    subjectKey: string,
+    sourceMessageId: string,
+    taskId: string,
+  ): Promise<ManagedHoldDispositionResult> {
     const events = await this.deps.ballCustodyEventLog.read(subjectKey);
     const eventSourceId = holdDispositionEventSourceId({
       invocationId: auth.invocationId,
@@ -75,25 +135,59 @@ export class ManagedHoldDispositionService {
     });
     const prior = events.find((event) => event.sourceEventId === eventSourceId);
     if (prior) {
-      this.assertMatchingDispositionEvent(prior, auth, sourceMessageId, taskId, disposition);
-      await this.repairProjectionIfNeeded(subjectKey, events, prior);
+      const terminalReason = this.assertMatchingDispositionEvent(prior, auth, sourceMessageId, taskId, disposition);
+      if (!terminalReason) await this.repairProjectionIfNeeded(subjectKey, events, prior);
       await this.completeReceipt(auth, sourceMessageId, taskId);
-      return { outcome: 'replayed', disposition, invocationId: auth.invocationId, sourceMessageId, taskId };
+      return {
+        outcome: terminalReason ?? 'replayed',
+        disposition,
+        invocationId: auth.invocationId,
+        sourceMessageId,
+        taskId,
+      };
     }
 
-    await this.assertCurrentHolder(subjectKey, auth.catId);
-    this.assertWakeNotReplaced(events, auth.catId, sourceMessageId, taskId);
+    const taskState = this.classifyTask(auth, sourceMessageId, taskId);
+    const terminalReason = await this.classifyTerminalReason(
+      events,
+      subjectKey,
+      auth.catId,
+      sourceMessageId,
+      taskId,
+      taskState,
+    );
 
-    await this.recordDisposition(auth, sourceMessageId, taskId, disposition, subjectKey, eventSourceId, events.length);
+    await this.recordDisposition(
+      auth,
+      sourceMessageId,
+      taskId,
+      disposition,
+      terminalReason,
+      subjectKey,
+      eventSourceId,
+      events.length,
+    );
     const committed = (await this.deps.ballCustodyEventLog.read(subjectKey)).find(
       (event) => event.sourceEventId === eventSourceId,
     );
-    this.assertMatchingDispositionEvent(committed, auth, sourceMessageId, taskId, disposition);
+    const committedTerminalReason = this.assertMatchingDispositionEvent(
+      committed,
+      auth,
+      sourceMessageId,
+      taskId,
+      disposition,
+    );
     // Consume F264 only after the append-only custody truth is durable. If the
     // receipt write fails, replay repairs it from the exact event; the inverse
     // ordering could delete the only Queue carrier before any terminal event exists.
     await this.completeReceipt(auth, sourceMessageId, taskId);
-    return { outcome: 'applied', disposition, invocationId: auth.invocationId, sourceMessageId, taskId };
+    return {
+      outcome: committedTerminalReason ?? 'applied',
+      disposition,
+      invocationId: auth.invocationId,
+      sourceMessageId,
+      taskId,
+    };
   }
 
   private async assertLatestInvocation(invocationId: string): Promise<void> {
@@ -123,19 +217,34 @@ export class ManagedHoldDispositionService {
     return { sourceMessageId, taskId };
   }
 
-  private assertTask(auth: ManagedHoldDispositionAuth, sourceMessageId: string, taskId: string): void {
-    const parsed = parseManagedCommandWakeTask(this.deps.dynamicTaskStore.getById(taskId));
+  private classifyTask(
+    auth: ManagedHoldDispositionAuth,
+    sourceMessageId: string,
+    taskId: string,
+  ): ManagedHoldTaskState {
+    const task = this.deps.dynamicTaskStore.getById(taskId);
+    if (!task) return 'missing';
+    const command = readManagedCommandWakeProjection(task);
+    const lifecycle = task.params.holdLifecycle;
     if (
-      !parsed ||
-      parsed.task.id !== taskId ||
-      parsed.threadId !== auth.threadId ||
-      parsed.catId !== auth.catId ||
-      parsed.userId !== auth.userId ||
-      parsed.command.messageId !== sourceMessageId ||
-      (parsed.command.state !== 'enqueued' && parsed.command.state !== 'dispatched')
+      !command ||
+      !isPlainRecord(lifecycle) ||
+      task.id !== taskId ||
+      task.deliveryThreadId !== auth.threadId ||
+      task.createdBy !== `hold-ball:${auth.catId}` ||
+      task.params.triggerUserId !== auth.userId ||
+      command.messageId !== sourceMessageId
     ) {
       throw new ManagedHoldDispositionError('managed_hold_disposition_task_mismatch');
     }
+    if (
+      task.enabled &&
+      lifecycle.status === 'active' &&
+      (command.state === 'enqueued' || command.state === 'dispatched')
+    ) {
+      return 'live';
+    }
+    return 'terminal';
   }
 
   private async assertCurrentHolder(subjectKey: string, catId: string): Promise<void> {
@@ -145,12 +254,14 @@ export class ManagedHoldDispositionService {
     }
   }
 
-  private assertWakeNotReplaced(
+  private async classifyTerminalReason(
     events: readonly BallCustodyEvent[],
+    subjectKey: string,
     catId: string,
     sourceMessageId: string,
     taskId: string,
-  ): void {
+    taskState: ManagedHoldTaskState,
+  ): Promise<ManagedHoldDispositionTerminalReason | undefined> {
     const exactWakeIndex = events.findIndex(
       (event) =>
         event.kind === 'ball.wake_condition_met' && event.payload.taskId === taskId && event.payload.catId === catId,
@@ -168,7 +279,14 @@ export class ManagedHoldDispositionService {
             (event.payload.fromCatId === catId || event.payload.toCatId === catId)) ||
           (event.kind === 'ball.handed_cvo' && event.payload.fromCatId === catId),
       );
-    if (wasReplaced) throw new ManagedHoldDispositionError('managed_hold_disposition_replaced');
+    if (wasReplaced) return 'replaced';
+    try {
+      await this.assertCurrentHolder(subjectKey, catId);
+      return undefined;
+    } catch (error) {
+      if (taskState !== 'live' && error instanceof ManagedHoldDispositionError) return 'stale';
+      throw error;
+    }
   }
 
   private assertMatchingDispositionEvent(
@@ -177,7 +295,7 @@ export class ManagedHoldDispositionService {
     sourceMessageId: string,
     taskId: string,
     disposition: ManagedHoldDisposition,
-  ): void {
+  ): ManagedHoldDispositionTerminalReason | undefined {
     if (
       !event ||
       event.kind !== 'ball.hold_dispositioned' ||
@@ -188,6 +306,10 @@ export class ManagedHoldDispositionService {
     ) {
       throw new ManagedHoldDispositionError('managed_hold_disposition_replay_mismatch');
     }
+    const terminalReason = event.payload.terminalReason;
+    if (terminalReason === undefined) return undefined;
+    if (terminalReason === 'replaced' || terminalReason === 'stale') return terminalReason;
+    throw new ManagedHoldDispositionError('managed_hold_disposition_replay_mismatch');
   }
 
   private async recordDisposition(
@@ -195,6 +317,7 @@ export class ManagedHoldDispositionService {
     sourceMessageId: string,
     taskId: string,
     disposition: ManagedHoldDisposition,
+    terminalReason: ManagedHoldDispositionTerminalReason | undefined,
     subjectKey: string,
     eventSourceId: string,
     expectedSequence: number,
@@ -208,6 +331,7 @@ export class ManagedHoldDispositionService {
           sourceMessageId,
           taskId,
           disposition,
+          ...(terminalReason ? { terminalReason } : {}),
           at: this.now(),
         }),
         expectedSequence,
