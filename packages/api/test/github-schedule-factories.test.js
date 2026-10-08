@@ -80,6 +80,7 @@ function makeGitHubDeps(overrides = {}) {
     fetchOpenIssues: async () => [],
     // F202 Phase 2D: issue-tracking deps
     issueCommentRouter: stubRouter,
+    waitLifecycle: { observe: async () => ({ kind: 'state_only', reason: 'test' }) },
     fetchIssueComments: async () => [],
     fetchIssueState: async () => 'open',
     isEchoIssueComment: () => false,
@@ -238,7 +239,7 @@ describe('schedule name validation (P2-2)', () => {
 
 describe('plugins/github/plugin.yaml (AC-B1)', () => {
   test('parses as valid PluginManifest with 3 config + 7 schedule resources', () => {
-    const yamlPath = join(__dirname, '../../../plugins/github/plugin.yaml');
+    const yamlPath = join(__dirname, '../src/plugins/github/plugin.yaml');
     assert.ok(existsSync(yamlPath), `plugin.yaml must exist at ${yamlPath}`);
 
     const manifest = parsePluginManifest(yamlPath);
@@ -308,6 +309,71 @@ describe('GitHub schedule factory registration (F202-2B Task 3)', () => {
     assert.strictEqual(spec.profile, 'poller');
   });
 
+  test('github.cicd-check factory uses one tick batch even when legacy single-reader wiring is present', async () => {
+    const registry = new ScheduleFactoryRegistry();
+    registerGitHubScheduleFactories(registry);
+    const factory = registry.get('github.cicd-check');
+    assert.ok(factory);
+
+    const task = {
+      id: 'task-pr-7',
+      kind: 'pr_tracking',
+      subjectKey: 'pr:owner/repo#7',
+      threadId: 'thread-7',
+      title: 'PR wait',
+      ownerCatId: 'codex-sol',
+      status: 'doing',
+      createdBy: 'codex-sol',
+      userId: 'user-1',
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    let batchCalls = 0;
+    let singleCalls = 0;
+    const routed = [];
+    const spec = factory.createTaskSpec(
+      'schedule:github:cicd-check',
+      makeGitHubDeps({
+        taskStore: { listByKind: async () => [task] },
+        cicdRouter: {
+          route: async (poll) => {
+            routed.push(poll.prNumber);
+            return { kind: 'skipped', reason: 'state-only' };
+          },
+        },
+        // Reproduces the pre-fix production dependency bag. The plugin factory
+        // must not let this legacy seam disable the tick-level batch reader.
+        fetchPrStatus: async () => {
+          singleCalls += 1;
+          return null;
+        },
+        fetchPrStatuses: async (targets) => {
+          batchCalls += 1;
+          return new Map(
+            targets.map((target) => [
+              `${target.repoFullName}#${target.prNumber}`,
+              {
+                ...target,
+                headSha: 'abc123',
+                prState: 'open',
+                aggregateBucket: 'pending',
+                checks: [],
+              },
+            ]),
+          );
+        },
+      }),
+    );
+
+    const gate = await spec.admission.gate();
+    assert.equal(gate.run, true);
+    assert.equal(batchCalls, 1, 'production factory must perform one tick-level batch read');
+    assert.equal(singleCalls, 0, 'production factory must not poll each PR separately');
+    await spec.run.execute(gate.workItems[0].signal, gate.workItems[0].subjectKey, {});
+    assert.equal(singleCalls, 0, 'execute must consume the batch snapshot');
+    assert.deepEqual(routed, [7]);
+  });
+
   test('github.conflict-check factory creates TaskSpec with correct instanceId', () => {
     const registry = new ScheduleFactoryRegistry();
     registerGitHubScheduleFactories(registry);
@@ -336,6 +402,58 @@ describe('GitHub schedule factory registration (F202-2B Task 3)', () => {
     const spec = factory.createTaskSpec('schedule:github:repo-scan', makeGitHubDeps());
     assert.strictEqual(spec.id, 'schedule:github:repo-scan');
     assert.strictEqual(spec.profile, 'poller');
+  });
+
+  test('github.repo-scan factory forwards the dynamic inbox owner resolver', async () => {
+    const registry = new ScheduleFactoryRegistry();
+    registerGitHubScheduleFactories(registry);
+    const factory = registry.get('github.repo-scan');
+    assert.ok(factory);
+
+    const delivered = [];
+    const triggered = [];
+    const resolverCalls = [];
+    const spec = factory.createTaskSpec(
+      'schedule:github:repo-scan',
+      makeGitHubDeps({
+        inboxCatId: 'stale-env-owner',
+        resolveInboxCatId: async (repoFullName) => {
+          resolverCalls.push(repoFullName);
+          return 'codex61-sol';
+        },
+        bindingStore: {
+          getByExternal: async () => ({ threadId: 'thread-repo-inbox', userId: 'user-1' }),
+        },
+        fetchOpenPRs: async () => [
+          {
+            number: 7,
+            title: 'Community PR',
+            html_url: 'https://github.com/owner/repo/pull/7',
+            user: 'contributor',
+            author_association: 'CONTRIBUTOR',
+            draft: false,
+          },
+        ],
+        deliverFn: async (_deps, input) => {
+          delivered.push(input);
+          return { messageId: 'message-7', content: input.content };
+        },
+        invokeTrigger: {
+          trigger(...args) {
+            triggered.push(args);
+            return 'dispatched';
+          },
+        },
+      }),
+    );
+
+    const gate = await spec.admission.gate();
+    assert.equal(gate.run, true);
+    await spec.run.execute(gate.workItems[0].signal, gate.workItems[0].subjectKey, {});
+
+    assert.deepEqual(resolverCalls, ['owner/repo']);
+    assert.equal(delivered[0].catId, 'codex61-sol');
+    assert.equal(triggered[0][1], 'codex61-sol');
   });
 
   test('github.repo-scan factory throws when repoAllowlist missing', () => {
@@ -634,7 +752,7 @@ describe('GitHub plugin lifecycle (AC-B4)', () => {
         scheduleFactoryDeps: makeGitHubDeps(),
       });
 
-      const manifest = parsePluginManifest(join(__dirname, '../../../plugins/github/plugin.yaml'));
+      const manifest = parsePluginManifest(join(__dirname, '../src/plugins/github/plugin.yaml'));
       const result = await activator.enablePlugin(manifest);
 
       // All 7 schedule resources should succeed
@@ -688,7 +806,7 @@ describe('GitHub plugin lifecycle (AC-B4)', () => {
         scheduleFactoryDeps: makeGitHubDeps(),
       });
 
-      const manifest = parsePluginManifest(join(__dirname, '../../../plugins/github/plugin.yaml'));
+      const manifest = parsePluginManifest(join(__dirname, '../src/plugins/github/plugin.yaml'));
 
       // Simulate first-startup migration: write entries + marker (as index.ts does)
       const { shouldRunGitHubScheduleMigration, markGitHubScheduleMigrationDone } = await import(
@@ -782,7 +900,7 @@ describe('GitHub plugin lifecycle (AC-B4)', () => {
         scheduleFactoryDeps: deps,
       });
 
-      const manifest = parsePluginManifest(join(__dirname, '../../../plugins/github/plugin.yaml'));
+      const manifest = parsePluginManifest(join(__dirname, '../src/plugins/github/plugin.yaml'));
       const result = await activator.enablePlugin(manifest);
 
       // 4 succeed, 3 fail (repo-scan + repo-comment-poll + community-reconciler — all optional), overall status = success
@@ -1459,7 +1577,28 @@ describe('F140 review-feedback factory preserves the registered thread', () => {
       updatedAt: Date.now(),
       userId: 'u-1',
       automationState: {
-        review: { lastCommentCursor: 0, lastDecisionCursor: 0, completedReviewCount: 99 },
+        review: {
+          lastCommentCursor: 0,
+          lastInlineCommentCursor: 0,
+          lastConversationCommentCursor: 0,
+          lastDecisionCursor: 0,
+          completedReviewCount: 99,
+        },
+        await: {
+          v: 1,
+          generation: 1,
+          subjectRef: 'pr:owner/repo#42',
+          ownerFence: { kind: 'containing_task', generation: 1 },
+          baseline: { capturedAt: 1, headSha: 'head-42' },
+          continuation: {
+            when: [{ kind: 'pr_review_decision_changed' }],
+            // biome-ignore lint/suspicious/noThenProperty: F280's frozen wait contract field.
+            then: 'Continue the review.',
+          },
+          expiresAt: Date.now() + 60_000,
+          createdAt: 1,
+          provenance: 'explicit_registration',
+        },
       },
     };
 
@@ -1566,7 +1705,28 @@ describe('F140 review-feedback factory preserves the registered thread', () => {
       updatedAt: Date.now(),
       userId: 'u-1',
       automationState: {
-        review: { lastCommentCursor: 0, lastDecisionCursor: 0, completedReviewCount: 1 },
+        review: {
+          lastCommentCursor: 0,
+          lastInlineCommentCursor: 0,
+          lastConversationCommentCursor: 0,
+          lastDecisionCursor: 0,
+          completedReviewCount: 1,
+        },
+        await: {
+          v: 1,
+          generation: 1,
+          subjectRef: 'pr:owner/repo#45',
+          ownerFence: { kind: 'containing_task', generation: 1 },
+          baseline: { capturedAt: 1, headSha: 'head-45' },
+          continuation: {
+            when: [{ kind: 'pr_review_decision_changed' }],
+            // biome-ignore lint/suspicious/noThenProperty: F280's frozen wait contract field.
+            then: 'Continue the review.',
+          },
+          expiresAt: Date.now() + 60_000,
+          createdAt: 1,
+          provenance: 'explicit_registration',
+        },
       },
     };
     const updateCalls = [];
@@ -1607,11 +1767,7 @@ describe('F140 review-feedback factory preserves the registered thread', () => {
     assert.equal(gateResult.run, true, 'gate should fire');
     await spec.run.execute(gateResult.workItems[0].signal, 'pr:owner/repo#45', {});
 
-    assert.equal(
-      routeCalls[0].tracking.threadId,
-      'th-registered',
-      'factory path must deliver legacy tasks to source thread',
-    );
+    assert.equal(routeCalls[0].tracking.taskId, 'task-legacy');
     assert.deepEqual(routeCalls[0].signal.routingAudit, {
       kind: 'legacy-auto-rotated-repaired',
       previousThreadId: 'thread_rotated_1',

@@ -4,7 +4,7 @@
  * F229 PR-A4: Concierge settings page — AC-A5
  *
  * Surfaces ConciergeConfig fields in the Settings shell:
- *   enabled, displayName, personaTone, dutyCatProfileId, proactivePolicy, muted, ballPosition reset.
+ *   enabled, displayName, personaTone, dutyCatProfileId, proactivePolicy, visibility, behavior, position.
  *
  * Backend: GET/PUT /api/concierge/config (already implemented in PR-A1).
  * Store: conciergeStore.fetchConfig/setMuted (already wired in PR-A2).
@@ -12,11 +12,13 @@
  * Pattern: optimistic UI + PUT partial update, matching BubbleToggle/VoiceSettingsPanel.
  */
 
+import { BALL_SIZE_DEFAULT, BALL_SIZE_MAX, BALL_SIZE_MIN } from '@cat-cafe/shared';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCatData } from '@/hooks/useCatData';
+import { formatCompanionPartnerChoice } from '@/lib/companion-partner-name';
 import { useConciergeStore } from '@/stores/conciergeStore';
 import { apiFetch } from '@/utils/api-client';
-import { RadioOption, TextInput, ToggleSwitch } from './ConciergeSettingsParts';
+import { RadioOption, RangeSlider, TextInput, ToggleSwitch } from './ConciergeSettingsParts';
 import { SettingsField, SettingsPillButton, SettingsSection, SettingsText } from './primitives';
 
 // ---------------------------------------------------------------------------
@@ -30,8 +32,10 @@ interface ConciergeSettingsState {
   dutyCatProfileId: string;
   proactivePolicy: 'ambient' | 'quiet-badge';
   muted: boolean;
+  behaviorEnabled: boolean;
   skin: 'yarn-ball' | 'ragdoll-v1' | 'yanyan-codex' | 'xianxian-codex';
   ballPosition: { x: number; y: number } | null;
+  ballSize: number;
 }
 
 /** Skin options — display names now live inline in RadioOption labels (E2 unlock). */
@@ -170,14 +174,14 @@ export function ConciergeSettingsContent() {
             <ToggleSwitch checked={state.enabled} disabled={saving} onChange={(v) => updateConfig({ enabled: v })} />
           </SettingsField>
 
-          <SettingsField label="静音模式" hint="一键隐藏悬浮球，不影响对话历史。" inline>
+          <SettingsField label="隐藏猫猫球" hint="隐藏后可从左侧猫图标重新显示，不影响对话历史。" inline>
             <ToggleSwitch checked={state.muted} disabled={saving} onChange={(v) => updateConfig({ muted: v })} />
           </SettingsField>
         </div>
       </SettingsSection>
 
       {/* Section 2: 皮肤 (E2: unlocked — was KD-14 locked in Phase A) */}
-      <SettingsSection title="皮肤" description="切换猫猫球的外观。">
+      <SettingsSection title="皮肤" description="只改变动画外观；所选陪伴者和头像保持不变。">
         <div className="space-y-3">
           <RadioOption
             name="skin"
@@ -185,7 +189,7 @@ export function ConciergeSettingsContent() {
             checked={state.skin === 'yanyan-codex'}
             disabled={saving}
             label="🐱 砚砚 v1"
-            hint="9 态动画精灵图，砚砚专属皮肤。（默认）"
+            hint="9 态动画精灵图，砚砚专属皮肤。"
             onChange={() => updateConfig({ skin: 'yanyan-codex' })}
           />
           <RadioOption
@@ -194,40 +198,19 @@ export function ConciergeSettingsContent() {
             checked={state.skin === 'xianxian-codex'}
             disabled={saving}
             label="🐱 宪宪 v1"
-            hint="9 态动画精灵图，宪宪专属皮肤（视频提取）。"
+            hint="9 态动画精灵图，宪宪专属皮肤（视频提取）。（默认）"
             onChange={() => updateConfig({ skin: 'xianxian-codex' })}
-          />
-          <RadioOption
-            name="skin"
-            value="ragdoll-v1"
-            checked={state.skin === 'ragdoll-v1'}
-            disabled={saving}
-            label="🐱 布偶猫 v1"
-            hint="经典布偶猫皮肤。"
-            onChange={() => updateConfig({ skin: 'ragdoll-v1' })}
-          />
-          <RadioOption
-            name="skin"
-            value="yarn-ball"
-            checked={state.skin === 'yarn-ball'}
-            disabled={saving}
-            label="🧶 毛线球"
-            hint="最简外观，纯 CSS 毛线球动画。"
-            onChange={() => updateConfig({ skin: 'yarn-ball' })}
           />
         </div>
       </SettingsSection>
 
       {/* Section 3: 身份与人设 (KD-6) */}
-      <SettingsSection title="身份与人设" description="自定义猫猫球的名字和性格基调。">
+      <SettingsSection title="身份与人设" description="伴随入口名称固定，性格基调仍可调整。">
         <div className="space-y-4">
-          <SettingsField label="显示名称" hint="猫猫球的名字，最多 50 字。">
-            <TextInput
-              value={state.displayName}
-              maxLength={50}
-              disabled={saving}
-              onCommit={(v) => updateConfig({ displayName: v })}
-            />
+          <SettingsField label="伴随入口名称" hint="猫猫球是固定的伴随入口名称。">
+            <SettingsText as="p" variant="sm">
+              猫猫球
+            </SettingsText>
           </SettingsField>
 
           <SettingsField label="人设基调" hint="一句话描述人设风格，会注入值班猫的 prompt。最多 200 字。">
@@ -241,10 +224,10 @@ export function ConciergeSettingsContent() {
         </div>
       </SettingsSection>
 
-      {/* Section 4: 值班猫 (KD-7) */}
-      <SettingsSection title="值班猫" description="选择哪只猫猫负责前台应答。Provider-agnostic，可配置任意已注册的猫。">
+      {/* Section 4: 陪伴者 (KD-7) */}
+      <SettingsSection title="陪伴者" description="选择与你一起出现、负责前台应答的猫；头像随这项选择改变。">
         <div className="space-y-4">
-          <SettingsField label="值班猫" hint="前台对话由这只猫处理。">
+          <SettingsField label="当前陪伴者" hint="前台对话由这只猫处理；单独换皮肤不会换陪伴者。">
             <select
               value={state.dutyCatProfileId}
               disabled={saving}
@@ -261,12 +244,12 @@ export function ConciergeSettingsContent() {
             >
               {staleDutyCat && (
                 <option key={staleDutyCat.id} value={staleDutyCat.id} disabled>
-                  {staleDutyCat.displayName} ({staleDutyCat.id}) — 不可用
+                  {formatCompanionPartnerChoice(staleDutyCat)} · {staleDutyCat.id} — 不可用
                 </option>
               )}
               {availableCats.map((cat) => (
                 <option key={cat.id} value={cat.id}>
-                  {cat.displayName} ({cat.id})
+                  {formatCompanionPartnerChoice(cat)} · {cat.id}
                 </option>
               ))}
             </select>
@@ -277,6 +260,13 @@ export function ConciergeSettingsContent() {
       {/* Section 5: 主动性 (OQ-4) */}
       <SettingsSection title="主动性策略" description="控制猫猫球何时主动出现。">
         <div className="space-y-3">
+          <SettingsField label="猫猫自主活动" hint="允许猫猫在空闲时跳跃、招手和溜达。" inline>
+            <ToggleSwitch
+              checked={state.behaviorEnabled}
+              disabled={saving}
+              onChange={(v) => updateConfig({ behaviorEnabled: v })}
+            />
+          </SettingsField>
           <RadioOption
             name="proactivePolicy"
             value="ambient"
@@ -298,7 +288,31 @@ export function ConciergeSettingsContent() {
         </div>
       </SettingsSection>
 
-      {/* Section 6: 球位置重置 */}
+      {/* Section 6: 球大小 (E3) */}
+      <SettingsSection title="猫猫球大小" description="拖拽悬浮球右下角可直接缩放，也可以在这里精确调整。">
+        <div className="space-y-4">
+          <SettingsField label="大小" hint={`范围 ${BALL_SIZE_MIN}–${BALL_SIZE_MAX}px，默认 ${BALL_SIZE_DEFAULT}px。`}>
+            <RangeSlider
+              value={state.ballSize ?? BALL_SIZE_DEFAULT}
+              min={BALL_SIZE_MIN}
+              max={BALL_SIZE_MAX}
+              step={4}
+              disabled={saving}
+              label={(v) => `${v}px`}
+              onChange={(v) => updateConfig({ ballSize: v })}
+            />
+          </SettingsField>
+          {(state.ballSize ?? BALL_SIZE_DEFAULT) !== BALL_SIZE_DEFAULT && (
+            <SettingsField label="" hint="" inline>
+              <SettingsPillButton onClick={() => updateConfig({ ballSize: BALL_SIZE_DEFAULT })}>
+                重置大小
+              </SettingsPillButton>
+            </SettingsField>
+          )}
+        </div>
+      </SettingsSection>
+
+      {/* Section 7: 球位置重置 */}
       {state.ballPosition && (
         <SettingsSection title="悬浮球位置" description="拖拽悬浮球可自由放置，这里可以重置到默认位置。">
           <SettingsField

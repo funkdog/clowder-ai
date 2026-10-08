@@ -9,8 +9,8 @@ import {
   splitCommandArgs,
   splitMentionPatterns,
   splitStrengthTags,
+  usesCliTransport,
 } from './hub-cat-editor.model';
-import { defaultMcpSupportForClient } from './hub-cat-editor.protocols';
 
 function trimText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -123,34 +123,37 @@ function buildAcpPatch(form: HubCatEditorFormState, cat?: CatData | null): Recor
   return cat?.acp ? { acp: null } : {};
 }
 
-export function buildContextBudget(form: HubCatEditorFormState) {
-  const values = [form.maxPromptTokens, form.maxContextTokens, form.maxMessages, form.maxContentLengthPerMsg].map(
-    (value) => value.trim(),
-  );
-  const filledCount = values.filter((value) => value.length > 0).length;
-  if (filledCount === 0) return undefined;
-  if (filledCount !== values.length) {
-    throw new Error('上下文预算要么全部留空，要么 4 项都填写');
+/**
+ * Parse the contextWindow form field.
+ * clowder-ai#1208: empty or 0 = Auto (undefined), positive integer = Manual cap.
+ */
+export function buildContextWindow(form: HubCatEditorFormState): number | undefined {
+  const raw = form.contextWindow.trim();
+  if (raw.length === 0) return undefined;
+  // Strict: reject non-integer inputs like "1.5", "12abc", "0xFF"
+  if (!/^[0-9]+$/.test(raw)) {
+    throw new Error('Context Window 必须是正整数（留空或 0 = Auto）');
   }
-
-  const parsed = values.map((value) => Number.parseInt(value, 10));
-  if (parsed.some((value) => !Number.isFinite(value) || value <= 0)) {
-    throw new Error('上下文预算必须是正整数');
+  const parsed = Number.parseInt(raw, 10);
+  // 0 = Auto (same as empty).
+  if (parsed === 0) return undefined;
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error('Context Window 必须是正整数（留空或 0 = Auto）');
   }
-
-  return {
-    maxPromptTokens: parsed[0]!,
-    maxContextTokens: parsed[1]!,
-    maxMessages: parsed[2]!,
-    maxContentLengthPerMsg: parsed[3]!,
-  };
+  return parsed;
 }
 
-export function buildCatPayload(form: HubCatEditorFormState, cat?: CatData | null) {
-  const contextBudget = buildContextBudget(form);
-  const hasExistingBudget = Boolean(cat?.contextBudget);
-  const contextBudgetPatch =
-    contextBudget !== undefined ? { contextBudget } : cat && hasExistingBudget ? { contextBudget: null as null } : {};
+export interface CatPayloadContext {
+  accountAuthType?: 'oauth' | 'api_key' | null;
+  /** Rollback writes the original semantic value even when it matches the current read model. */
+  forceServiceTier?: boolean;
+}
+
+export function buildCatPayload(form: HubCatEditorFormState, cat?: CatData | null, context: CatPayloadContext = {}) {
+  const contextWindow = buildContextWindow(form);
+  const hasExistingWindow = cat?.contextWindow != null;
+  const contextWindowPatch =
+    contextWindow !== undefined ? { contextWindow } : cat && hasExistingWindow ? { contextWindow: null as null } : {};
   const name = trimText(form.name);
   const displayName = trimText(form.displayName) || name;
   const createName = name || displayName;
@@ -162,15 +165,42 @@ export function buildCatPayload(form: HubCatEditorFormState, cat?: CatData | nul
       : cat?.accountRef
         ? { accountRef: null as null }
         : {};
-  const mcpSupportPatch =
-    cat && form.clientId !== cat.clientId ? { mcpSupport: defaultMcpSupportForClient(form.clientId) } : {};
+  // #712: always send the form's mcpSupport value so the user can toggle it explicitly
+  const mcpSupportPatch = { mcpSupport: form.mcpSupport };
+  const cliTransport = usesCliTransport(form);
   const trimmedCliEffort = trimText(form.cliEffort);
-  const cliPatch =
-    trimmedCliEffort.length > 0
-      ? { cli: { effort: trimmedCliEffort } }
-      : cat?.cli?.effort
-        ? { cli: { effort: null as null } }
-        : {};
+  const cliFields: Record<string, unknown> = {};
+  if (cliTransport && trimmedCliEffort.length > 0) {
+    cliFields.effort = trimmedCliEffort;
+  } else if (cat?.cli?.effort) {
+    cliFields.effort = null as null;
+  }
+  const nextServiceTier = form.codexSpeed ?? '';
+  const currentServiceTier = cat?.cli?.serviceTier ?? '';
+  const serviceTierEligible = form.clientId === 'openai' && context.accountAuthType === 'oauth' && !form.acpEnabled;
+  if (serviceTierEligible && (context.forceServiceTier || nextServiceTier !== currentServiceTier)) {
+    cliFields.serviceTier = nextServiceTier || (null as null);
+  }
+  // F254 D2: per-cat Codex carrier override. Only meaningful when the cat
+  // actually dispatches through the local Codex CLI — generic ACP wins over
+  // the carrier in the production assembly, so don't persist one under ACP.
+  if (cliTransport && form.clientId === 'openai') {
+    if (form.codexCarrier) {
+      cliFields.carrier = form.codexCarrier;
+    } else if (cat?.cli?.carrier) {
+      cliFields.carrier = null as null;
+    }
+  }
+  if (!cliTransport && cat?.cli?.carrier) {
+    cliFields.carrier = null as null;
+  }
+  const cliPatch = Object.keys(cliFields).length > 0 ? { cli: cliFields } : {};
+  const nextCliConfigArgs = (form.cliConfigArgs ?? []).filter((arg) => arg.trim().length > 0);
+  const cliConfigArgsPatch = cliTransport
+    ? { cliConfigArgs: nextCliConfigArgs }
+    : cat?.cliConfigArgs?.length
+      ? { cliConfigArgs: [] as string[] }
+      : {};
   const voiceConfig = buildVoiceConfig(form);
   const voiceConfigPatch: Record<string, unknown> =
     voiceConfig !== undefined ? { voiceConfig } : cat?.voiceConfig ? { voiceConfig: null } : {};
@@ -191,8 +221,7 @@ export function buildCatPayload(form: HubCatEditorFormState, cat?: CatData | nul
     teamStrengths: trimText(form.teamStrengths),
     caution: trimText(form.caution) || null,
     strengths: splitStrengthTags(form.strengths),
-    sessionChain: form.sessionChain === 'true',
-    ...contextBudgetPatch,
+    ...contextWindowPatch,
     ...voiceConfigPatch,
     ...buildAcpPatch(form, cat),
   };
@@ -218,7 +247,7 @@ export function buildCatPayload(form: HubCatEditorFormState, cat?: CatData | nul
     ...mcpSupportPatch,
     ...cliPatch,
     defaultModel: trimText(form.defaultModel),
-    cliConfigArgs: (form.cliConfigArgs ?? []).filter((arg) => arg.trim().length > 0),
+    ...cliConfigArgsPatch,
     ...buildProviderPatch(form, cat),
   };
 }
@@ -228,8 +257,8 @@ function normalizeOptionalText(value: unknown): string | null {
   return trimmed.length > 0 ? trimmed : null;
 }
 
-export function buildCatPatchPayload(form: HubCatEditorFormState, cat: CatData) {
-  const payload = buildCatPayload(form, cat) as Record<string, unknown>;
+export function buildCatPatchPayload(form: HubCatEditorFormState, cat: CatData, context: CatPayloadContext = {}) {
+  const payload = buildCatPayload(form, cat, context) as Record<string, unknown>;
 
   if (form.clientId === cat.clientId) {
     delete payload.clientId;
@@ -249,6 +278,25 @@ export function buildCatPatchPayload(form: HubCatEditorFormState, cat: CatData) 
   const currentProvider = normalizeOptionalText(cat.provider);
   if (nextProvider === currentProvider) {
     delete payload.provider;
+  }
+
+  // #712: skip mcpSupport when it hasn't changed
+  if (form.mcpSupport === (cat.mcpSupport ?? true)) {
+    delete payload.mcpSupport;
+  }
+
+  // Built-in cloud members expose profile fields through this editor, but their
+  // transport identity is a product invariant. Do not let generic form defaults
+  // turn an innocent nickname/avatar save into a provider or CLI mutation.
+  if (cat.identityProtection?.kind === 'builtin-cloud') {
+    for (const field of cat.identityProtection.lockedFields) {
+      delete payload[field];
+    }
+    const nextMentions = Array.isArray(payload.mentionPatterns) ? payload.mentionPatterns : [];
+    const currentMentions = Array.from(new Set(cat.mentionPatterns.map(normalizeMentionPattern).filter(Boolean)));
+    if (JSON.stringify(nextMentions) === JSON.stringify(currentMentions)) {
+      delete payload.mentionPatterns;
+    }
   }
 
   return payload;

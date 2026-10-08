@@ -249,7 +249,7 @@ describe('passage permanence (Phase I regression)', () => {
   it('search with depth=raw returns structured passages (AC-I9)', async () => {
     const db = store.getDb();
     db.exec(
-      "INSERT INTO evidence_docs (anchor, kind, status, title, summary, updated_at) VALUES ('thread-raw', 'session', 'active', 'Raw depth test', 'A thread about Redis', '2026-03-31')",
+      "INSERT INTO evidence_docs (anchor, kind, status, title, summary, updated_at) VALUES ('thread-raw', 'thread', 'active', 'Raw depth test', 'A thread about Redis', '2026-03-31')",
     );
     const stmt = db.prepare(
       'INSERT INTO evidence_passages (doc_anchor, passage_id, content, speaker, position, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -261,7 +261,7 @@ describe('passage permanence (Phase I regression)', () => {
     );
     // Also sync evidence_fts for the doc
     db.exec(
-      "INSERT INTO evidence_fts(rowid, title, summary) SELECT rowid, title, summary FROM evidence_docs WHERE anchor = 'thread-raw'",
+      "INSERT INTO evidence_fts(rowid, title, summary, keywords) SELECT rowid, title, summary, keywords FROM evidence_docs WHERE anchor = 'thread-raw'",
     );
 
     const results = await store.search('Redis pipeline', { depth: 'raw', scope: 'threads', limit: 5 });
@@ -278,7 +278,7 @@ describe('passage permanence (Phase I regression)', () => {
   it('P1-fix: search(depth=raw, contextWindow) returns passages with context (AC-I8/I9 E2E)', async () => {
     const db = store.getDb();
     db.exec(
-      "INSERT INTO evidence_docs (anchor, kind, status, title, summary, updated_at) VALUES ('thread-e2e', 'session', 'active', 'E2E context test', 'context window e2e', '2026-03-31')",
+      "INSERT INTO evidence_docs (anchor, kind, status, title, summary, updated_at) VALUES ('thread-e2e', 'thread', 'active', 'E2E context test', 'Redis caching context window e2e', '2026-03-31')",
     );
     const stmt = db.prepare(
       'INSERT INTO evidence_passages (doc_anchor, passage_id, content, speaker, position, created_at) VALUES (?, ?, ?, ?, ?, ?)',
@@ -290,7 +290,7 @@ describe('passage permanence (Phase I regression)', () => {
       "INSERT INTO passage_fts(rowid, content) SELECT rowid, content FROM evidence_passages WHERE doc_anchor = 'thread-e2e'",
     );
     db.exec(
-      "INSERT INTO evidence_fts(rowid, title, summary) SELECT rowid, title, summary FROM evidence_docs WHERE anchor = 'thread-e2e'",
+      "INSERT INTO evidence_fts(rowid, title, summary, keywords) SELECT rowid, title, summary, keywords FROM evidence_docs WHERE anchor = 'thread-e2e'",
     );
 
     // search() with contextWindow should return passages with context array

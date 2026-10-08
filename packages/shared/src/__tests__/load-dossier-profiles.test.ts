@@ -8,9 +8,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
   _resetDossierCache,
+  getDossierL0Pronouns,
+  getDossierL0RoutingNote,
+  getDossierL0SelfDescription,
   getDossierRosterSummary,
   hasDossierEntry,
   isDossierAvailable,
@@ -25,8 +29,13 @@ const MINIMAL_DOSSIER = `
 \`\`\`yaml
 # structured-profile: cat:opus
 entityId: "cat:opus"
+identity:
+  pronouns: "他/he"  # operator-confirmed identity fact
+  l0PronounReminder: true  # repeated correction; hydrate into the scarce roster
 oneLiner: "Main architect"
 l0RosterSummary: "Architecture and deep thinking"
+l0RoutingNote: "Architecture decisions only"
+l0SelfDescription: "Architect; state the stopping condition before deep research"
 \`\`\`
 
 ## sonnet
@@ -34,10 +43,14 @@ l0RosterSummary: "Architecture and deep thinking"
 \`\`\`yaml
 # structured-profile: cat:sonnet
 entityId: "cat:sonnet"
+identity:
+  pronouns: "她/she"
 oneLiner: "Fast and flexible"
 l0RosterSummary: "Quick and versatile coding"
 \`\`\`
 `;
+
+const REPO_ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
 
 afterEach(() => {
   _resetDossierCache();
@@ -77,6 +90,77 @@ describe('R2-P1: ENOENT vs non-ENOENT error classification', () => {
 });
 
 describe('R2-P2: hasDossierEntry warning scope', () => {
+  test('reloads an applied dossier revision at the same project root without a process restart', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'dossier-revision-reload-'));
+    const dossierDir = join(tempRoot, 'docs', 'team');
+    const dossierPath = join(dossierDir, 'cat-dossier.md');
+    mkdirSync(dossierDir, { recursive: true });
+    writeFileSync(dossierPath, MINIMAL_DOSSIER);
+
+    try {
+      expect(loadDossierProfiles(tempRoot).get('opus')?.oneLiner).toBe('Main architect');
+      writeFileSync(dossierPath, MINIMAL_DOSSIER.replace('Main architect', 'Applied architecture revision'));
+      expect(loadDossierProfiles(tempRoot).get('opus')?.oneLiner).toBe('Applied architecture revision');
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('canonical Fable engagement policy survives the typed loader', () => {
+    const policy = loadDossierProfiles(REPO_ROOT).get('fable-5')?.engagementPolicy;
+
+    expect(policy?.defaultMode).toBe('one_shot_calibration');
+    expect(policy?.reentry).toBe('only_for_new_architecture_or_decision_judgment_or_explicit_cvo_request');
+  });
+
+  test('hydrates identity.pronouns from the structured dossier profile', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'dossier-pronouns-'));
+    const dossierDir = join(tempRoot, 'docs', 'team');
+    mkdirSync(dossierDir, { recursive: true });
+    writeFileSync(join(dossierDir, 'cat-dossier.md'), MINIMAL_DOSSIER);
+
+    try {
+      const profiles = loadDossierProfiles(tempRoot);
+      expect(profiles.get('opus')?.identity?.pronouns).toBe('他/he');
+      expect(getDossierL0Pronouns('opus', tempRoot)).toBe('他/he');
+      expect(profiles.get('sonnet')?.identity?.pronouns).toBe('她/she');
+      expect(getDossierL0Pronouns('sonnet', tempRoot)).toBeUndefined();
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('hydrates the compact L0 routing note independently from the capability summary', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'dossier-routing-note-'));
+    const dossierDir = join(tempRoot, 'docs', 'team');
+    mkdirSync(dossierDir, { recursive: true });
+    writeFileSync(join(dossierDir, 'cat-dossier.md'), MINIMAL_DOSSIER);
+
+    try {
+      expect(getDossierL0RoutingNote('opus', tempRoot)).toBe('Architecture decisions only');
+      expect(getDossierL0RoutingNote('sonnet', tempRoot)).toBeUndefined();
+      expect(getDossierRosterSummary('opus', tempRoot)).toBe('Architecture and deep thinking');
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('hydrates the self-facing persona projection independently from teammate diagnosis', () => {
+    const tempRoot = mkdtempSync(join(tmpdir(), 'dossier-self-description-'));
+    const dossierDir = join(tempRoot, 'docs', 'team');
+    mkdirSync(dossierDir, { recursive: true });
+    writeFileSync(join(dossierDir, 'cat-dossier.md'), MINIMAL_DOSSIER);
+
+    try {
+      expect(getDossierL0SelfDescription('opus', tempRoot)).toBe(
+        'Architect; state the stopping condition before deep research',
+      );
+      expect(getDossierL0SelfDescription('sonnet', tempRoot)).toBeUndefined();
+    } finally {
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   test('tracked cat with dossier entry → hasDossierEntry = true', () => {
     const tempRoot = mkdtempSync(join(tmpdir(), 'dossier-r2p2-'));
     const dossierDir = join(tempRoot, 'docs', 'team');
@@ -140,5 +224,31 @@ describe('R2-P2: hasDossierEntry warning scope', () => {
   test('community mode (no dossier) → hasDossierEntry = false for any cat', () => {
     expect(hasDossierEntry('opus', '/nonexistent/path')).toBe(false);
     expect(hasDossierEntry('runtime-spark', '/nonexistent/path')).toBe(false);
+  });
+});
+
+describe('L0 roster field contract (every cat pays for these fields in native L0)', () => {
+  // 2026-09-21: a 62-char, date-stamped l0RoutingNote added +45 tokens to EVERY cat's native
+  // L0 and tipped four cats over the ≤5950 warning margin. The cell is rendered into all
+  // teammates' prompts, so it must stay short and timeless — dates and "day N" phrasing are
+  // stale the moment they are written.
+  const RELATIVE_TIME = /\d{4}-\d{2}-\d{2}|第[一二三四五六七八九十\d]+天|今天|昨天|明天|上周|本周|刚到|刚进/;
+  const MAX_ROUTING_NOTE_CHARS = 60;
+
+  test('every l0RoutingNote in the real dossier is ≤60 chars and carries no date or day-count', () => {
+    const profiles = loadDossierProfiles(REPO_ROOT);
+    expect(profiles.size).toBeGreaterThan(0);
+    const violations: string[] = [];
+    for (const [catId, profile] of profiles) {
+      const note = profile.l0RoutingNote;
+      if (!note) continue;
+      if (note.length > MAX_ROUTING_NOTE_CHARS) {
+        violations.push(`${catId}: l0RoutingNote is ${note.length} chars (> ${MAX_ROUTING_NOTE_CHARS}): ${note}`);
+      }
+      if (RELATIVE_TIME.test(note)) {
+        violations.push(`${catId}: l0RoutingNote must be timeless (no dates / day counts): ${note}`);
+      }
+    }
+    expect(violations).toEqual([]);
   });
 });

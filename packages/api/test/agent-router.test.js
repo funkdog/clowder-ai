@@ -44,6 +44,13 @@ function createMockMessageStore() {
       rows.push(stored);
       return stored;
     },
+    markDelivered: (id, deliveredAt) => {
+      const stored = rows.find((message) => message.id === id);
+      if (!stored) return null;
+      stored.deliveryStatus = 'delivered';
+      stored.deliveredAt = deliveredAt;
+      return stored;
+    },
     getById: (id) => rows.find((m) => m.id === id) ?? null,
     getRecent: (limit = 50) => sorted().slice(-limit),
     getMentionsFor: (catId, limit = 50) =>
@@ -532,6 +539,34 @@ describe('AgentRouter', () => {
     assert.equal(mockGeminiService.invoke.mock.callCount(), 0);
   });
 
+  test('projects explicit ideate intent to the selected provider invocation', async () => {
+    const { AgentRouter } = await import('../dist/domains/cats/services/agents/routing/AgentRouter.js');
+
+    let invocationOptions;
+    const mockCodexService = {
+      invoke: mock.fn(async function* (_prompt, options) {
+        invocationOptions = options;
+        yield { type: 'done', catId: 'codex', timestamp: Date.now() };
+      }),
+    };
+    const router = new AgentRouter(
+      await migrateRouterOpts({
+        claudeService: createMockAgentService('opus'),
+        codexService: mockCodexService,
+        geminiService: createMockAgentService('gemini'),
+        registry: createMockRegistry(),
+        messageStore: createMockMessageStore(),
+      }),
+    );
+
+    for await (const _ of router.route('user-1', '#ideate @codex ask me one question before proceeding')) {
+      // consume
+    }
+
+    assert.equal(mockCodexService.invoke.mock.callCount(), 1);
+    assert.deepEqual(invocationOptions?.routeIntent, { intent: 'ideate', explicit: true });
+  });
+
   test('routes to opus when Chinese mention @布偶猫 is used', async () => {
     const { AgentRouter } = await import('../dist/domains/cats/services/agents/routing/AgentRouter.js');
 
@@ -730,7 +765,7 @@ describe('AgentRouter', () => {
       messages.push(msg);
     }
 
-    // In play mode, stream thinking is isolated between cats.
+    // Inside one serial route, play mode preserves independent first-pass reasoning.
     assert.ok(
       !codexReceivedPrompt.includes('Opus response'),
       'Codex prompt should NOT include Opus stream response in play mode',
@@ -1593,6 +1628,7 @@ describe('AgentRouter', () => {
     assert.ok(receivedOptions);
     assert.deepEqual(receivedOptions.auditContext, {
       invocationId: 'inv-1',
+      executionId: 'inv-1',
       threadId: 'thread-audit',
       userId: 'user-1',
       catId: 'opus',
@@ -1750,16 +1786,20 @@ describe('AgentRouter', () => {
 
     let opusPrompt = '';
     let codexPrompt = '';
+    let opusOptions;
+    let codexOptions;
     const mockClaudeService = {
-      invoke: mock.fn(async function* (prompt) {
+      invoke: mock.fn(async function* (prompt, options) {
         opusPrompt = prompt;
+        opusOptions = options;
         yield { type: 'text', catId: 'opus', content: 'Opus thinks', timestamp: Date.now() };
         yield { type: 'done', catId: 'opus', timestamp: Date.now() };
       }),
     };
     const mockCodexService = {
-      invoke: mock.fn(async function* (prompt) {
+      invoke: mock.fn(async function* (prompt, options) {
         codexPrompt = prompt;
+        codexOptions = options;
         yield { type: 'text', catId: 'codex', content: 'Codex thinks', timestamp: Date.now() };
         yield { type: 'done', catId: 'codex', timestamp: Date.now() };
       }),
@@ -1788,6 +1828,8 @@ describe('AgentRouter', () => {
     assert.ok(codexPrompt.includes('独立思考'), 'Codex should get parallel mode');
     assert.ok(!opusPrompt.includes('被召唤'), 'Opus should NOT have serial chain text');
     assert.ok(!codexPrompt.includes('被召唤'), 'Codex should NOT have serial chain text');
+    assert.deepEqual(opusOptions?.routeIntent, { intent: 'ideate', explicit: false });
+    assert.deepEqual(codexOptions?.routeIntent, { intent: 'ideate', explicit: false });
 
     // Both texts should be present
     const textMsgs = messages.filter((m) => m.type === 'text');
@@ -2317,6 +2359,30 @@ describe('F078: Group mentions', () => {
     assert.ok(targetCats.includes('gemini'));
   });
 
+  test('inline @all routes to all registered cats without a false unknown warning', async () => {
+    const { AgentRouter } = await import('../dist/domains/cats/services/agents/routing/AgentRouter.js');
+
+    const router = new AgentRouter(
+      await migrateRouterOpts({
+        claudeService: createMockAgentService('opus'),
+        codexService: createMockAgentService('codex'),
+        geminiService: createMockAgentService('gemini'),
+        registry: createMockRegistry(),
+        messageStore: createMockMessageStore(),
+      }),
+    );
+
+    const { targetCats, hasMentions, routing_warnings } = await router.resolveTargetsAndIntent(
+      '大家一起看看 @all',
+      't1',
+    );
+    assert.equal(hasMentions, true);
+    assert.ok(targetCats.includes('opus'));
+    assert.ok(targetCats.includes('codex'));
+    assert.ok(targetCats.includes('gemini'));
+    assert.deepStrictEqual(routing_warnings, []);
+  });
+
   test('@all skips unavailable cats', async () => {
     await withAvailabilityConfig({ codex: false }, async () => {
       const { AgentRouter } = await import('../dist/domains/cats/services/agents/routing/AgentRouter.js');
@@ -2438,6 +2504,30 @@ describe('F078: Group mentions', () => {
 
     const { targetCats } = await router.resolveTargetsAndIntent('@thread 大家看看', 't1');
     assert.deepStrictEqual(new Set(targetCats), new Set(['opus', 'codex']));
+  });
+
+  test('inline @thread routes to current thread participants without a false unknown warning', async () => {
+    const { AgentRouter } = await import('../dist/domains/cats/services/agents/routing/AgentRouter.js');
+
+    const threadStore = createMockThreadStore({ t1: ['opus', 'codex'] });
+    const router = new AgentRouter(
+      await migrateRouterOpts({
+        claudeService: createMockAgentService('opus'),
+        codexService: createMockAgentService('codex'),
+        geminiService: createMockAgentService('gemini'),
+        registry: createMockRegistry(),
+        messageStore: createMockMessageStore(),
+        threadStore,
+      }),
+    );
+
+    const { targetCats, hasMentions, routing_warnings } = await router.resolveTargetsAndIntent(
+      '大家一起看看 @thread',
+      't1',
+    );
+    assert.equal(hasMentions, true);
+    assert.deepStrictEqual(new Set(targetCats), new Set(['opus', 'codex']));
+    assert.deepStrictEqual(routing_warnings, []);
   });
 
   test('@本帖 routes to thread participants', async () => {
@@ -2917,6 +3007,157 @@ describe('#58: preferredCats candidate scope (not dispatch list)', () => {
     const { targetCats } = await router.resolveTargetsAndIntent('just a normal message', 't1');
     assert.equal(targetCats.length, 1, 'without #ideate, should still route to single cat');
   });
+
+  for (const strategy of ['serial', 'parallel']) {
+    test(`${strategy} reports a known unavailable member's cause and clears it after registry recovery`, async () => {
+      const { AgentRouter } = await import('../dist/domains/cats/services/agents/routing/AgentRouter.js');
+      const { AgentRegistry } = await import('../dist/domains/cats/services/agents/registry/AgentRegistry.js');
+      const registry = new AgentRegistry();
+      const healthyService = createMockAgentService('codex');
+      registry.register('codex', healthyService);
+      registry.markUnavailable('opus', {
+        code: 'rejected-account-binding',
+        message: 'account "fixture" has a torn credential without account metadata; reconcile before use',
+      });
+      const messageStore = createMockMessageStore();
+      const router = new AgentRouter({
+        agentRegistry: registry,
+        registry: createMockRegistry(),
+        messageStore,
+        threadStore: createMockThreadStore(),
+      });
+      const message = `${strategy === 'parallel' ? '#ideate' : '#execute'} @opus @codex hello`;
+      const failures = [];
+      const done = [];
+      for await (const event of router.route('user-1', message, 'unavailable-test')) {
+        if (event.type === 'error') {
+          assert.equal(event.catId, 'opus');
+          failures.push(event.error ?? event.content);
+        }
+        if (event.type === 'done') done.push(event);
+      }
+      assert.match(failures.join('\n'), /opus.*rejected-account-binding.*torn credential without account metadata/);
+      assert.doesNotMatch(failures.join('\n'), /Unknown cat ID/);
+      assert.equal(registry.has('opus'), false, 'a diagnostic must not make a member routable');
+      assert.equal(healthyService.invoke.mock.callCount(), 1, 'unavailable members must not block healthy siblings');
+      assert.ok(
+        done.some((event) => event.catId === 'opus'),
+        'unavailable member must settle its stream',
+      );
+      assert.ok(
+        done.some((event) => event.isFinal),
+        'the batch must settle',
+      );
+      assert.ok(
+        messageStore
+          .getByThread('unavailable-test')
+          .some((row) => row.userId === 'system' && /rejected-account-binding.*torn credential/.test(row.content)),
+        'the cause must survive a page reload',
+      );
+
+      const fenceCalls = [];
+      const persistenceContext = { errors: [] };
+      const source = messageStore.append({
+        userId: 'user-1',
+        catId: null,
+        threadId: 'unavailable-fenced',
+        content: message,
+        mentions: ['opus', 'codex'],
+        timestamp: Date.now(),
+      });
+      const { targetCats, intent } = await router.resolveTargetsAndIntent(message, 'unavailable-fenced');
+      for await (const _event of router.routeExecution(
+        'user-1',
+        message,
+        'unavailable-fenced',
+        source.id,
+        targetCats,
+        intent,
+        {
+          ownerAuthProvenance: 'unknown',
+          humanDispositionInvocationOrigin: 'unknown',
+          onPromptMessagesExposed: async () => undefined,
+          persistenceContext,
+          beforeOutputCommit: async (catId) => {
+            fenceCalls.push(catId);
+            return catId !== 'opus';
+          },
+        },
+      )) {
+      }
+      assert.equal(fenceCalls.filter((catId) => catId === 'opus').length, 1);
+      assert.equal(persistenceContext.actionOutputCommitRejected, true);
+      assert.equal(healthyService.invoke.mock.callCount(), 2, 'rejected output fence must not block a healthy sibling');
+      assert.equal(
+        messageStore
+          .getByThread('unavailable-fenced')
+          .some((row) => row.userId === 'system' && /rejected-account-binding/.test(row.content)),
+        false,
+        'a retired generation must not persist its diagnostic',
+      );
+
+      registry.reset();
+      const recovered = createMockAgentService('opus');
+      registry.register('opus', recovered);
+      registry.register('codex', healthyService);
+      router.refreshFromRegistry(registry);
+      for await (const event of router.route('user-1', '@opus hello', 'unavailable-recovered')) {
+        assert.notEqual(event.type, 'error', 'recovery must clear the old registration diagnosis');
+      }
+      assert.equal(recovered.invoke.mock.callCount(), 1);
+    });
+
+    test(`${strategy} preserves ordinary provider errors when the output fence rejects`, async () => {
+      const { AgentRouter } = await import('../dist/domains/cats/services/agents/routing/AgentRouter.js');
+      const { AgentRegistry } = await import('../dist/domains/cats/services/agents/registry/AgentRegistry.js');
+      const registry = new AgentRegistry();
+      const healthyService = createMockAgentService('codex');
+      registry.register('codex', healthyService);
+      registry.register('opus', {
+        invoke: mock.fn(async function* () {
+          yield { type: 'error', catId: 'opus', error: 'fixture provider failure', timestamp: Date.now() };
+          yield { type: 'done', catId: 'opus', timestamp: Date.now() };
+        }),
+      });
+      const messageStore = createMockMessageStore();
+      const router = new AgentRouter({
+        agentRegistry: registry,
+        registry: createMockRegistry(),
+        messageStore,
+        threadStore: createMockThreadStore(),
+      });
+      const threadId = 'provider-error-fenced';
+      const message = `${strategy === 'parallel' ? '#ideate' : '#execute'} @opus @codex hello`;
+      const source = messageStore.append({
+        userId: 'user-1',
+        catId: null,
+        threadId,
+        content: message,
+        mentions: ['opus', 'codex'],
+        timestamp: Date.now(),
+      });
+      const { targetCats, intent } = await router.resolveTargetsAndIntent(message, threadId);
+      const fenceCalls = [];
+      for await (const _event of router.routeExecution('user-1', message, threadId, source.id, targetCats, intent, {
+        ownerAuthProvenance: 'unknown',
+        humanDispositionInvocationOrigin: 'unknown',
+        onPromptMessagesExposed: async () => undefined,
+        beforeOutputCommit: async (catId) => {
+          fenceCalls.push(catId);
+          return catId !== 'opus';
+        },
+      })) {
+      }
+      assert.equal(fenceCalls.filter((catId) => catId === 'opus').length, 1);
+      assert.equal(healthyService.invoke.mock.callCount(), 1);
+      assert.ok(
+        messageStore
+          .getByThread(threadId)
+          .some((row) => row.userId === 'system' && row.content === 'Error: fixture provider failure'),
+        'registration diagnostics must not change ordinary provider error persistence',
+      );
+    });
+  }
 
   test('refreshFromRegistry updates routable service set after runtime catalog changes', async () => {
     const { AgentRouter } = await import('../dist/domains/cats/services/agents/routing/AgentRouter.js');
@@ -3455,15 +3696,16 @@ describe('#58: preferredCats candidate scope (not dispatch list)', () => {
     });
     // msg 2: re-delivered system msg — 落到 page 1 boundary (最旧 score in page 1).
     // 关键: timestamp << deliveredAt 让 cursor=oldest.timestamp 跳到老 send-time。
-    messageStore.append({
+    const redelivered = messageStore.append({
       userId: 'system',
       catId: null,
       content: '[Re-delivered] queued 2h ago, just delivered',
       mentions: [],
       timestamp: baseTs - 2 * 60 * 60 * 1000, // OLD send-time (2h ago)
-      deliveredAt: baseTs - 60 * 1000, // score = now-60s
+      deliveryStatus: 'queued',
       threadId: 't_z16_xpage',
     });
+    messageStore.markDelivered(redelivered.id, baseTs - 60 * 1000); // score = now-60s
     // msg 3-51: 49 条 cat msgs，score 都比 msg 2 新 (now-50s..now-1s)。
     // 让 page 1 (top 50 by score) = [msg2, msg3, ..., msg51]，page[0] = msg2 (re-delivered)。
     for (let i = 0; i < 49; i += 1) {

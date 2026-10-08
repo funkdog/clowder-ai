@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Start local embedding server for Cat Cafe on Windows.
+  Start local embedding server for Clowder AI on Windows.
 
 .DESCRIPTION
   Launches embed-api.py from ~/.cat-cafe/embed-venv.
@@ -57,6 +57,12 @@ if (-not (Test-Path $VenvPython)) {
 if ($LASTEXITCODE -ne 0) {
     throw "Core deps missing in embed-venv. Run embed-install.ps1 first."
 }
+
+# HF_HUB_OFFLINE prevents huggingface_hub from online-verifying cached models
+# on every start -- avoids SSLEOFError behind proxies/firewalls.
+# Must be set AFTER any auto-install that needs network access.
+# (mirrors tts-server.sh pattern; cloud codex P1: PR #1924)
+if (-not $env:HF_HUB_OFFLINE) { $env:HF_HUB_OFFLINE = "1" }
 
 $Model = $env:EMBED_MODEL
 if (-not $Model) {

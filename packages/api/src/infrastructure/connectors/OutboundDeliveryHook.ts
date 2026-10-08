@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type CatId, catRegistry, type RichBlock } from '@cat-cafe/shared';
 import type { FastifyBaseLogger } from 'fastify';
-import { resolveInternalRouteUrl } from '../../utils/upload-paths.js';
+
 import { ConnectorMessageFormatter, type MessageEnvelope, type MessageOrigin } from './ConnectorMessageFormatter.js';
 import type { IConnectorThreadBindingStore } from './ConnectorThreadBindingStore.js';
 import { renderAllRichBlocksPlaintext } from './rich-block-plaintext.js';
@@ -87,12 +87,22 @@ export interface OutboundDeliveryHookOptions {
     | undefined;
   /** Resolve audio blocks with text but no url (voiceMode frontend-only blocks) by synthesizing TTS. */
   readonly resolveVoiceBlocks?: ((blocks: RichBlock[], catId: string) => Promise<RichBlock[]>) | undefined;
+  /** Optional physical embodiment fanout. It remains downstream of Limb policy/lease/audit. */
+  readonly limbDelivery?:
+    | {
+        deliver(threadId: string, content: string, catId?: CatId, triggerMessageId?: string): Promise<void>;
+      }
+    | undefined;
 }
 
 export class OutboundDeliveryHook {
   private readonly formatter = new ConnectorMessageFormatter();
 
   constructor(private readonly opts: OutboundDeliveryHookOptions) {}
+
+  setLimbDelivery(delivery: NonNullable<OutboundDeliveryHookOptions['limbDelivery']>): void {
+    (this.opts as { limbDelivery?: OutboundDeliveryHookOptions['limbDelivery'] }).limbDelivery = delivery;
+  }
 
   /**
    * Return the set of connectorIds bound to a thread.
@@ -130,17 +140,19 @@ export class OutboundDeliveryHook {
       '[OutboundDeliveryHook] deliver() called',
     );
     const bindings = await this.opts.bindingStore.getByThread(threadId);
-    if (bindings.length === 0) {
+    if (bindings.length === 0 && !this.opts.limbDelivery) {
       this.opts.log.warn(
         { threadId },
         '[OutboundDeliveryHook] No bindings found for thread — skipping outbound delivery',
       );
       return;
     }
-    this.opts.log.info(
-      { threadId, bindingCount: bindings.length, connectors: bindings.map((b) => b.connectorId) },
-      '[OutboundDeliveryHook] Found bindings, delivering',
-    );
+    if (bindings.length > 0) {
+      this.opts.log.info(
+        { threadId, bindingCount: bindings.length, connectors: bindings.map((b) => b.connectorId) },
+        '[OutboundDeliveryHook] Found bindings, delivering',
+      );
+    }
 
     // F134: Resolve sender from the trigger message for group chat @sender replies
     let replyToSender: { id: string; name?: string } | undefined;
@@ -324,16 +336,21 @@ export class OutboundDeliveryHook {
                       const absPath = resolve?.(item.url);
                       if (absPath) {
                         await adapter.sendMedia(binding.externalChatId, { type: 'image', absPath });
-                      } else if (
-                        item.url.startsWith('https://') ||
-                        item.url.startsWith('/uploads/') ||
-                        item.url.startsWith('/api/connector-media/')
-                      ) {
-                        const resolvedUrl = resolveInternalRouteUrl(item.url);
+                      } else if (item.url.startsWith('https://')) {
+                        // External HTTPS URL: adapter can download + upload to platform
                         await adapter.sendMedia(binding.externalChatId, {
                           type: 'image',
-                          url: resolvedUrl,
+                          url: item.url,
                         });
+                      } else if (item.url.startsWith('/uploads/') || item.url.startsWith('/api/connector-media/')) {
+                        // Internal route URL — resolver failed (file not found or resolver not configured).
+                        // Converting to http://localhost is NOT usable by external platforms (e.g. Feishu's
+                        // SSRF protection blocks http:// + localhost). Skip with warning instead of sending
+                        // an unusable localhost URL as text fallback.
+                        this.opts.log.warn(
+                          { blockKind: block.kind, url: item.url, hasResolver: !!resolve },
+                          '[OutboundDeliveryHook] media_gallery image skipped — local file not found (resolver returned undefined)',
+                        );
                       } else {
                         this.opts.log.warn(
                           { blockKind: block.kind, url: item.url },
@@ -358,6 +375,14 @@ export class OutboundDeliveryHook {
         }
       }),
     );
+
+    if (this.opts.limbDelivery) {
+      try {
+        await this.opts.limbDelivery.deliver(threadId, content, catId, triggerMessageId);
+      } catch (err) {
+        this.opts.log.error({ err, threadId, catId }, 'Physical limb outbound delivery failed');
+      }
+    }
   }
 
   private async writeDataUriToTempFile(dataUri: string): Promise<string | null> {

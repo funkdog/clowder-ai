@@ -15,8 +15,21 @@
 
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { THREAD_SYSTEM_KIND, TRIGGER } from '../dist/infrastructure/telemetry/genai-semconv.js';
+import {
+  PROFILE_LAYER,
+  TARGET_LAYER,
+  THREAD_SYSTEM_KIND,
+  TRIGGER,
+} from '../dist/infrastructure/telemetry/genai-semconv.js';
 import { ALLOWED_METRIC_ATTRIBUTES } from '../dist/infrastructure/telemetry/metric-allowlist.js';
+import {
+  TURN_CUSTODY_METRIC_CLASSIFICATION_ATTR,
+  TURN_CUSTODY_METRIC_COMPARISON_ATTR,
+  TURN_CUSTODY_METRIC_STATE_ATTR,
+  TURN_CUSTODY_PROMETHEUS_CLASSIFICATION_LABEL,
+  TURN_CUSTODY_PROMETHEUS_COMPARISON_LABEL,
+  TURN_CUSTODY_PROMETHEUS_STATE_LABEL,
+} from '../dist/infrastructure/telemetry/turn-custody-shadow-telemetry.js';
 
 describe('F152 metric-allowlist — C2 observability labels (PR #2058 R1 regression)', () => {
   test('THREAD_SYSTEM_KIND is allowlisted (otherwise C2 thread-kind breakdown is silently dropped)', () => {
@@ -40,5 +53,49 @@ describe('F152 metric-allowlist — C2 observability labels (PR #2058 R1 regress
     // queries written against the old name would silently break. Pin the values.
     assert.equal(THREAD_SYSTEM_KIND, 'thread.system_kind');
     assert.equal(TRIGGER, 'trigger');
+  });
+});
+
+describe('F167 Phase T metric-allowlist — bounded stop-gate labels', () => {
+  test('preserves namespaced projection and comparison dimensions', () => {
+    assert.ok(ALLOWED_METRIC_ATTRIBUTES.has(TURN_CUSTODY_METRIC_STATE_ATTR));
+    assert.ok(ALLOWED_METRIC_ATTRIBUTES.has(TURN_CUSTODY_METRIC_COMPARISON_ATTR));
+    assert.ok(ALLOWED_METRIC_ATTRIBUTES.has(TURN_CUSTODY_METRIC_CLASSIFICATION_ATTR));
+  });
+
+  describe('F231 Phase E metric-allowlist — per-layer profile telemetry', () => {
+    test('P1: PROFILE_LAYER is allowlisted (otherwise pointer_emitted per-layer breakdown is silently dropped)', () => {
+      assert.ok(
+        ALLOWED_METRIC_ATTRIBUTES.has(PROFILE_LAYER),
+        `metric-allowlist must include ${PROFILE_LAYER} so profile pointer telemetry can attribute by layer (primer/corpus)`,
+      );
+    });
+
+    test('P1: TARGET_LAYER is allowlisted (otherwise propose/approve/reject per-layer breakdown is silently dropped)', () => {
+      assert.ok(
+        ALLOWED_METRIC_ATTRIBUTES.has(TARGET_LAYER),
+        `metric-allowlist must include ${TARGET_LAYER} so profile update telemetry can attribute by target layer`,
+      );
+    });
+
+    test('pins string literal values for Prometheus query stability', () => {
+      assert.equal(PROFILE_LAYER, 'profile.layer');
+      assert.equal(TARGET_LAYER, 'target.layer');
+    });
+  });
+
+  test('does not widen the global allowlist to generic state/comparison keys', () => {
+    assert.equal(ALLOWED_METRIC_ATTRIBUTES.has('state'), false);
+    assert.equal(ALLOWED_METRIC_ATTRIBUTES.has('comparison'), false);
+    assert.equal(ALLOWED_METRIC_ATTRIBUTES.has('classification'), false);
+  });
+
+  test('pins OTel attribute and Prometheus label names across the exporter boundary', () => {
+    assert.equal(TURN_CUSTODY_METRIC_STATE_ATTR, 'turn_custody.state');
+    assert.equal(TURN_CUSTODY_METRIC_COMPARISON_ATTR, 'turn_custody.comparison');
+    assert.equal(TURN_CUSTODY_METRIC_CLASSIFICATION_ATTR, 'turn_custody.classification');
+    assert.equal(TURN_CUSTODY_PROMETHEUS_STATE_LABEL, 'turn_custody_state');
+    assert.equal(TURN_CUSTODY_PROMETHEUS_COMPARISON_LABEL, 'turn_custody_comparison');
+    assert.equal(TURN_CUSTODY_PROMETHEUS_CLASSIFICATION_LABEL, 'turn_custody_classification');
   });
 });

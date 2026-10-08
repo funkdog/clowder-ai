@@ -1,142 +1,208 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { type Thread, useChatStore } from '@/stores/chatStore';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { useShallow } from 'zustand/react/shallow';
+import { useChatStore } from '@/stores/chatStore';
 import { useLabelStore } from '@/stores/label-store';
+import {
+  projectSidebarRows,
+  type SidebarSnapshotRow,
+  useSidebarProjectionStore,
+} from '@/stores/sidebarProjectionStore';
 import { useToastStore } from '@/stores/toastStore';
 import { apiFetch } from '@/utils/api-client';
-import { loadThreads as loadCachedThreads } from '@/utils/offline-store';
+import { executeSidebarFieldCommand } from '@/utils/sidebar-commands';
+import {
+  bootstrapSidebarThreadSnapshot,
+  invalidateSidebarProjection,
+  refreshSidebarThreadSnapshot,
+} from '@/utils/sidebar-thread-snapshot';
 import { BootcampListModal } from '../BootcampListModal';
 import { BootcampIcon } from '../icons/BootcampIcon';
-
+import type { ShellDestination } from '../shell/shell-navigation';
+import { useShellPresentation } from '../shell/shell-presentation';
+import { AttentionArrangeToolbar } from './AttentionArrangeToolbar';
+import { AttentionClusterHeader, AttentionClusterMember } from './AttentionCluster';
+import { AttentionGroupableThreadRow } from './AttentionGroupableThreadRow';
 import { readProjectNames, writeProjectNames } from './active-workspace';
+import {
+  type AttentionListRow,
+  type AttentionRenderItem,
+  arrangeAttentionRows,
+  flattenAttentionRows,
+} from './attention-clusters';
+import { orderAttentionList } from './attention-list-order';
 import { DirectoryPickerModal, type NewThreadOptions } from './DirectoryPickerModal';
 import { LabelFilterBar } from './LabelFilterBar';
+import {
+  SearchGroupAction,
+  SearchGroupFeedback,
+  type SearchGroupSuccess,
+  SearchGroupTip,
+  useSearchGroupTip,
+} from './SearchGroupFeedback';
+import { SearchGroupOrganizer } from './SearchGroupOrganizer';
 import { SectionGroup } from './SectionGroup';
+import { SidebarTabIcon } from './SidebarTabIcon';
+import { SidebarViewBarV2 } from './SidebarViewBarV2';
+import type { SearchGroupRequest } from './search-group-types';
+import {
+  createSidebarTabState,
+  readBrowserSidebarTabPreference,
+  sidebarTabReducer,
+  writeBrowserSidebarTabPreference,
+} from './sidebar-tab-state';
 import { ThreadItem } from './ThreadItem';
 import { ThreadOrganizerModal } from './ThreadOrganizerModal';
+import { ThreadSidebarV2Header } from './ThreadSidebarV2Header';
+import { openTheaterReplay } from './theater-navigation';
 import { pushThreadRouteWithHistory } from './thread-navigation';
+import { isGroupableThread, matchesThreadSearch } from './thread-search';
 import {
+  buildSidebarTabContent,
+  buildSidebarTabs,
   getProjectPaths,
-  mergeLiveActivityIntoThreads,
+  naturalTabForThread,
   projectDisplayName,
-  sortAndGroupThreadsWithWorkspace,
+  type SidebarTabId,
+  type ThreadGroup,
 } from './thread-utils';
-import { createToggleWithReconcile } from './toggle-with-reconcile';
+import { useAttentionClusters } from './use-attention-clusters';
+import { useAttentionListOrder } from './use-attention-list-order';
 import { useCollapseState } from './use-collapse-state';
 import { useProjectPins } from './use-project-pins';
 import { useScrollAnchor } from './use-scroll-anchor';
+import { VirtualAttentionList } from './VirtualAttentionList';
+import { VIRTUAL_THREAD_LIST_THRESHOLD, VirtualThreadList, type VirtualThreadListHandle } from './VirtualThreadList';
 
 interface ThreadSidebarProps {
   onClose?: () => void;
   className?: string;
+  /** URL/layout truth used to gate the one-time initial tab bootstrap. */
+  routeThreadId: string;
+  /**
+   * F322 v2: a Café destination (记忆) that is the current page while the sidebar stays visible. No conversation row is
+   * current then, and the conversation the store still remembers must be reachable by a click like any other.
+   */
+  activeDestination?: ShellDestination | null;
 }
 
-function notifyThreadCreateFailure(message: string) {
+interface TrashedThread {
+  id: string;
+  title: string | null;
+}
+
+function notifyThreadCreate(type: 'success' | 'error' | 'info', title: string, message: string) {
   useToastStore.getState().addToast({
-    type: 'error',
-    title: '创建线程失败',
+    type,
+    title,
     message,
     duration: 6000,
   });
 }
 
-export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && error.name === 'TimeoutError';
+}
+
+function findReconciledThread(beforeThreadIds: ReadonlySet<string>, opts: NewThreadOptions): SidebarSnapshotRow | null {
+  const expectedTitle = opts.title;
+  if (!expectedTitle?.trim()) return null;
+  const expectedProjectPath = opts.projectPath ?? 'default';
+  const candidates = useSidebarProjectionStore
+    .getState()
+    .rows.filter(
+      (row) => !beforeThreadIds.has(row.id) && row.projectPath === expectedProjectPath && row.title === expectedTitle,
+    );
+  return candidates.length === 1 ? (candidates[0] ?? null) : null;
+}
+
+function groupKeyForSection(group: ThreadGroup<SidebarSnapshotRow>): string {
+  return group.projectPath ?? group.type;
+}
+
+function projectSectionLabel(group: ThreadGroup<SidebarSnapshotRow>, projectNames: Map<string, string>): string {
+  const projectPath = group.projectPath;
+  if (!projectPath) return group.label;
+  return projectNames.get(projectPath) ?? group.label;
+}
+
+function forProjectPath<T>(projectPath: string | undefined, build: (projectPath: string) => T): T | undefined {
+  if (!projectPath) return undefined;
+  return build(projectPath);
+}
+
+function forOpenableProject<T>(projectPath: string | undefined, build: (projectPath: string) => T): T | undefined {
+  if (!projectPath) return undefined;
+  if (projectPath === 'default') return undefined;
+  return build(projectPath);
+}
+
+export function ThreadSidebar({ onClose, className, routeThreadId, activeDestination = null }: ThreadSidebarProps) {
   const [showBootcampList, setShowBootcampList] = useState(false);
-  const {
-    threads,
-    currentThreadId,
-    setThreads,
-    setCurrentProject,
-    isLoadingThreads,
-    setLoadingThreads,
-    updateThreadTitle,
-    getThreadState,
-    threadStates,
-  } = useChatStore();
-  const [isCreating, setIsCreating] = useState(false);
+  const isV2 = useShellPresentation() === 'v2';
+  const { currentThreadId, setCurrentProject } = useChatStore(
+    useShallow((s) => ({
+      currentThreadId: s.currentThreadId,
+      setCurrentProject: s.setCurrentProject,
+    })),
+  );
+  // The conversation the user is in. The store keeps remembering the last one while a Café destination (记忆) is the
+  // current page, but then the user is not in it: it is not highlighted, clicking it navigates, and deleting or
+  // archiving it must not move the user off the page they are on.
+  const currentConversationId = activeDestination === null ? currentThreadId : null;
+  const { rows, pendingThreadCommands, refreshing } = useSidebarProjectionStore(
+    useShallow((state) => ({
+      rows: state.rows,
+      pendingThreadCommands: state.pendingThreadCommands,
+      refreshing: state.refreshing,
+    })),
+  );
+  const threads = useMemo(() => projectSidebarRows({ rows, pendingThreadCommands }), [pendingThreadCommands, rows]);
+  const isLoadingThreads = refreshing;
+  const [creationPhase, setCreationPhase] = useState<'idle' | 'submitting' | 'reconciling'>('idle');
+  const isCreating = creationPhase !== 'idle';
   const [showPicker, setShowPicker] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [labelFilter, setLabelFilter] = useState<string | null>(null);
   const [bindWarning, setBindWarning] = useState<string | null>(null);
   // I-1: Thread to confirm deletion (null = no dialog)
-  const [deleteTarget, setDeleteTarget] = useState<Thread | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<SidebarSnapshotRow | null>(null);
   // F095 Phase D: Trash bin state
   const [showTrash, setShowTrash] = useState(false);
-  const [trashedThreads, setTrashedThreads] = useState<Thread[]>([]);
+  const [trashedThreads, setTrashedThreads] = useState<TrashedThread[]>([]);
   const [isLoadingTrash, setIsLoadingTrash] = useState(false);
   // F070: governance health by project path
   const [govHealth, setGovHealth] = useState<Record<string, string>>({});
+  const [tabState, dispatchTabEvent] = useReducer(sidebarTabReducer, null, () => {
+    const preference = readBrowserSidebarTabPreference();
+    return createSidebarTabState(preference.tab, preference.persisted);
+  });
+  const activeTab = tabState.activeTab;
 
   // F095 Phase E: scroll anchor for reorder stability
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const virtualThreadListRef = useRef<VirtualThreadListHandle>(null);
+  const tabRefs = useRef<Record<SidebarTabId, HTMLButtonElement | null>>({
+    pinned: null,
+    recent: null,
+    project: null,
+    system: null,
+    favorites: null,
+  });
+  const tabScrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
   // F095 Phase F: custom project display names
   const [projectNames, setProjectNames] = useState(() =>
     readProjectNames(typeof localStorage !== 'undefined' ? localStorage : { getItem: () => null, setItem: () => {} }),
   );
 
-  // Shared seq maps — created once, cross-referenced between pin/fav toggle instances
-  const pinSeqMap = useRef(new Map<string, number>());
-  const favSeqMap = useRef(new Map<string, number>());
-
-  // Stable toggle-with-reconcile instances (lazy-init in ref, survive re-renders)
-  const pinToggle = useRef<ReturnType<typeof createToggleWithReconcile>>();
-  const favToggle = useRef<ReturnType<typeof createToggleWithReconcile>>();
-  if (!pinToggle.current) {
-    pinToggle.current = createToggleWithReconcile({
-      fetch: apiFetch,
-      onUpdate: (id, val) => useChatStore.getState().updateThreadPin(id, val),
-      field: 'pinned',
-      seqMap: pinSeqMap.current,
-      siblingSeqMap: favSeqMap.current,
-      onUpdateSibling: (id, val) => useChatStore.getState().updateThreadFavorite(id, val),
-      siblingField: 'favorited',
-    });
-  }
-  if (!favToggle.current) {
-    favToggle.current = createToggleWithReconcile({
-      fetch: apiFetch,
-      onUpdate: (id, val) => useChatStore.getState().updateThreadFavorite(id, val),
-      field: 'favorited',
-      seqMap: favSeqMap.current,
-      siblingSeqMap: pinSeqMap.current,
-      onUpdateSibling: (id, val) => useChatStore.getState().updateThreadPin(id, val),
-      siblingField: 'pinned',
-    });
-  }
-
   const loadThreads = useCallback(async () => {
-    setLoadingThreads(true);
-
-    // F164: Cache-first — show IndexedDB snapshot immediately (skip unread init; API refresh will handle)
-    try {
-      const cached = await loadCachedThreads();
-      if (cached && cached.length > 0) {
-        setThreads(cached);
-      }
-    } catch {
-      // IDB read failure — continue to API
-    }
-
-    // Then fetch fresh data from API (replace snapshot if successful)
-    try {
-      const res = await apiFetch('/api/threads');
-      if (!res.ok) return;
-      const data = await res.json();
-      const threads = data.threads ?? [];
-      setThreads(threads); // Also triggers IDB write-through via chatStore
-      const { initThreadUnread } = useChatStore.getState();
-      for (const thread of threads) {
-        if (thread.unreadCount > 0 || thread.hasUserMention) {
-          initThreadUnread(thread.id, thread.unreadCount ?? 0, !!thread.hasUserMention);
-        }
-      }
-    } catch {
-      // API failed — IDB snapshot already displayed (if available)
-    } finally {
-      setLoadingThreads(false);
-    }
-  }, [setThreads, setLoadingThreads]);
+    // Run both immediately: a slow IndexedDB read must never delay or overwrite
+    // a newer canonical HTTP snapshot.
+    await Promise.allSettled([bootstrapSidebarThreadSnapshot(), refreshSidebarThreadSnapshot()]);
+  }, []);
 
   useEffect(() => {
     void loadThreads();
@@ -146,12 +212,18 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
 
   useEffect(() => {
     const handleOnline = () => {
-      void loadThreads();
+      void invalidateSidebarProjection();
       void useChatStore.getState().fetchGlobalBubbleDefaults();
     };
     window.addEventListener('online', handleOnline);
     return () => window.removeEventListener('online', handleOnline);
-  }, [loadThreads]);
+  }, []);
+
+  useEffect(() => {
+    const activeButton = tabRefs.current[activeTab];
+    if (!activeButton || typeof activeButton.scrollIntoView !== 'function') return;
+    activeButton.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [activeTab]);
 
   // F070: Fetch governance health for all registered external projects
   useEffect(() => {
@@ -178,7 +250,12 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
   const createInProject = useCallback(
     async (opts: NewThreadOptions) => {
       console.log('[createInProject] called with opts=', JSON.stringify(opts));
-      setIsCreating(true);
+      const beforeSnapshot = useSidebarProjectionStore.getState();
+      const beforeThreadIds = new Set(beforeSnapshot.rows.map((row) => row.id));
+      const canReconcileByDifference = beforeSnapshot.hasCanonicalSnapshot;
+      let createdThreadId: string | null = null;
+      let navigationCommitted = false;
+      setCreationPhase('submitting');
       setShowPicker(false);
       try {
         const res = await apiFetch(`/api/threads`, {
@@ -195,16 +272,21 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
         if (!res.ok) {
           const errBody = await res.text().catch(() => '(no body)');
           console.error('[createInProject] POST /api/threads failed:', res.status, errBody);
-          notifyThreadCreateFailure('这次创建对话没有成功，请稍后重试。');
+          notifyThreadCreate('error', '创建线程失败', '这次创建对话没有成功，请稍后重试。');
           return;
         }
-        const thread: Thread = await res.json();
+        const thread = (await res.json()) as { id?: unknown };
+        if (typeof thread.id !== 'string' || thread.id.length === 0) {
+          notifyThreadCreate('error', '创建线程失败', '服务器没有返回有效的对话标识，请稍后重试。');
+          return;
+        }
+        createdThreadId = thread.id;
 
         // F33: Bind external sessions after thread creation (best-effort, parallel)
         if (opts.sessionBindings?.length) {
           const results = await Promise.allSettled(
             opts.sessionBindings.map(({ catId, cliSessionId }) =>
-              apiFetch(`/api/threads/${thread.id}/sessions/${catId}/bind`, {
+              apiFetch(`/api/threads/${createdThreadId}/sessions/${catId}/bind`, {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ cliSessionId }),
@@ -219,20 +301,46 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
         }
 
         if (opts.projectPath) setCurrentProject(opts.projectPath);
-        navigateToThread(thread.id);
+        await invalidateSidebarProjection();
+        navigateToThread(createdThreadId);
+        navigationCommitted = true;
         // Auto-close sidebar on mobile after creating a new conversation
         if (typeof window !== 'undefined' && window.innerWidth < 768) {
           onClose?.();
         }
-        await loadThreads();
       } catch (err) {
         console.error('[createInProject] exception:', err);
-        notifyThreadCreateFailure('网络请求没有完成，创建对话失败。请稍后重试。');
+        if (createdThreadId) {
+          // The POST response is authoritative. A later projection/binding/UI
+          // failure must never turn a known creation into an ambiguous result.
+          if (!navigationCommitted) navigateToThread(createdThreadId);
+          return;
+        }
+        if (isTimeoutError(err)) {
+          setCreationPhase('reconciling');
+          const refreshed = await invalidateSidebarProjection();
+          const reconciledThread =
+            refreshed && canReconcileByDifference ? findReconciledThread(beforeThreadIds, opts) : null;
+          if (reconciledThread) {
+            if (reconciledThread.projectPath !== 'default') setCurrentProject(reconciledThread.projectPath);
+            notifyThreadCreate('success', '创建已确认', '请求虽然超时，但服务器已确认创建完成；没有重复提交。');
+            navigateToThread(reconciledThread.id);
+            if (typeof window !== 'undefined' && window.innerWidth < 768) onClose?.();
+          } else {
+            notifyThreadCreate(
+              'info',
+              '创建结果未确认',
+              '请求已超时；已核对服务器，但仍无法确认是否创建。我们没有自动重试，请先检查侧栏。',
+            );
+          }
+        } else {
+          notifyThreadCreate('error', '创建线程失败', '创建请求没有完成，请稍后重试。');
+        }
       } finally {
-        setIsCreating(false);
+        setCreationPhase('idle');
       }
     },
-    [setCurrentProject, navigateToThread, loadThreads, onClose],
+    [setCurrentProject, navigateToThread, onClose],
   );
 
   // F095 Phase D: Load trashed threads
@@ -284,14 +392,14 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
   const handleDeleteConfirm = useCallback(async () => {
     if (!deleteTarget) return;
     const threadId = deleteTarget.id;
-    const isSystem = !!deleteTarget.connectorHubState || !!deleteTarget.systemKind;
+    const isSystem = deleteTarget.isHubThread || !!deleteTarget.systemKind;
     setDeleteTarget(null);
     try {
       // P1-2: System threads require ?force=true (backend enforced)
       const url = isSystem ? `/api/threads/${threadId}?force=true` : `/api/threads/${threadId}`;
       const res = await apiFetch(url, { method: 'DELETE' });
       if (!res.ok && res.status !== 204) return;
-      if (threadId === currentThreadId) {
+      if (threadId === currentConversationId) {
         navigateToThread('default');
       }
       await loadThreads();
@@ -300,57 +408,116 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
     } catch {
       // Silently ignore
     }
-  }, [deleteTarget, currentThreadId, navigateToThread, loadThreads, showTrash, loadTrash]);
+  }, [deleteTarget, currentConversationId, navigateToThread, loadThreads, showTrash, loadTrash]);
 
-  const handleRename = useCallback(
-    async (threadId: string, title: string) => {
-      const nextTitle = title.trim();
-      if (!nextTitle) return;
-      try {
-        const res = await apiFetch(`/api/threads/${threadId}`, {
+  const handleRename = useCallback(async (threadId: string, title: string) => {
+    const nextTitle = title.trim();
+    if (!nextTitle) return;
+    const ok = await executeSidebarFieldCommand({
+      threadId,
+      field: 'title',
+      value: nextTitle,
+      request: (signal) =>
+        apiFetch(`/api/threads/${threadId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ title: nextTitle }),
+          signal,
+        }),
+    });
+    if (!ok) {
+      useToastStore.getState().addToast({
+        type: 'error',
+        title: '重命名失败',
+        message: '服务器没有接受这次修改，已恢复权威标题。',
+        duration: 5000,
+      });
+    }
+  }, []);
+
+  const handleTogglePin = useCallback((threadId: string, pinned: boolean) => {
+    void executeSidebarFieldCommand({
+      threadId,
+      field: 'pinned',
+      value: pinned,
+      request: (signal) =>
+        apiFetch(`/api/threads/${threadId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pinned }),
+          signal,
+        }),
+    }).then((ok) => {
+      if (!ok) {
+        useToastStore.getState().addToast({
+          type: 'error',
+          title: '置顶失败',
+          message: '服务器没有接受这次修改，已恢复权威状态。',
+          duration: 5000,
         });
-        if (!res.ok) return;
-        const updated = await res.json();
-        updateThreadTitle(threadId, updated.title ?? nextTitle);
-      } catch {
-        // Silently ignore
       }
-    },
-    [updateThreadTitle],
-  );
+    });
+  }, []);
 
-  const handleTogglePin = useCallback(
-    (threadId: string, pinned: boolean) => void pinToggle.current?.toggle(threadId, pinned),
-    [],
-  );
-
-  const handleToggleFavorite = useCallback(
-    (threadId: string, favorited: boolean) => void favToggle.current?.toggle(threadId, favorited),
-    [],
-  );
+  const handleToggleFavorite = useCallback((threadId: string, favorited: boolean) => {
+    void executeSidebarFieldCommand({
+      threadId,
+      field: 'favorited',
+      value: favorited,
+      request: (signal) =>
+        apiFetch(`/api/threads/${threadId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ favorited }),
+          signal,
+        }),
+    });
+  }, []);
 
   const handleUpdatePreferredCats = useCallback(async (threadId: string, cats: string[]) => {
-    const res = await apiFetch(`/api/threads/${threadId}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preferredCats: cats }),
+    const ok = await executeSidebarFieldCommand({
+      threadId,
+      field: 'preferredCats',
+      value: cats,
+      request: (signal) =>
+        apiFetch(`/api/threads/${threadId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ preferredCats: cats }),
+          signal,
+        }),
     });
-    if (!res.ok) throw new Error('保存失败');
-    useChatStore.getState().updateThreadPreferredCats(threadId, cats);
+    if (!ok) throw new Error('保存失败');
   }, []);
 
   const handleUpdateLabels = useCallback(async (threadId: string, labels: string[]) => {
-    await useChatStore.getState().updateThreadLabels(threadId, labels);
+    const ok = await executeSidebarFieldCommand({
+      threadId,
+      field: 'labels',
+      value: labels,
+      request: (signal) =>
+        apiFetch(`/api/threads/${threadId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ labels }),
+          signal,
+        }),
+    });
+    if (!ok) throw new Error('保存失败');
   }, []);
+
+  // F252 Phase E: route replay to the always-mounted AppShell host.
+  const handleReplay = useCallback((threadId: string) => openTheaterReplay(threadId), []);
 
   const handleSelect = useCallback(
     (threadId: string) => {
       // Always clear unread badge — user clicking the thread = "I've seen it"
+      useSidebarProjectionStore.getState().beginSidebarCommand(threadId, 'attention', {
+        unreadCount: 0,
+        hasUserMention: false,
+      });
       useChatStore.getState().clearUnread(threadId);
-      if (threadId === currentThreadId) return;
+      if (threadId === currentConversationId) return;
       // Let the new thread restore projectPath after the route switch.
       // Pre-navigation global store writes can stall SPA thread navigation.
       navigateToThread(threadId);
@@ -359,7 +526,7 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
         onClose?.();
       }
     },
-    [currentThreadId, navigateToThread, onClose],
+    [currentConversationId, navigateToThread, onClose],
   );
 
   // F095 Phase F: Project action handlers
@@ -387,19 +554,19 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
 
   const handleArchiveThreads = useCallback(
     async (path: string) => {
-      // P1-1: Exclude system threads (connectorHubState OR systemKind) — they have separate delete protection
+      // P1-1: Exclude system threads — they have separate delete protection.
       const targets = threads.filter(
-        (t) => t.projectPath === path && t.id !== 'default' && !t.connectorHubState && !t.systemKind,
+        (t) => t.projectPath === path && t.id !== 'default' && !t.isHubThread && !t.systemKind,
       );
       await Promise.allSettled(targets.map((t) => apiFetch(`/api/threads/${t.id}`, { method: 'DELETE' })));
       // P2-1: If current thread was archived, redirect to default
-      if (currentThreadId && targets.some((t) => t.id === currentThreadId)) {
+      if (currentConversationId && targets.some((t) => t.id === currentConversationId)) {
         navigateToThread('default');
       }
       await loadThreads();
       if (showTrash) void loadTrash();
     },
-    [threads, loadThreads, currentThreadId, navigateToThread, showTrash, loadTrash],
+    [threads, loadThreads, currentConversationId, navigateToThread, showTrash, loadTrash],
   );
 
   const handleQuickCreate = useCallback(
@@ -410,22 +577,100 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
   );
 
   const normalizedQuery = searchQuery.trim().toLowerCase();
-  const liveThreads = useMemo(() => mergeLiveActivityIntoThreads(threads, threadStates), [threads, threadStates]);
-  const filteredThreads = useMemo(() => {
-    if (!normalizedQuery) return liveThreads;
-    return liveThreads.filter((thread) => {
-      const title = (thread.title ?? '').toLowerCase();
-      const fallback = (thread.id === 'default' ? '大厅' : '未命名对话').toLowerCase();
-      const project = (thread.projectPath ?? '').toLowerCase();
-      const threadId = thread.id.toLowerCase();
-      return (
-        title.includes(normalizedQuery) ||
-        fallback.includes(normalizedQuery) ||
-        project.includes(normalizedQuery) ||
-        threadId.includes(normalizedQuery)
-      );
-    });
-  }, [liveThreads, normalizedQuery]);
+  const liveThreads = threads;
+  const {
+    clusters: attentionClusters,
+    isOpen: isAttentionClusterOpen,
+    toggle: toggleAttentionCluster,
+    titleFor: attentionClusterTitle,
+    rename: renameAttentionCluster,
+    savedGroups: attentionSavedGroups,
+    mutateGroup: mutateAttentionGroup,
+    preferenceError: attentionPreferenceError,
+    groupLoadState: attentionLoadState,
+    groupLoadError: attentionLoadError,
+    reloadGroups: reloadAttentionGroups,
+    openGroup: openAttentionGroup,
+    memberSort: attentionMemberSort,
+    changeMemberSort: changeAttentionMemberSort,
+    pendingSort: attentionPendingSort,
+  } = useAttentionClusters(liveThreads, currentThreadId, normalizedQuery);
+  const [attentionArrangeMode, setAttentionArrangeMode] = useState(false);
+  const [searchGroupRequest, setSearchGroupRequest] = useState<SearchGroupRequest | null>(null);
+  const searchGroupOperation = useRef(0);
+  const [searchGroupSuccess, setSearchGroupSuccess] = useState<SearchGroupSuccess | null>(null);
+  const [locateGroupId, setLocateGroupId] = useState<string | null>(null);
+  const searchGroupTip = useSearchGroupTip();
+  const openSearchGroup = useCallback((request: SearchGroupRequest) => {
+    setAttentionArrangeMode(false);
+    setSearchGroupRequest(request);
+  }, []);
+  const searchGroupMatches = useMemo(
+    () =>
+      normalizedQuery
+        ? liveThreads.filter((thread) => isGroupableThread(thread) && matchesThreadSearch(thread, normalizedQuery))
+        : [],
+    [liveThreads, normalizedQuery],
+  );
+  const [draggedAttentionThreadId, setDraggedAttentionThreadId] = useState<string | null>(null);
+  const draggedAttentionThreadIdRef = useRef<string | null>(null);
+  const attentionClusterByThreadId = useMemo(() => {
+    const byThreadId = new Map<string, (typeof attentionClusters)[number]>();
+    for (const cluster of attentionClusters) {
+      for (const memberId of cluster.memberIds) byThreadId.set(memberId, cluster);
+    }
+    return byThreadId;
+  }, [attentionClusters]);
+  const commitAttentionThreadDrop = useCallback(
+    (sourceThreadId: string, targetThreadId: string) => {
+      if (sourceThreadId === targetThreadId) return;
+      const targetCluster = attentionClusterByThreadId.get(targetThreadId);
+      if (targetCluster?.groupId) {
+        void mutateAttentionGroup({
+          action: 'move',
+          groupId: targetCluster.groupId,
+          threadId: sourceThreadId,
+          beforeThreadId: targetThreadId,
+        });
+        return;
+      }
+      const threadIds = targetCluster
+        ? [...new Set([...targetCluster.memberIds, sourceThreadId])]
+        : [targetThreadId, sourceThreadId];
+      void mutateAttentionGroup({ action: 'create', threadIds });
+    },
+    [attentionClusterByThreadId, mutateAttentionGroup],
+  );
+  const commitAttentionClusterDrop = useCallback(
+    (sourceThreadId: string, targetCluster: (typeof attentionClusters)[number]) => {
+      if (targetCluster.memberIds.includes(sourceThreadId)) return;
+      if (targetCluster.groupId) {
+        void mutateAttentionGroup({
+          action: 'move',
+          groupId: targetCluster.groupId,
+          threadId: sourceThreadId,
+        });
+        return;
+      }
+      void mutateAttentionGroup({
+        action: 'create',
+        threadIds: [...new Set([...targetCluster.memberIds, sourceThreadId])],
+      });
+    },
+    [mutateAttentionGroup],
+  );
+  const removeAttentionThreadFromGroup = useCallback(
+    (threadId: string) => {
+      const sourceCluster = attentionClusterByThreadId.get(threadId);
+      if (!sourceCluster?.groupId) return;
+      void mutateAttentionGroup({ action: 'remove', groupId: sourceCluster.groupId, threadId });
+    },
+    [attentionClusterByThreadId, mutateAttentionGroup],
+  );
+  const filteredThreads = useMemo(
+    () => liveThreads.filter((thread) => matchesThreadSearch(thread, normalizedQuery)),
+    [liveThreads, normalizedQuery],
+  );
 
   const { labels } = useLabelStore();
 
@@ -437,9 +682,11 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
     return filteredThreads.filter((t) => t.labels?.includes(labelFilter));
   }, [filteredThreads, labelFilter]);
 
+  const labelAssignableThreads = useMemo(() => liveThreads.filter((t) => t.id !== 'default'), [liveThreads]);
+
   const uncategorizedCount = useMemo(
-    () => liveThreads.filter((t) => !t.labels || t.labels.length === 0).length,
-    [liveThreads],
+    () => labelAssignableThreads.filter((t) => !t.labels || t.labels.length === 0).length,
+    [labelAssignableThreads],
   );
 
   const [showOrganizer, setShowOrganizer] = useState(false);
@@ -449,8 +696,8 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
   const pendingNameAssignmentsRef = useRef<Map<string, string[]>>(new Map());
 
   const uncategorizedThreads = useMemo(
-    () => liveThreads.filter((t) => !t.labels || t.labels.length === 0),
-    [liveThreads],
+    () => labelAssignableThreads.filter((t) => !t.labels || t.labels.length === 0),
+    [labelAssignableThreads],
   );
 
   const ORGANIZER_TITLE = 'Thread 整理助手';
@@ -492,8 +739,7 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
   }, [labels, uncategorizedThreads]);
 
   const findOrCreateOrganizerThread = useCallback(async () => {
-    const store = useChatStore.getState();
-    const existing = store.threads.find((t) => t.title === ORGANIZER_TITLE);
+    const existing = useSidebarProjectionStore.getState().rows.find((thread) => thread.title === ORGANIZER_TITLE);
     if (existing) return existing;
 
     const res = await apiFetch('/api/threads', {
@@ -504,7 +750,7 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
     if (!res.ok) throw new Error(`${res.status}`);
     const created = await res.json();
     await loadThreads();
-    return created as Thread;
+    return created as { id: string };
   }, [loadThreads]);
 
   const parseSuggestionsJson = useCallback(
@@ -633,7 +879,21 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
 
   const handleBatchApplyLabels = useCallback(async (assignments: Map<string, string[]>) => {
     const { batchApplyLabels, createAndResolveLabels } = await import('@/utils/batch-apply-labels');
-    const updateLabels = useChatStore.getState().updateThreadLabels;
+    const updateLabels = async (threadId: string, labels: string[]) => {
+      const ok = await executeSidebarFieldCommand({
+        threadId,
+        field: 'labels',
+        value: labels,
+        request: (signal) =>
+          apiFetch(`/api/threads/${threadId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ labels }),
+            signal,
+          }),
+      });
+      if (!ok) throw new Error(`failed to update labels for ${threadId}`);
+    };
 
     let resolvedAssignments = assignments;
     if (pendingNewLabelsRef.current.length > 0) {
@@ -674,306 +934,982 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
   const unreadIds = useMemo(() => {
     const ids = new Set<string>();
     for (const thread of threads) {
-      const ts = threadStates[thread.id];
-      if (ts && ts.unreadCount > 0) {
-        ids.add(thread.id);
-      }
+      if (thread.unreadCount > 0) ids.add(thread.id);
     }
     return ids;
-  }, [threads, threadStates]);
+  }, [threads]);
 
   // F072: Mark all threads as read
   const [isMarkingAllRead, setIsMarkingAllRead] = useState(false);
   const handleMarkAllRead = useCallback(async () => {
     setIsMarkingAllRead(true);
+    const commandIds = threads
+      .filter((thread) => thread.unreadCount > 0 || thread.hasUserMention)
+      .map((thread) =>
+        useSidebarProjectionStore.getState().beginSidebarCommand(thread.id, 'attention', {
+          unreadCount: 0,
+          hasUserMention: false,
+        }),
+      );
     try {
       const res = await apiFetch('/api/threads/read/mark-all', { method: 'POST' });
       if (res.ok) {
         useChatStore.getState().clearAllUnread();
+        await invalidateSidebarProjection();
+      } else {
+        for (const commandId of commandIds) useSidebarProjectionStore.getState().failSidebarCommand(commandId);
       }
     } catch (err) {
+      for (const commandId of commandIds) useSidebarProjectionStore.getState().failSidebarCommand(commandId);
       console.debug('[F072] mark-all-read failed:', err);
     } finally {
       setIsMarkingAllRead(false);
     }
-  }, []);
+  }, [threads]);
 
-  // F095 Phase B: Active workspace grouping
+  // V9 sidebar tabs: keep grouping derived from filtered thread data.
   const { pinnedProjects, toggleProjectPin } = useProjectPins();
-  const threadGroups = useMemo(
-    () => sortAndGroupThreadsWithWorkspace(labelFilteredThreads, unreadIds, pinnedProjects),
-    [labelFilteredThreads, unreadIds, pinnedProjects],
+  const tabs = useMemo(
+    () => buildSidebarTabs(labelFilteredThreads, pinnedProjects, unreadIds),
+    [labelFilteredThreads, pinnedProjects, unreadIds],
   );
-  const existingProjects = useMemo(() => getProjectPaths(liveThreads), [liveThreads]);
-  const showDefaultThread = (normalizedQuery.length === 0 || '大厅'.includes(normalizedQuery)) && !labelFilter;
+  const activeTabContent = useMemo(
+    () => buildSidebarTabContent(activeTab, labelFilteredThreads, pinnedProjects, unreadIds),
+    [activeTab, labelFilteredThreads, pinnedProjects, unreadIds],
+  );
+  const flatAttentionItems = useMemo(() => {
+    if (activeTabContent.kind !== 'flat' || (activeTab !== 'pinned' && activeTab !== 'recent')) return null;
+    const arranged = arrangeAttentionRows(activeTabContent.threads, liveThreads, attentionClusters, activeTab);
+    return arranged.some((item) => item.kind === 'cluster') ? arranged : null;
+  }, [activeTab, activeTabContent, attentionClusters, liveThreads]);
+  const recentThreadIds = useMemo(
+    () =>
+      new Set(
+        buildSidebarTabContent('recent', labelFilteredThreads, pinnedProjects, unreadIds).threads.map(
+          (thread) => thread.id,
+        ),
+      ),
+    [labelFilteredThreads, pinnedProjects, unreadIds],
+  );
+  const currentThread = useMemo(
+    () => labelFilteredThreads.find((thread) => thread.id === currentThreadId),
+    [labelFilteredThreads, currentThreadId],
+  );
+  const projectThreadGroups = useMemo(
+    () => buildSidebarTabContent('project', labelFilteredThreads, pinnedProjects, unreadIds).projectGroups ?? [],
+    [labelFilteredThreads, pinnedProjects, unreadIds],
+  );
+  const unfilteredProjectThreadGroups = useMemo(
+    () => buildSidebarTabContent('project', liveThreads, pinnedProjects, unreadIds).projectGroups ?? [],
+    [liveThreads, pinnedProjects, unreadIds],
+  );
+  const unfilteredRecentThreadIds = useMemo(
+    () =>
+      new Set(
+        buildSidebarTabContent('recent', liveThreads, pinnedProjects, unreadIds).threads.map((thread) => thread.id),
+      ),
+    [liveThreads, pinnedProjects, unreadIds],
+  );
+  const threadGroups = activeTab === 'project' ? projectThreadGroups : [];
 
-  // F095 Phase E: Scroll anchor — keeps visible content in place when threads reorder
-  const { onScroll: handleScrollAnchor } = useScrollAnchor(scrollContainerRef, threadGroups);
-
-  // F095: Collapse state with localStorage persistence + search/active auto-expand
   const { isCollapsed, toggleGroup, expandAll, collapseAll } = useCollapseState({
-    threadGroups,
+    threadGroups: projectThreadGroups,
     searchQuery: normalizedQuery,
     currentThreadId,
   });
+  const attentionLists = useMemo(() => {
+    const lists: Record<string, AttentionRenderItem[]> = {};
+    if (flatAttentionItems) lists.flat = flatAttentionItems;
+    if (activeTab === 'project') {
+      const sections = projectThreadGroups
+        .filter((group) => !isCollapsed(groupKeyForSection(group)))
+        .flatMap((group) => group.archivedGroups ?? [group])
+        .filter((section) => !isCollapsed(groupKeyForSection(section)));
+      for (const section of sections) {
+        lists[groupKeyForSection(section)] = arrangeAttentionRows(
+          section.threads,
+          section.threads,
+          attentionClusters,
+          'project',
+        );
+      }
+    }
+    return lists;
+  }, [activeTab, attentionClusters, flatAttentionItems, isCollapsed, projectThreadGroups]);
+  const attentionListRows = useAttentionListOrder(
+    attentionLists,
+    isAttentionClusterOpen,
+    attentionMemberSort,
+    JSON.stringify([activeTab, normalizedQuery, labelFilter, attentionArrangeMode]),
+    normalizedQuery,
+    attentionArrangeMode,
+  );
+  const flatAttentionRows = attentionListRows.flat ?? null;
+
+  const filterKey =
+    normalizedQuery.length === 0 && labelFilter === null ? '' : JSON.stringify([normalizedQuery, labelFilter]);
+
+  useEffect(() => {
+    const firstNonEmptyTab = tabs.find((tab) => tab.count > 0);
+    dispatchTabEvent({
+      type: 'filter-reconciled',
+      filterKey,
+      activeTabHasThreads: activeTabContent.threads.length > 0,
+      firstNonEmptyTab: firstNonEmptyTab ? firstNonEmptyTab.id : null,
+    });
+  }, [activeTabContent.threads.length, filterKey, tabs]);
+
+  useEffect(() => {
+    if (tabState.initialThreadResolved) return;
+    if (currentThreadId !== routeThreadId) return;
+    if (routeThreadId === 'default') {
+      dispatchTabEvent({
+        type: 'initial-thread-reconciled',
+        visibleInActiveTab: true,
+        destinationTab: null,
+      });
+      return;
+    }
+    if (!currentThread) return;
+    dispatchTabEvent({
+      type: 'initial-thread-reconciled',
+      visibleInActiveTab: activeTabContent.threads.some((thread) => thread.id === currentThread.id),
+      destinationTab: naturalTabForThread(currentThread, recentThreadIds),
+    });
+  }, [
+    activeTabContent.threads,
+    currentThread,
+    currentThreadId,
+    recentThreadIds,
+    routeThreadId,
+    tabState.initialThreadResolved,
+  ]);
+
+  const handleSelectTab = useCallback(
+    (tab: SidebarTabId) => {
+      writeBrowserSidebarTabPreference(tab);
+      dispatchTabEvent({ type: 'user-selected-tab', tab, filterKey });
+    },
+    [filterKey],
+  );
+
+  // Tab overflow scroll: show arrow buttons when tabs overflow the row
+  const updateTabScrollState = useCallback(() => {
+    const el = tabScrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 1);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 1);
+  }, []);
+
+  const scrollTabs = useCallback((dir: 'left' | 'right') => {
+    tabScrollRef.current?.scrollBy({ left: dir === 'left' ? -120 : 120, behavior: 'smooth' });
+  }, []);
+
+  useEffect(() => {
+    updateTabScrollState();
+  }, [tabs, updateTabScrollState]);
+
+  useEffect(() => {
+    window.addEventListener('resize', updateTabScrollState);
+    const el = tabScrollRef.current;
+    let observer: ResizeObserver | undefined;
+    if (el) {
+      observer = new ResizeObserver(() => updateTabScrollState());
+      observer.observe(el);
+    }
+    return () => {
+      window.removeEventListener('resize', updateTabScrollState);
+      observer?.disconnect();
+    };
+  }, [updateTabScrollState]);
+
+  const existingProjects = useMemo(() => getProjectPaths(liveThreads), [liveThreads]);
+  const hasLabelFilters = labels.length > 0 || uncategorizedCount > 0;
+  const showTabRow = tabs.length > 0 || hasLabelFilters;
+  const activeTabIsEmpty =
+    activeTabContent.kind === 'project' ? threadGroups.length === 0 : activeTabContent.threads.length === 0;
+
+  const selectedThreadInActiveTab = useMemo(
+    () => activeTabContent.threads.find((thread) => thread.id === currentThreadId),
+    [activeTabContent.threads, currentThreadId],
+  );
+  const revealMissingVirtualThread = useCallback(
+    (threadId: string) => {
+      if (activeTabContent.kind !== 'flat') return;
+      const index = flatAttentionRows
+        ? flatAttentionRows.findIndex((row) =>
+            row.kind === 'thread'
+              ? row.thread.id === threadId
+              : row.kind === 'cluster-member' && row.member.id === threadId,
+          )
+        : activeTabContent.threads.findIndex((thread) => thread.id === threadId);
+      if (index >= 0) virtualThreadListRef.current?.ensureIndexVisible(index);
+    },
+    [activeTabContent, flatAttentionRows],
+  );
+
+  // F095 Phase E: Scroll anchor — keeps visible content in place when threads reorder
+  const { onScroll: handleScrollAnchor } = useScrollAnchor(scrollContainerRef, activeTabContent.threads, {
+    selectedThread: selectedThreadInActiveTab
+      ? {
+          threadId: selectedThreadInActiveTab.id,
+          isWorking: selectedThreadInActiveTab.presence?.status === 'working',
+        }
+      : null,
+    onSelectedThreadMissing: revealMissingVirtualThread,
+  });
+
   const sidebarWidthClass = className === undefined ? 'w-60' : className;
+
+  const scrollToActiveThread = useCallback(() => {
+    if (!currentThreadId || !scrollContainerRef.current) return;
+    const activeThread = liveThreads.find((thread) => thread.id === currentThreadId);
+    if (!activeThread) return;
+
+    const needsFilterClear = searchQuery.trim() !== '' || labelFilter !== null;
+    if (searchQuery.trim()) setSearchQuery('');
+    if (labelFilter) setLabelFilter(null);
+
+    const ownerKeys: string[] = [];
+    for (const group of unfilteredProjectThreadGroups) {
+      if (!group.threads.some((thread) => thread.id === currentThreadId)) continue;
+      ownerKeys.push(groupKeyForSection(group));
+      const archivedOwner = group.archivedGroups?.find((archivedGroup) =>
+        archivedGroup.threads.some((thread) => thread.id === currentThreadId),
+      );
+      if (archivedOwner) ownerKeys.push(groupKeyForSection(archivedOwner));
+      break;
+    }
+    const collapsedOwnerKeys = ownerKeys.filter(isCollapsed);
+    const needsGroupExpand = collapsedOwnerKeys.length > 0;
+    for (const ownerKey of collapsedOwnerKeys) toggleGroup(ownerKey);
+
+    const targetTab = naturalTabForThread(activeThread, unfilteredRecentThreadIds);
+    const targetFlatThreads =
+      targetTab === 'project'
+        ? null
+        : buildSidebarTabContent(targetTab, liveThreads, pinnedProjects, unreadIds).threads;
+    const targetAttentionRows =
+      activeTab === targetTab && !needsFilterClear && flatAttentionRows
+        ? flatAttentionRows
+        : targetFlatThreads && (targetTab === 'pinned' || targetTab === 'recent')
+          ? flattenAttentionRows(
+              orderAttentionList(
+                arrangeAttentionRows(targetFlatThreads, liveThreads, attentionClusters, targetTab),
+                isAttentionClusterOpen,
+                attentionArrangeMode ? {} : attentionMemberSort,
+              ).items,
+              isAttentionClusterOpen,
+              '',
+            )
+          : null;
+    const needsTabSwitch = activeTab !== targetTab;
+    if (needsTabSwitch) handleSelectTab(targetTab);
+
+    const scrollAndHighlight = (allowVirtualScroll = true) => {
+      const element = Array.from(
+        scrollContainerRef.current?.querySelectorAll<HTMLElement>('[data-thread-id]') ?? [],
+      ).find((candidate) => candidate.dataset.threadId === currentThreadId);
+      if (!element) {
+        if (allowVirtualScroll && targetFlatThreads) {
+          const attentionIndex = targetAttentionRows?.findIndex((row) => {
+            if (row.kind === 'thread') return row.thread.id === currentThreadId;
+            if (row.kind === 'cluster-member') return row.member.id === currentThreadId;
+            return row.cluster.memberIds.includes(currentThreadId);
+          });
+          const index =
+            attentionIndex !== undefined && attentionIndex >= 0
+              ? attentionIndex
+              : targetFlatThreads.findIndex((thread) => thread.id === currentThreadId);
+          if (index >= 0 && virtualThreadListRef.current) {
+            virtualThreadListRef.current.scrollToIndex(index);
+            requestAnimationFrame(() => scrollAndHighlight(false));
+          }
+        }
+        return;
+      }
+      element.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      element.classList.add('ring-2', 'ring-cafe-accent', 'ring-opacity-60');
+      setTimeout(() => element.classList.remove('ring-2', 'ring-cafe-accent', 'ring-opacity-60'), 1200);
+    };
+
+    if (needsFilterClear || needsGroupExpand || needsTabSwitch) {
+      requestAnimationFrame(() => requestAnimationFrame(() => scrollAndHighlight()));
+    } else {
+      scrollAndHighlight();
+    }
+  }, [
+    activeTab,
+    attentionArrangeMode,
+    attentionMemberSort,
+    flatAttentionRows,
+    attentionClusters,
+    currentThreadId,
+    handleSelectTab,
+    isCollapsed,
+    isAttentionClusterOpen,
+    labelFilter,
+    liveThreads,
+    pinnedProjects,
+    searchQuery,
+    toggleGroup,
+    unfilteredProjectThreadGroups,
+    unfilteredRecentThreadIds,
+    unreadIds,
+  ]);
+
+  const revealSearchGroup = (
+    groupId: string,
+    memberIds = attentionSavedGroups.find((group) => group.id === groupId)?.threadIds ?? [],
+  ) => {
+    void openAttentionGroup(groupId);
+    setSearchQuery('');
+    setLabelFilter(null);
+    if (
+      activeTab !== 'project' &&
+      activeTab !== 'recent' &&
+      !(activeTab === 'pinned' && liveThreads.some((thread) => memberIds.includes(thread.id) && thread.pinned))
+    ) {
+      handleSelectTab('recent');
+    }
+    for (const group of unfilteredProjectThreadGroups) {
+      if (group.threads.some((thread) => memberIds.includes(thread.id)) && isCollapsed(groupKeyForSection(group)))
+        toggleGroup(groupKeyForSection(group));
+    }
+    setLocateGroupId(groupId);
+  };
+  useEffect(() => {
+    if (!locateGroupId || searchGroupRequest || normalizedQuery) return;
+    const index = flatAttentionRows?.findIndex(
+      (row) => row.kind === 'cluster-header' && row.cluster.groupId === locateGroupId,
+    );
+    if (index !== undefined && index >= 0) virtualThreadListRef.current?.scrollToIndex(index);
+    const frame = requestAnimationFrame(() => {
+      const element = scrollContainerRef.current?.querySelector<HTMLElement>(
+        `[data-attention-cluster="group:${locateGroupId}"]`,
+      );
+      if (element) {
+        element.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        setLocateGroupId(null);
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [locateGroupId, flatAttentionRows, searchGroupRequest, normalizedQuery, activeTab]);
+  const searchGroupAction =
+    searchGroupMatches.length > 0 ? (
+      <SearchGroupAction
+        count={searchGroupMatches.length}
+        loadState={attentionLoadState}
+        errorMessage={attentionLoadError}
+        onOpen={() => openSearchGroup({ query: searchQuery.trim() })}
+        onRetry={() => void reloadAttentionGroups()}
+      />
+    ) : null;
+
+  const renderThreadItem = useCallback(
+    (thread: SidebarSnapshotRow, indented = false) => {
+      const groupable = isGroupableThread(thread);
+      return (
+        <AttentionGroupableThreadRow
+          key={thread.id}
+          threadId={thread.id}
+          threadTitle={thread.title}
+          groupable={groupable}
+          arrangeMode={attentionArrangeMode}
+          draggedThreadId={draggedAttentionThreadId}
+          onEnterArrange={() => setAttentionArrangeMode(true)}
+          onDragStartThread={(threadId) => {
+            setDraggedAttentionThreadId(thread.id);
+            draggedAttentionThreadIdRef.current = threadId;
+          }}
+          onDragEndThread={() => {
+            draggedAttentionThreadIdRef.current = null;
+            setDraggedAttentionThreadId(null);
+          }}
+          getDraggedThreadId={() => draggedAttentionThreadIdRef.current}
+          onDropThread={commitAttentionThreadDrop}
+        >
+          <ThreadItem
+            id={thread.id}
+            title={thread.title}
+            participants={thread.participants}
+            lastActiveAt={thread.lastActiveAt}
+            isActive={currentConversationId === thread.id}
+            onSelect={handleSelect}
+            onDelete={handleDeleteRequest}
+            onRename={handleRename}
+            onTogglePin={handleTogglePin}
+            onToggleFavorite={handleToggleFavorite}
+            onUpdatePreferredCats={handleUpdatePreferredCats}
+            onUpdateLabels={handleUpdateLabels}
+            onOrganize={
+              groupable && attentionLoadState === 'ready'
+                ? () => openSearchGroup({ query: '', threadId: thread.id })
+                : undefined
+            }
+            onReplay={handleReplay}
+            isPinned={thread.pinned}
+            isFavorited={thread.favorited}
+            presence={thread.presence}
+            unreadCount={thread.unreadCount}
+            hasUserMention={thread.hasUserMention}
+            projectPath={thread.projectPath}
+            indented={indented}
+            preferredCats={thread.preferredCats}
+            threadLabels={thread.labels}
+            isHubThread={thread.isHubThread}
+            systemKind={thread.systemKind}
+          />
+        </AttentionGroupableThreadRow>
+      );
+    },
+    [
+      attentionArrangeMode,
+      attentionLoadState,
+      openSearchGroup,
+      commitAttentionThreadDrop,
+      currentConversationId,
+      draggedAttentionThreadId,
+      handleDeleteRequest,
+      handleRename,
+      handleReplay,
+      handleSelect,
+      handleToggleFavorite,
+      handleTogglePin,
+      handleUpdateLabels,
+      handleUpdatePreferredCats,
+    ],
+  );
+
+  const renderAttentionRow = useCallback(
+    (row: AttentionListRow) => {
+      if (row.kind === 'thread') {
+        return (
+          <div key={row.key} className="h-20">
+            {renderThreadItem(row.thread)}
+          </div>
+        );
+      }
+      if (row.kind === 'cluster-member') {
+        return (
+          <AttentionClusterMember
+            key={row.key}
+            cluster={row.cluster}
+            member={row.member}
+            isFirst={row.isFirst}
+            isLast={row.isLast}
+            renderThread={renderThreadItem}
+          />
+        );
+      }
+      return (
+        <div
+          key={row.key}
+          role="group"
+          className="h-20"
+          aria-label={`对话组：${attentionClusterTitle(row.cluster)}`}
+          data-attention-drop-group={row.cluster.anchor}
+          onDragOver={(event) => {
+            if (!draggedAttentionThreadId || row.cluster.memberIds.includes(draggedAttentionThreadId)) return;
+            event.preventDefault();
+            if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+          }}
+          onDrop={(event) => {
+            event.preventDefault();
+            const sourceThreadId =
+              draggedAttentionThreadIdRef.current || event.dataTransfer?.getData('text/plain') || null;
+            if (sourceThreadId) commitAttentionClusterDrop(sourceThreadId, row.cluster);
+            draggedAttentionThreadIdRef.current = null;
+            setDraggedAttentionThreadId(null);
+          }}
+        >
+          <AttentionClusterHeader
+            cluster={row.cluster}
+            members={row.members}
+            expanded={row.expanded}
+            displayTitle={attentionClusterTitle(row.cluster)}
+            onToggle={() => toggleAttentionCluster(row.cluster)}
+            onRename={(alias) => renameAttentionCluster(row.cluster, alias)}
+            onAdd={() => openSearchGroup({ query: '', groupId: row.cluster.groupId })}
+            memberSort={attentionArrangeMode ? 'manual' : (attentionMemberSort[row.cluster.anchor] ?? 'manual')}
+            onMemberSort={(mode) => {
+              void changeAttentionMemberSort(row.cluster, mode);
+            }}
+            sortingDisabled={
+              attentionArrangeMode || attentionLoadState !== 'ready' || attentionPendingSort.has(row.cluster.anchor)
+            }
+          />
+        </div>
+      );
+    },
+    [
+      attentionArrangeMode,
+      attentionMemberSort,
+      attentionPendingSort,
+      attentionLoadState,
+      changeAttentionMemberSort,
+      attentionClusterTitle,
+      openSearchGroup,
+      commitAttentionClusterDrop,
+      draggedAttentionThreadId,
+      renameAttentionCluster,
+      renderThreadItem,
+      toggleAttentionCluster,
+    ],
+  );
+
+  const renderProjectSection = useCallback(
+    (group: ThreadGroup<SidebarSnapshotRow>) => {
+      const groupKey = groupKeyForSection(group);
+      const projectPath = group.projectPath;
+
+      return (
+        <SectionGroup
+          key={groupKey}
+          label={projectSectionLabel(group, projectNames)}
+          count={group.threads.length}
+          isCollapsed={isCollapsed(groupKey)}
+          onToggle={() => toggleGroup(groupKey)}
+          projectPath={projectPath}
+          governanceStatus={forProjectPath(projectPath, (path) => govHealth[path])}
+          onToggleProjectPin={forProjectPath(projectPath, (path) => () => toggleProjectPin(path))}
+          isProjectPinned={forProjectPath(projectPath, (path) => pinnedProjects.has(path))}
+          onQuickCreate={forProjectPath(projectPath, (path) => () => handleQuickCreate(path))}
+          onOpenInFinder={forOpenableProject(projectPath, (path) => () => handleOpenInFinder(path))}
+          onRenameProject={forProjectPath(projectPath, (path) => (name: string) => handleRenameProject(path, name))}
+          onArchiveThreads={forProjectPath(projectPath, (path) => () => handleArchiveThreads(path))}
+        >
+          {attentionListRows[groupKey]?.map(renderAttentionRow)}
+        </SectionGroup>
+      );
+    },
+    [
+      govHealth,
+      handleArchiveThreads,
+      handleOpenInFinder,
+      handleQuickCreate,
+      handleRenameProject,
+      attentionListRows,
+      isCollapsed,
+      pinnedProjects,
+      projectNames,
+      renderAttentionRow,
+      toggleGroup,
+      toggleProjectPin,
+    ],
+  );
+
+  const renderProjectTabGroup = useCallback(
+    (group: ThreadGroup<SidebarSnapshotRow>) => {
+      const groupKey = groupKeyForSection(group);
+      if (group.type !== 'archived-container') return renderProjectSection(group);
+
+      return (
+        <SectionGroup
+          key={groupKey}
+          label={group.label}
+          icon="archive"
+          count={group.threads.length}
+          isCollapsed={isCollapsed(groupKey)}
+          onToggle={() => toggleGroup(groupKey)}
+        >
+          {group.archivedGroups?.map((archivedGroup) => renderProjectSection(archivedGroup))}
+        </SectionGroup>
+      );
+    },
+    [isCollapsed, renderProjectSection, toggleGroup],
+  );
 
   return (
     <>
-      <aside className={`${sidebarWidthClass} bg-[var(--console-panel-bg)] flex flex-col h-full`}>
-        <div className="px-3 pt-3 pb-2 flex items-center justify-between">
-          <span className="text-sm font-semibold text-cafe-black">对话</span>
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => setShowBootcampList(true)}
-              className="p-1.5 rounded-lg text-cafe-accent hover:bg-accent-50 transition-colors"
-              title="猫猫训练营"
-              data-testid="sidebar-bootcamp"
-              data-guide-id="sidebar.bootcamp"
-            >
-              <BootcampIcon className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowPicker(true)}
-              disabled={isCreating}
-              className="console-button-primary text-xs disabled:opacity-40"
-              data-guide-id="sidebar.new-thread"
-            >
-              {isCreating ? '...' : '+ 新对话'}
-            </button>
-          </div>
-        </div>
+      <aside
+        className={`${sidebarWidthClass} flex flex-col h-full ${isV2 ? '' : 'bg-[var(--console-panel-bg)]'}`}
+        style={isV2 ? { background: 'var(--shell-frame)', borderRight: '1px solid var(--shell-hairline)' } : undefined}
+        data-shell-sidebar={isV2 ? 'v2' : undefined}
+      >
+        {isV2 ? (
+          <ThreadSidebarV2Header
+            creationPhase={creationPhase}
+            onNewThread={() => setShowPicker(true)}
+            onCollapse={onClose}
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
+            bindWarning={bindWarning}
+            uncategorizedCount={uncategorizedCount}
+            onOrganizeWithCat={handleOrganizeWithCat}
+            onOpenOrganizer={() => setShowOrganizer(true)}
+            onOpenBootcamp={() => setShowBootcampList(true)}
+            unreadCount={unreadIds.size}
+            isMarkingAllRead={isMarkingAllRead}
+            onMarkAllRead={handleMarkAllRead}
+            activeDestination={activeDestination}
+          />
+        ) : (
+          <>
+            <div className="px-3 pt-3 pb-2 flex items-center justify-between">
+              <span className="text-sm font-semibold text-cafe-black">对话</span>
+              <div className="flex items-center gap-1.5">
+                {uncategorizedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleOrganizeWithCat}
+                    className="p-1.5 rounded-lg text-cafe-muted hover:bg-[var(--console-hover-bg)] hover:text-conn-amber-text transition-colors"
+                    title={`猫猫帮你分类 (${uncategorizedCount} 未分类)`}
+                  >
+                    <SparkleIcon />
+                  </button>
+                )}
+                {uncategorizedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setShowOrganizer(true)}
+                    className="p-1.5 rounded-lg text-cafe-muted hover:bg-[var(--console-hover-bg)] hover:text-cafe-secondary transition-colors"
+                    title={`手动批量分类 (${uncategorizedCount} 未分类)`}
+                  >
+                    <GridIcon />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setShowBootcampList(true)}
+                  className="p-1.5 rounded-lg text-cafe-accent hover:bg-accent-50 transition-colors"
+                  title="猫猫训练营"
+                  data-testid="sidebar-bootcamp"
+                  data-guide-id="sidebar.bootcamp"
+                >
+                  <BootcampIcon className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPicker(true)}
+                  disabled={isCreating}
+                  className="console-button-primary text-xs disabled:opacity-40"
+                  data-guide-id="sidebar.new-thread"
+                >
+                  {creationPhase === 'reconciling' ? '请求超时，核对中…' : isCreating ? '...' : '+ 新对话'}
+                </button>
+              </div>
+            </div>
 
-        {bindWarning && (
-          <div className="px-3 py-1.5 bg-conn-amber-bg border-b border-conn-amber-ring text-micro text-conn-amber-text">
-            {bindWarning}
-          </div>
+            {bindWarning && (
+              <div className="px-3 py-1.5 bg-conn-amber-bg border-b border-conn-amber-ring text-micro text-conn-amber-text">
+                {bindWarning}
+              </div>
+            )}
+
+            <div className="px-3 pb-2">
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="搜索对话、项目或 ID..."
+                  className="flex-1 min-w-0 rounded-lg bg-[var(--console-card-soft-bg)] px-2.5 py-1.5 text-xs text-cafe-secondary placeholder:text-cafe-muted focus:outline-none focus:ring-1 focus:ring-[var(--console-input-stroke)]"
+                />
+                {unreadIds.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleMarkAllRead}
+                    disabled={isMarkingAllRead}
+                    className="shrink-0 rounded-md bg-transparent px-2 py-0.5 text-micro text-cafe-secondary hover:bg-[var(--console-hover-bg)] hover:text-cafe-black disabled:opacity-40 transition-colors whitespace-nowrap"
+                    data-testid="mark-all-read-btn"
+                  >
+                    {isMarkingAllRead ? '...' : '全部已读'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </>
         )}
 
-        <div className="px-3 pb-2">
-          <div className="flex items-center gap-1.5">
-            <input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="搜索对话、项目或 ID..."
-              className="flex-1 min-w-0 rounded-lg bg-[var(--console-card-soft-bg)] px-2.5 py-1.5 text-xs text-cafe-secondary placeholder:text-cafe-muted focus:outline-none focus:ring-1 focus:ring-[var(--console-input-stroke)]"
-            />
-            {unreadIds.size > 0 && (
-              <button
-                type="button"
-                onClick={handleMarkAllRead}
-                disabled={isMarkingAllRead}
-                className="shrink-0 rounded-md bg-transparent px-2 py-0.5 text-micro text-cafe-secondary hover:bg-[var(--console-hover-bg)] hover:text-cafe-black disabled:opacity-40 transition-colors whitespace-nowrap"
-                data-testid="mark-all-read-btn"
-              >
-                {isMarkingAllRead ? '...' : '全部已读'}
-              </button>
-            )}
-          </div>
-        </div>
-
-        <LabelFilterBar
-          labels={labels}
-          selectedFilter={labelFilter}
-          onSelect={setLabelFilter}
-          uncategorizedCount={uncategorizedCount}
-          onOrganize={handleOrganizeWithCat}
-          onManualOrganize={() => setShowOrganizer(true)}
-        />
-
-        <div ref={scrollContainerRef} onScroll={handleScrollAnchor} className="flex-1 overflow-y-auto">
+        <div
+          ref={scrollContainerRef}
+          onScroll={handleScrollAnchor}
+          className="flex-1 overflow-y-auto [scrollbar-width:thin] [scrollbar-color:color-mix(in_srgb,var(--cafe-text-muted)_72%,transparent)_transparent] [&::-webkit-scrollbar]:w-2.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:border-[3px] [&::-webkit-scrollbar-thumb]:border-solid [&::-webkit-scrollbar-thumb]:border-transparent [&::-webkit-scrollbar-thumb]:bg-clip-content [&::-webkit-scrollbar-thumb]:[background-color:color-mix(in_srgb,var(--cafe-text-muted)_72%,transparent)]"
+        >
           {isLoadingThreads && threads.length === 0 && (
             <div className="text-center py-4 text-xs text-cafe-muted">加载中...</div>
           )}
 
-          {showDefaultThread && (
-            <ThreadItem
-              id="default"
-              title="大厅"
-              participants={[]}
-              lastActiveAt={Date.now()}
-              isActive={currentThreadId === 'default'}
-              onSelect={handleSelect}
-              threadState={getThreadState('default')}
+          {showTabRow && isV2 && (
+            <SidebarViewBarV2
+              tabs={tabs}
+              activeTab={activeTab}
+              onSelectTab={handleSelectTab}
+              labels={labels}
+              labelFilter={labelFilter}
+              onLabelFilter={setLabelFilter}
+              uncategorizedCount={uncategorizedCount}
             />
           )}
-
-          {threadGroups.length > 0 && (
-            <div className="flex items-center justify-end px-3 pt-1.5">
-              <button
-                type="button"
-                onClick={expandAll}
-                className="text-micro text-cafe-muted hover:text-cafe-accent transition-colors"
-                data-testid="expand-all-btn"
+          {showTabRow && !isV2 && (
+            <div
+              className="sticky top-0 z-10 flex items-stretch border-b border-cafe-subtle bg-[var(--console-panel-bg)] pt-2 px-2"
+              data-testid="sidebar-tabs-row"
+              data-scroll-occluder="true"
+            >
+              {canScrollLeft && (
+                <button
+                  type="button"
+                  onClick={() => scrollTabs('left')}
+                  className="flex flex-shrink-0 items-center justify-center w-5 rounded-t-md text-cafe-muted hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent"
+                  aria-label="向左滚动"
+                  data-testid="sidebar-tab-scroll-left"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-3.5 w-3.5"
+                    aria-hidden="true"
+                  >
+                    <path d="M15 18l-6-6 6-6" />
+                  </svg>
+                </button>
+              )}
+              <div
+                ref={tabScrollRef}
+                onScroll={updateTabScrollState}
+                className="min-w-0 flex-1 overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                data-testid="sidebar-tabs-scroll"
               >
-                全部展开
-              </button>
-              <span className="text-micro text-cafe-muted mx-1">/</span>
-              <button
-                type="button"
-                onClick={collapseAll}
-                className="text-micro text-cafe-muted hover:text-cafe-accent transition-colors"
-                data-testid="collapse-all-btn"
-              >
-                全部折叠
-              </button>
+                <div className="flex w-max mx-auto" role="tablist" aria-label="对话分类">
+                  {tabs.map((tab) => (
+                    <button
+                      key={tab.id}
+                      ref={(node) => {
+                        tabRefs.current[tab.id] = node;
+                      }}
+                      type="button"
+                      role="tab"
+                      aria-selected={activeTab === tab.id}
+                      onClick={() => handleSelectTab(tab.id)}
+                      className={`flex flex-shrink-0 items-center gap-1 rounded-t-md border-b-2 px-1.5 py-1.5 text-micro font-medium transition-colors ${
+                        activeTab === tab.id
+                          ? 'border-cafe-accent text-cafe-accent'
+                          : 'border-transparent text-cafe-muted hover:bg-[var(--console-hover-bg)] hover:text-cafe-secondary'
+                      }`}
+                      data-testid={`sidebar-tab-${tab.id}`}
+                    >
+                      <SidebarTabIcon id={tab.id} className="h-3.5 w-3.5 shrink-0" />
+                      <span>{tab.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <LabelFilterBar
+                labels={labels}
+                selectedFilter={labelFilter}
+                onSelect={setLabelFilter}
+                uncategorizedCount={uncategorizedCount}
+              />
+              {canScrollRight && (
+                <button
+                  type="button"
+                  onClick={() => scrollTabs('right')}
+                  className="flex flex-shrink-0 items-center justify-center w-5 rounded-t-md text-cafe-muted hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent"
+                  aria-label="向右滚动"
+                  data-testid="sidebar-tab-scroll-right"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth={2}
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className="h-3.5 w-3.5"
+                    aria-hidden="true"
+                  >
+                    <path d="M9 6l6 6-6 6" />
+                  </svg>
+                </button>
+              )}
             </div>
           )}
 
-          {threadGroups.map((group) => {
-            const groupKey = group.projectPath ?? group.type;
-            const icon =
-              group.type === 'pinned'
-                ? ('pin' as const)
-                : group.type === 'favorites'
-                  ? ('star' as const)
-                  : group.type === 'recent'
-                    ? ('clock' as const)
-                    : group.type === 'system'
-                      ? ('system' as const)
-                      : undefined;
-
-            // Archived container: render nested project groups
-            if (group.type === 'archived-container') {
-              return (
-                <SectionGroup
-                  key="archived-container"
-                  label={group.label}
-                  icon="archive"
-                  count={group.archivedGroups?.length ?? 0}
-                  isCollapsed={isCollapsed('archived-container')}
-                  onToggle={() => toggleGroup('archived-container')}
-                >
-                  {group.archivedGroups?.map((sub) => {
-                    const subKey = sub.projectPath ?? sub.type;
-                    return (
-                      <SectionGroup
-                        key={subKey}
-                        label={sub.projectPath ? (projectNames.get(sub.projectPath) ?? sub.label) : sub.label}
-                        count={sub.threads.length}
-                        isCollapsed={isCollapsed(subKey)}
-                        onToggle={() => toggleGroup(subKey)}
-                        projectPath={sub.projectPath}
-                        governanceStatus={sub.projectPath ? govHealth[sub.projectPath] : undefined}
-                        onToggleProjectPin={sub.projectPath ? () => toggleProjectPin(sub.projectPath!) : undefined}
-                        isProjectPinned={sub.projectPath ? pinnedProjects.has(sub.projectPath) : undefined}
-                        onQuickCreate={sub.projectPath ? () => handleQuickCreate(sub.projectPath!) : undefined}
-                        onOpenInFinder={
-                          sub.projectPath && sub.projectPath !== 'default'
-                            ? () => handleOpenInFinder(sub.projectPath!)
-                            : undefined
-                        }
-                        onRenameProject={
-                          sub.projectPath ? (name: string) => handleRenameProject(sub.projectPath!, name) : undefined
-                        }
-                        onArchiveThreads={sub.projectPath ? () => handleArchiveThreads(sub.projectPath!) : undefined}
-                      >
-                        {sub.threads.map((t) => (
-                          <ThreadItem
-                            key={t.id}
-                            id={t.id}
-                            title={t.title}
-                            participants={t.participants}
-                            lastActiveAt={t.lastActiveAt}
-                            isActive={currentThreadId === t.id}
-                            onSelect={handleSelect}
-                            onDelete={handleDeleteRequest}
-                            onRename={handleRename}
-                            onTogglePin={handleTogglePin}
-                            onToggleFavorite={handleToggleFavorite}
-                            onUpdatePreferredCats={handleUpdatePreferredCats}
-                            onUpdateLabels={handleUpdateLabels}
-                            isPinned={t.pinned}
-                            isFavorited={t.favorited}
-                            threadState={getThreadState(t.id)}
-                            projectPath={t.projectPath}
-                            indented
-                            preferredCats={t.preferredCats}
-                            threadLabels={t.labels}
-                            isHubThread={!!t.connectorHubState}
-                          />
-                        ))}
-                      </SectionGroup>
-                    );
-                  })}
-                </SectionGroup>
-              );
-            }
-
-            return (
-              <SectionGroup
-                key={groupKey}
-                label={group.projectPath ? (projectNames.get(group.projectPath) ?? group.label) : group.label}
-                icon={icon}
-                count={group.threads.length}
-                isCollapsed={isCollapsed(groupKey)}
-                onToggle={() => toggleGroup(groupKey)}
-                projectPath={group.projectPath}
-                governanceStatus={group.projectPath ? govHealth[group.projectPath] : undefined}
-                onToggleProjectPin={
-                  group.type === 'project' && group.projectPath ? () => toggleProjectPin(group.projectPath!) : undefined
-                }
-                isProjectPinned={
-                  group.type === 'project' && group.projectPath ? pinnedProjects.has(group.projectPath) : undefined
-                }
-                onQuickCreate={
-                  group.type === 'project' && group.projectPath
-                    ? () => handleQuickCreate(group.projectPath!)
-                    : undefined
-                }
-                // Note: system/pinned/recent/favorites groups get undefined for all project actions
-                // because group.type !== 'project'. This is intentional — only project sections
-                // should have Open in Finder / Rename / Archive / Quick Create.
-                onOpenInFinder={
-                  group.type === 'project' && group.projectPath && group.projectPath !== 'default'
-                    ? () => handleOpenInFinder(group.projectPath!)
-                    : undefined
-                }
-                onRenameProject={
-                  group.type === 'project' && group.projectPath
-                    ? (name: string) => handleRenameProject(group.projectPath!, name)
-                    : undefined
-                }
-                onArchiveThreads={
-                  group.type === 'project' && group.projectPath
-                    ? () => handleArchiveThreads(group.projectPath!)
-                    : undefined
-                }
-              >
-                {group.threads.map((t) => (
-                  <ThreadItem
-                    key={t.id}
-                    id={t.id}
-                    title={t.title}
-                    participants={t.participants}
-                    lastActiveAt={t.lastActiveAt}
-                    isActive={currentThreadId === t.id}
-                    onSelect={handleSelect}
-                    onDelete={handleDeleteRequest}
-                    onRename={handleRename}
-                    onTogglePin={handleTogglePin}
-                    onToggleFavorite={handleToggleFavorite}
-                    onUpdatePreferredCats={handleUpdatePreferredCats}
-                    onUpdateLabels={handleUpdateLabels}
-                    isPinned={t.pinned}
-                    isFavorited={t.favorited}
-                    threadState={getThreadState(t.id)}
-                    projectPath={t.projectPath}
-                    indented={group.type === 'project'}
-                    preferredCats={t.preferredCats}
-                    threadLabels={t.labels}
-                    isHubThread={!!t.connectorHubState}
+          <div className="space-y-1 pt-1.5" data-testid="sidebar-tab-content">
+            {searchGroupSuccess && (
+              <SearchGroupFeedback
+                key={searchGroupSuccess.operationId}
+                success={searchGroupSuccess}
+                onCommand={mutateAttentionGroup}
+                onClose={() => setSearchGroupSuccess(null)}
+                onLocate={() => revealSearchGroup(searchGroupSuccess.groupId)}
+              />
+            )}
+            {searchGroupRequest ? (
+              <SearchGroupOrganizer
+                request={searchGroupRequest}
+                threads={liveThreads}
+                groups={attentionSavedGroups}
+                renderThread={renderThreadItem}
+                onCommand={mutateAttentionGroup}
+                onReload={reloadAttentionGroups}
+                onClose={() => setSearchGroupRequest(null)}
+                onSaved={(preferences, groupId, count) => {
+                  setSearchGroupRequest(null);
+                  setSearchGroupSuccess({
+                    operationId: ++searchGroupOperation.current,
+                    groupId,
+                    count,
+                    undo: preferences.undo,
+                  });
+                  searchGroupTip.dismiss();
+                  revealSearchGroup(groupId, preferences.groups.find((group) => group.id === groupId)?.threadIds);
+                }}
+              />
+            ) : (
+              <>
+                {attentionArrangeMode && (
+                  <AttentionArrangeToolbar
+                    draggedThreadId={draggedAttentionThreadId}
+                    canRemoveDragged={Boolean(
+                      draggedAttentionThreadId && attentionClusterByThreadId.get(draggedAttentionThreadId)?.groupId,
+                    )}
+                    onRemoveDragged={(threadId) => {
+                      removeAttentionThreadFromGroup(threadId);
+                      draggedAttentionThreadIdRef.current = null;
+                      setDraggedAttentionThreadId(null);
+                    }}
+                    onDone={() => {
+                      draggedAttentionThreadIdRef.current = null;
+                      setDraggedAttentionThreadId(null);
+                      setAttentionArrangeMode(false);
+                    }}
                   />
-                ))}
-              </SectionGroup>
-            );
-          })}
+                )}
+                {activeTabContent.kind === 'flat' && (
+                  <>
+                    <div
+                      className="flex items-center justify-between px-3 py-1 text-micro text-cafe-muted"
+                      data-testid="flat-toolbar"
+                    >
+                      <span>
+                        {activeTabContent.threads.length} {normalizedQuery ? '条匹配' : '个对话'}
+                      </span>
+                      {searchGroupAction}
+                      <button
+                        type="button"
+                        onClick={scrollToActiveThread}
+                        className="flex items-center justify-center rounded p-1 text-cafe-muted transition-colors hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent"
+                        data-testid="select-open-session-btn"
+                        aria-label="定位当前对话"
+                        title="定位当前对话"
+                      >
+                        <LocateThreadIcon />
+                      </button>
+                    </div>
+                    {searchGroupMatches.length > 1 && !searchGroupTip.dismissed && (
+                      <SearchGroupTip onDismiss={searchGroupTip.dismiss} />
+                    )}
+                    {attentionPreferenceError && (
+                      <div
+                        role="alert"
+                        className="mx-3 mb-1 rounded-md bg-conn-amber-bg px-2 py-1 text-micro text-conn-amber-text"
+                      >
+                        {attentionPreferenceError}
+                      </div>
+                    )}
+                    {activeTabContent.threads.length >= VIRTUAL_THREAD_LIST_THRESHOLD ? (
+                      flatAttentionRows ? (
+                        <VirtualAttentionList
+                          ref={virtualThreadListRef}
+                          rows={flatAttentionRows}
+                          scrollContainerRef={scrollContainerRef}
+                          renderItem={renderAttentionRow}
+                        />
+                      ) : (
+                        <VirtualThreadList
+                          ref={virtualThreadListRef}
+                          threads={activeTabContent.threads}
+                          scrollContainerRef={scrollContainerRef}
+                          renderItem={renderThreadItem}
+                        />
+                      )
+                    ) : flatAttentionRows ? (
+                      flatAttentionRows.map(renderAttentionRow)
+                    ) : (
+                      activeTabContent.threads.map((thread) => renderThreadItem(thread))
+                    )}
+                  </>
+                )}
 
-          {normalizedQuery.length > 0 && threadGroups.length === 0 && !showDefaultThread && (
-            <div className="px-3 py-4 text-xs text-cafe-muted">没有匹配的对话</div>
-          )}
+                {activeTabContent.kind === 'project' && (threadGroups.length > 0 || searchGroupMatches.length > 0) && (
+                  <div
+                    className="flex items-center justify-between px-3 py-1 text-micro text-cafe-muted"
+                    data-testid="project-toolbar"
+                  >
+                    <span>{threadGroups.length} 个项目</span>
+                    {searchGroupAction}
+                    <div className="flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={scrollToActiveThread}
+                        className="flex items-center justify-center rounded p-1 text-cafe-muted transition-colors hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent"
+                        data-testid="project-select-open-session-btn"
+                        aria-label="定位当前对话"
+                        title="定位当前对话"
+                      >
+                        <LocateThreadIcon />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={expandAll}
+                        className="flex items-center justify-center rounded p-1 text-cafe-muted transition-colors hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent"
+                        data-testid="expand-all-btn"
+                        aria-label="展开全部项目"
+                        title="展开全部"
+                      >
+                        <svg
+                          aria-hidden="true"
+                          className="h-3.5 w-3.5"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.4}
+                        >
+                          <path d="M5 7l3-3 3 3" />
+                          <path d="M5 9l3 3 3-3" />
+                        </svg>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={collapseAll}
+                        className="flex items-center justify-center rounded p-1 text-cafe-muted transition-colors hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent"
+                        data-testid="collapse-all-btn"
+                        aria-label="折叠全部项目"
+                        title="折叠全部"
+                      >
+                        <svg
+                          aria-hidden="true"
+                          className="h-3.5 w-3.5"
+                          viewBox="0 0 16 16"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.4}
+                        >
+                          <path d="M5 4l3 3 3-3" />
+                          <path d="M5 12l3-3 3 3" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {activeTabContent.kind === 'project' && searchGroupMatches.length > 1 && !searchGroupTip.dismissed && (
+                  <SearchGroupTip onDismiss={searchGroupTip.dismiss} />
+                )}
+                {activeTabContent.kind === 'project' && threadGroups.map((group) => renderProjectTabGroup(group))}
+
+                {(normalizedQuery.length > 0 || labelFilter) && activeTabIsEmpty && (
+                  <div className="px-3 py-4 text-xs text-cafe-muted">没有匹配的对话</div>
+                )}
+              </>
+            )}
+          </div>
         </div>
 
         {/* F095 Phase D: Trash bin section */}
@@ -1089,6 +2025,63 @@ export function ThreadSidebar({ onClose, className }: ThreadSidebarProps) {
   );
 }
 
+function LocateThreadIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.4}
+    >
+      <circle cx="8" cy="8" r="5.5" />
+      <line x1="8" y1="2.5" x2="8" y2="6" />
+      <line x1="8" y1="10" x2="8" y2="13.5" />
+      <line x1="2.5" y1="8" x2="6" y2="8" />
+      <line x1="10" y1="8" x2="13.5" y2="8" />
+    </svg>
+  );
+}
+
+function SparkleIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M9.94 15.5A2 2 0 0 0 8.5 14.06l-6.14-1.58a.5.5 0 0 1 0-.96L8.5 9.94A2 2 0 0 0 9.94 8.5l1.58-6.14a.5.5 0 0 1 .96 0l1.58 6.14a2 2 0 0 0 1.44 1.44l6.14 1.58a.5.5 0 0 1 0 .96l-6.14 1.58a2 2 0 0 0-1.44 1.44l-1.58 6.14a.5.5 0 0 1-.96 0z" />
+      <path d="M20 3v4M22 5h-4" />
+    </svg>
+  );
+}
+
+function GridIcon() {
+  return (
+    <svg
+      aria-hidden="true"
+      className="h-3.5 w-3.5"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <rect x="3" y="3" width="7" height="7" rx="1" />
+      <rect x="14" y="3" width="7" height="7" rx="1" />
+      <rect x="3" y="14" width="7" height="7" rx="1" />
+      <rect x="14" y="14" width="7" height="7" rx="1" />
+    </svg>
+  );
+}
+
 /**
  * F095 Phase G: Delete confirmation dialog.
  * System threads (IM Hub) require typed confirmation (like GitHub repo deletion).
@@ -1099,11 +2092,11 @@ function DeleteConfirmDialog({
   onCancel,
   onConfirm,
 }: {
-  thread: Thread;
+  thread: SidebarSnapshotRow;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  const isSystem = !!thread.connectorHubState || !!thread.systemKind;
+  const isSystem = thread.isHubThread || !!thread.systemKind;
   const title = thread.title ?? '未命名对话';
   const [typedName, setTypedName] = useState('');
   const confirmed = !isSystem || typedName === title;
@@ -1126,7 +2119,7 @@ function DeleteConfirmDialog({
         {isSystem ? (
           <>
             <p className="text-xs text-conn-red-text mb-2">
-              这是系统级对话。删除可能影响平台功能（连接器路由或定时评估）。
+              这是系统级对话。删除可能影响平台功能（连接器路由、定时评估或猫的私人空间）。
             </p>
             <p className="text-xs text-cafe-secondary mb-2">请输入对话名称以确认删除：</p>
             <input

@@ -299,10 +299,10 @@ describe('F190 visual contract — no hard borders in card/panel components', ()
     expect(src).toContain('conn-purple-bg');
   });
 
-  it('WorkspacePanel aside: no border-l, uses console-panel-bg', () => {
-    const src = readSrc('WorkspacePanel.tsx');
+  it('F307 Workbench host: no border-l, uses console-panel-bg', () => {
+    const src = readSrc('workbench/F307ExperienceWorkbench.tsx');
     expect(src).not.toMatch(/border-l border-cafe-subtle/);
-    expect(src).toMatch(/<aside[\s\S]{0,200}bg-\[var\(--console-panel-bg\)\]/);
+    expect(src).toMatch(/<section[\s\S]{0,200}bg-\[var\(--console-panel-bg\)\]/);
   });
 
   it('SettingsNav item text uses text-compact token, no hardcoded size', () => {
@@ -436,12 +436,18 @@ describe('F190 visual contract — no hard borders in card/panel components', ()
     expect(appShell).toContain('showLine={false}');
   });
 
-  it('Chat voice entries stay beside the export action in the conversation header', () => {
+  it('routes actions by scope: Workspace owns companions, thread overflow owns export, composer owns additions', () => {
     const header = readSrc('ChatContainerHeader.tsx');
     const input = readSrc('ChatInput.tsx');
+    const launcher = readSrc('workspace/WorkspaceLauncher.tsx');
+    const threadItem = readSrc('ThreadSidebar/ThreadItem.tsx');
 
-    expect(header).toContain('<ExportButton threadId={threadId} />');
-    expect(header).toContain('<ChatVoiceFeatureControls threadId={threadId} defaultCatId={defaultCatId} />');
+    expect(header).not.toContain('ExportButton');
+    expect(header).not.toContain('ChatVoiceFeatureControls');
+    expect(header).not.toContain('status-panel-toggle');
+    expect(launcher).toContain('ChatVoiceFeatureControls');
+    expect(launcher).toContain("id: 'status'");
+    expect(threadItem).toContain('<ExportButton');
     expect(input).not.toContain('ChatVoiceFeatureControls');
   });
 });
@@ -506,7 +512,7 @@ describe('F190 typography guard — no hardcoded font sizes in console scope', (
   it('src-wide guard: no raw pixel font definitions outside typography tokens', () => {
     const srcRoot = resolve(testDir, '..', '..');
     /* F056: dev/ tools (OklchTuner) intentionally use dense px sizes */
-    const DEV_EXCLUDE = /\/dev\//;
+    const DEV_EXCLUDE = /[\\/]dev[\\/]/;
     const violations = collectSourceFiles(srcRoot)
       .filter((file) => !DEV_EXCLUDE.test(file))
       .flatMap((file) => {
@@ -764,12 +770,13 @@ describe('#723 interactive button guard — no grey pill on action/toggle contro
     expect(src).toContain('text-cafe-secondary');
   });
 
-  it('ChatContainerHeader: PanelToggle text color in conditional branches, no cascade conflict', () => {
+  it('ChatContainerHeader: PanelToggle uses the same borderless icon grammar as the calm header', () => {
     const src = readSrc('ChatContainerHeader.tsx');
     const lines = src.split('\n');
     const start = lines.findIndex((l) => l.includes('function PanelToggle'));
     const fnSrc = lines.slice(start, start + 50).join('\n');
-    expect(fnSrc).not.toContain('hover:bg-[var(--console-hover-bg)]');
+    expect(fnSrc).toContain('bg-transparent');
+    expect(fnSrc).not.toContain('border-cafe');
     expect(fnSrc).toContain('hover:text-cafe-accent');
     const classBase = fnSrc.match(/className=\{`([^$]*)\$/);
     if (classBase) {
@@ -1408,7 +1415,8 @@ describe('#723 round 9 — install button, error suppression, breadcrumb, tab/ca
   });
 
   it('HubObservabilityTab chart stroke: CSS variable, not raw hex', () => {
-    const src = readSrc('HubObservabilityTab.tsx');
+    // TrendChart extracted to HubObservabilityOverview.tsx in Phase K
+    const src = readSrc('HubObservabilityOverview.tsx');
     expect(src).toContain('var(--dataviz-trend-line)');
     expect(src).not.toMatch(/stroke="#[0-9A-Fa-f]{6}"/);
   });
@@ -1450,7 +1458,6 @@ describe('#723 round 9 — install button, error suppression, breadcrumb, tab/ca
       'ConfirmDialog.tsx',
       'mission-control/ImportProjectModal.tsx',
       'BootcampListModal.tsx',
-      'MobileStatusSheet.tsx',
       'ChatContainer.tsx',
       'first-run-quest/BootcampGuideOverlay.tsx',
       'HubCoCreatorEditor.tsx',

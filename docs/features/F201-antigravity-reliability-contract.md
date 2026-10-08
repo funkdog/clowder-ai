@@ -1,6 +1,7 @@
 ---
 feature_ids: [F201]
-related_features: [F061, F172, F174, F178, F183, F193, F194, F197, F211]
+tips_exempt: "The September 29 change assigns future carrier reliability regression to F325 while retaining historical acceptance; no new recovery control or user workflow ships here."
+related_features: [F061, F172, F174, F178, F183, F193, F194, F197, F211, F325]
 topics: [antigravity, reliability, side-effect-journal, availability, recovery, smoke-test, rich-block]
 doc_kind: spec
 created: 2026-05-15
@@ -9,6 +10,8 @@ created: 2026-05-15
 # F201: Antigravity Reliability Contract — Bengal可靠可用性闭环
 
 > **Status**: done | **Owner**: Maine Coon（Maine Coon） | **Reviewer**: Ragdoll Opus 4.6 + Ragdoll Opus 4.7 | **Priority**: P0
+
+**2026-09-29 reliability successor**：历史 done 与证据保留；[F325](F325-antigravity-native-parity.md) B4/C 承接新载体的 no-blind-retry、effect provenance、liveness/recovery 回归。旧 IDE 的执行 adapter 按 F325 D 退役，已完成合同不因换载体失效。
 
 Architecture cell: `transport` + `bubble-pipeline`
 Map delta: none — F201 收口 Antigravity provider/retry/recovery 契约，并通过 F183 bubble pipeline 呈现 typed recovery card；不新增并行 transport 或 UI 渲染边界。
@@ -99,7 +102,7 @@ F201 关闭时，Antigravity 必须满足以下契约：
 - 不用盲 retry 重放文件写入/删除/shell。
 - 不新增 F174/F178 审计写口；side-effect journal 只服务 Antigravity recovery。
 - 不把 F172 image-only regression 作为 F201 close gate；如需跑 image 回归，挂到 F172 verify/alpha smoke。
-- 不把所有上游平台不稳定都包装成“Cat Café 已保证 100% 成功”。F201 保证的是可诊断、可恢复、可验收。
+- 不把所有上游平台不稳定都包装成“Clowder AI 已保证 100% 成功”。F201 保证的是可诊断、可恢复、可验收。
 - **Post-close split-out（2026-05-24）**：Antigravity cascade / IDE-direct session transparency 不属于 F201 reliability close gate。F201 保持 `done`；两套 session 系统、JSON shadow state、IDE-direct 反向注册、long-lived session kind 等后续工作拆到 [F211 Cross-Runtime Session Transparency](F211-cross-runtime-session-transparency.md)。F209 只作为 downstream retrieval consumer，不承载该 scope。
 
 ## Acceptance Criteria
@@ -117,7 +120,7 @@ F201 关闭时，Antigravity 必须满足以下契约：
 - [x] AC-B1: 每个 invocation/cascade 有 side-effect journal，记录 stepId、stepType、operation、target、status、idempotencyKey、observedAt；已 `done` 的 side effect 必须有 idempotencyKey。
 - [x] AC-B2: 文件写入/删除 smoke 失败时，错误卡明确列出残留路径和清理状态。Resolved in close gate as a scope correction: smoke cleanup is a CLI/report concern (`AntigravityAvailabilitySmokeReport.cleanup` + `diagnostics.preflight.cleanedLeftovers`), while runtime side-effect interruption uses the typed recovery card.
 - [x] AC-B3: post-side-effect interruption 不触发盲 retry；只输出 resumable state。
-- [x] AC-B4: resume prompt 带 journal 摘要，要求 Antigravity 继续未完成动作且不得重复已完成 side effect；若新 side effect 命中已 done 的 idempotencyKey，Cat Café 侧自动 dedup，不只依赖 prompt 约束。
+- [x] AC-B4: resume prompt 带 journal 摘要，要求 Antigravity 继续未完成动作且不得重复已完成 side effect；若新 side effect 命中已 done 的 idempotencyKey，Clowder AI 侧自动 dedup，不只依赖 prompt 约束。
 - [x] AC-B5: 现有 `executionJournal` inline metadata 被 `AntigravitySideEffectJournal` 明确 subsume 或委托，不保留两个同名不同义的 journal。
 
 ### AC-C: Availability Smoke
@@ -245,7 +248,7 @@ close_gate_report:
 
   cvo_signoff:
     date: 2026-05-19
-    source: "thread event 0001779184326808-000249-989c2493"
+    source: "thread event private-source-id"
     decisions:
       - "Approved deleting/reclassifying legacy AC-B2, AC-C2, and AC-C3, with the condition that the report aligns to current implementation."
       - "Confirmed controlled YOLO timeout boundary after implementation check: the 600s default applies per Antigravity run_command tool execution, not to the whole cascade or a group of tools."

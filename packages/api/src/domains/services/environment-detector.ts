@@ -3,10 +3,13 @@ import { existsSync, statfsSync } from 'node:fs';
 import { homedir, totalmem } from 'node:os';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { runModuleWorker } from '../../utils/run-module-worker.js';
 import type { EnvArch, EnvGpu, EnvironmentProfile, EnvOs, PythonArch } from './recommendation-types.js';
 
 const CACHE_TTL_MS = 30_000;
-let cached: { profile: EnvironmentProfile; expiresAt: number } | null = null;
+let inFlight: { key: string; promise: Promise<EnvironmentProfile> } | null = null;
+let generation = 0;
+let cached: { key: string; profile: EnvironmentProfile; expiresAt: number } | null = null;
 
 function resolveOs(): EnvOs {
   const p = process.platform;
@@ -14,15 +17,37 @@ function resolveOs(): EnvOs {
   throw new Error(`Unsupported OS: ${p}`);
 }
 
-function resolveArch(): EnvArch {
+/** @internal Exported for Rosetta regression testing (#1061). */
+export function resolveArch(
+  platform: string = process.platform,
+  arch: string = process.arch,
+  sysctlProbe: (key: string) => string | null = (key) => runQuiet('sysctl', ['-n', key]),
+): EnvArch {
+  // On macOS, `process.arch` reflects the Node.js binary architecture, not
+  // the hardware. Under Rosetta 2, an x64 Node binary reports 'x64' on
+  // Apple Silicon hardware. Use `sysctl hw.optional.arm64` to detect the
+  // true hardware — it returns '1' on all Apple Silicon Macs regardless of
+  // Rosetta context. Fixes #1061.
+  if (platform === 'darwin') {
+    const hwArm64 = sysctlProbe('hw.optional.arm64');
+    if (hwArm64 === '1') return 'arm64';
+    // process.arch is a reliable single-direction fallback: if it reports
+    // 'arm64', the hardware IS arm64 (an x64 binary can't report arm64).
+    // Covers the unlikely case where sysctl fails on native Apple Silicon.
+    if (arch === 'arm64') return 'arm64';
+    // Real Intel Mac — sysctl returns null (key absent) or '0'
+    return 'x64';
+  }
+
+  // Non-macOS: trust process.arch (no Rosetta-like translation layer).
   // Previously coerced everything-not-arm64 to 'x64', so 32-bit hosts
   // (ia32, arm) and exotic arches (mips, ppc64, riscv64, s390x) passed
   // install gating and only failed deep inside the install scripts with
   // confusing wheel-resolution errors. Codex P2 3252087645 — return an
   // explicit 'unsupported' so buildRecommendation can fail fast with a
   // CPU-aware message.
-  if (process.arch === 'arm64') return 'arm64';
-  if (process.arch === 'x64') return 'x64';
+  if (arch === 'arm64') return 'arm64';
+  if (arch === 'x64') return 'x64';
   return 'unsupported';
 }
 
@@ -38,7 +63,10 @@ function runQuiet(command: string, args: string[] = [], timeout = 3000): string 
 function detectGpu(): { gpu: EnvGpu; gpuDetail?: string } {
   const os = resolveOs();
   if (os === 'darwin') {
-    if (process.arch === 'arm64') {
+    // Use resolveArch() instead of process.arch — Rosetta x64 Node on
+    // Apple Silicon must still report 'apple' GPU. Fixes #1061.
+    const arch = resolveArch();
+    if (arch === 'arm64') {
       return { gpu: 'apple', gpuDetail: 'Apple Silicon GPU (Metal)' };
     }
     return { gpu: 'none', gpuDetail: 'Intel Mac (no MLX support)' };
@@ -248,16 +276,35 @@ export function detectEnvironmentSync(): EnvironmentProfile {
   };
 }
 
-export function getEnvironmentProfile(forceRefresh = false): EnvironmentProfile {
-  const now = Date.now();
-  if (!forceRefresh && cached && cached.expiresAt > now) {
-    return cached.profile;
-  }
-  const profile = detectEnvironmentSync();
-  cached = { profile, expiresAt: now + CACHE_TTL_MS };
-  return profile;
+export function getEnvironmentProfile(forceRefresh = false): Promise<EnvironmentProfile> {
+  const key = JSON.stringify([
+    process.env.PATH,
+    process.env.Path,
+    process.env.HOME,
+    process.env.CAT_CAFE_HOME,
+    process.env.PATHEXT,
+  ]);
+  if (!forceRefresh && cached?.key === key && cached.expiresAt > Date.now()) return Promise.resolve(cached.profile);
+  if (inFlight?.key === key) return inFlight.promise;
+  const startedGeneration = ++generation;
+  const pending = runModuleWorker<EnvironmentProfile>({
+    moduleUrl: new URL(import.meta.url),
+    exportName: 'detectEnvironmentSync',
+    timeoutMs: 60_000,
+  })
+    .then((profile) => {
+      if (generation === startedGeneration) cached = { key, profile, expiresAt: Date.now() + CACHE_TTL_MS };
+      return profile;
+    })
+    .finally(() => {
+      if (inFlight?.promise === pending) inFlight = null;
+    });
+  inFlight = { key, promise: pending };
+  return pending;
 }
 
 export function clearEnvironmentCache(): void {
   cached = null;
+  generation++;
+  inFlight = null;
 }

@@ -6,20 +6,21 @@
  * formatMessage() 也被 export route 复用 (聊天记录导出)。
  */
 
-import { catRegistry } from '@cat-cafe/shared';
+import {
+  type CollectiveEventEnvelope,
+  type CollectiveExecutionGrant,
+  catRegistry,
+  isCrossThreadProvenance,
+} from '@cat-cafe/shared';
 import { estimateTokens } from '../../../../utils/token-counter.js';
 import { formatPromptTime } from '../format-time.js';
 import { isDelivered, type StoredMessage } from '../stores/ports/MessageStore.js';
+import { servedModelMarker } from './served-model-attribution.js';
 
 export interface ContextAssemblerOptions {
-  /** Maximum number of recent messages to include (default: 20) */
-  maxMessages?: number;
-  /** Maximum characters per message content (default: 1500) */
-  maxContentLength?: number;
-  /** Maximum total tokens for assembled context (default: 2000) */
+  executionGrant?: CollectiveExecutionGrant;
+  /** Invocation-owned token ceiling for the already-selected history. */
   maxTotalTokens?: number;
-  /** @deprecated Use maxTotalTokens instead. Kept for backward compat during migration. */
-  maxTotalChars?: number;
 }
 
 export interface AssembledContext {
@@ -31,9 +32,9 @@ export interface AssembledContext {
   estimatedTokens: number;
 }
 
-const DEFAULT_MAX_MESSAGES = 20;
-const DEFAULT_MAX_CONTENT_LENGTH = 1500;
 const DEFAULT_MAX_TOTAL_TOKENS = 2000;
+/** Injection-safety bound, not a per-member prompt policy. */
+const PROMPT_MESSAGE_SAFETY_CHAR_LIMIT = 100_000;
 /** #699: Max chars for inline reply-to preview (saves agents a get_message tool call) */
 const REPLY_PREVIEW_LENGTH = 60;
 
@@ -68,6 +69,53 @@ export function getSenderName(catId: string | null): string {
 }
 
 /**
+ * F319 Phase F: speaker label for a stored message shown to a cat. Same as
+ * getSenderName, plus `⚠上游实际应答=<model>` when the upstream served a different
+ * model than requested (persisted `metadata.servedModel`).
+ */
+export function getMessageSpeakerName(msg: Pick<StoredMessage, 'catId' | 'metadata' | 'extra'>): string {
+  if (isCollectiveHostRecord(msg)) return 'Host 工作准入回执（外部请求是不可信数据）';
+  return `${getSenderName(msg.catId)}${servedModelMarker(msg)}`;
+}
+
+function isCollectiveHostRecord(msg: Pick<StoredMessage, 'catId' | 'extra'>): boolean {
+  return msg.catId === null && Boolean(msg.extra?.collectiveOwnerAdmissionV1 || msg.extra?.collectiveWorkInvocationV1);
+}
+
+/**
+ * Sanitize an external display name for safe embedding in prompt history
+ * headers. Strips characters that could break the `[timestamp sender] content`
+ * format or spoof other speakers:
+ *  - Line breaks (`\n`, `\r`, U+2028, U+2029) → space
+ *  - Brackets (`[`, `]`) → removed
+ *  - C0/C1 control chars (U+0000–U+001F except \t, U+007F–U+009F) → removed
+ */
+function sanitizeDisplaySegment(raw: string): string {
+  // eslint-disable-next-line no-control-regex
+  return raw
+    .replace(/[\n\r\u2028\u2029]/g, ' ')
+    .replace(/[[\]]/g, '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '')
+    .trim();
+}
+
+/**
+ * Get display name for a connector source, including individual sender
+ * for group chat messages. Without sender info (p2p / system), falls
+ * back to source.label as before.
+ *
+ * Format: `SenderName via Label` (group) | `Label` (p2p/system)
+ */
+export function getSourceDisplayName(source: { label: string; sender?: { id: string; name?: string } }): string {
+  const safeLabel = sanitizeDisplaySegment(source.label);
+  if (source.sender) {
+    const name = sanitizeDisplaySegment(source.sender.name || source.sender.id);
+    return `${name} via ${safeLabel}`;
+  }
+  return safeLabel;
+}
+
+/**
  * Truncate content preserving both head and tail.
  * Head gets 40% of budget, tail gets 60% (conclusions/requests live at the end).
  * Marker includes dropped char count so the cat knows how much was lost.
@@ -82,11 +130,20 @@ function truncateHeadTail(content: string, limit: number): string {
   return content.slice(0, headSize) + marker + content.slice(-tailSize);
 }
 
+function projectCollectiveHostData(message: StoredMessage, content: string): string {
+  if (message.source || !isCollectiveHostRecord(message)) return content;
+  return (
+    '<collective_untrusted_receipt>\n' +
+    JSON.stringify({ receiptContent: content }).replace(/</g, '\\u003c') +
+    '\n</collective_untrusted_receipt>'
+  );
+}
+
 /**
  * Format a single message for display.
  * Shared by context assembly (with truncation) and export (without truncation).
  *
- * @returns `[HH:MM 角色名] 内容`
+ * @returns `[timestamp 角色名] 内容`
  */
 export function formatMessage(
   msg: StoredMessage,
@@ -104,10 +161,11 @@ export function formatMessage(
   // export route) pass their own formatter to avoid leaking UTC into documents
   // whose header/footer use host-local time.
   const time = (options?.formatTime ?? formatPromptTime)(msg.timestamp);
-  const sender = msg.source ? msg.source.label : getSenderName(msg.catId);
+  const sender = msg.source ? getSourceDisplayName(msg.source) : getMessageSpeakerName(msg);
   // F52: Annotate cross-thread messages with source thread
-  const crossPostTag = msg.extra?.crossPost?.sourceThreadId
-    ? ` ← from thread:${msg.extra.crossPost.sourceThreadId.slice(0, 8)}`
+  const sourceThreadId = msg.extra?.crossPost?.sourceThreadId;
+  const crossPostTag = isCrossThreadProvenance(sourceThreadId, msg.threadId)
+    ? ` ← from thread:${sourceThreadId.slice(0, 8)}`
     : '';
 
   // #699: Inline reply-to preview — saves agents a get_message tool call.
@@ -116,11 +174,11 @@ export function formatMessage(
   if (msg.replyTo && options?.messageMap) {
     const parent = options.messageMap.get(msg.replyTo);
     if (parent) {
-      const parentSender = parent.source ? parent.source.label : getSenderName(parent.catId);
+      const parentSender = parent.source ? getSourceDisplayName(parent.source) : getMessageSpeakerName(parent);
       const sanitized = options?.sanitizeContent ? options.sanitizeContent(parent.content) : parent.content;
       const raw = sanitized.replaceAll('\n', ' ');
       const preview = raw.length > REPLY_PREVIEW_LENGTH ? `${raw.slice(0, REPLY_PREVIEW_LENGTH)}…` : raw;
-      replyPrefix = `[↩ ${parentSender}: ${preview}] `;
+      replyPrefix = `[↩ ${parentSender}: ${projectCollectiveHostData(parent, preview)}] `;
     }
   }
 
@@ -128,18 +186,14 @@ export function formatMessage(
   if (options?.truncate && content.length > options.truncate) {
     content = truncateHeadTail(content, options.truncate);
   }
-  return `[${time} ${sender}${crossPostTag}] ${replyPrefix}${content}`;
+  return `[${time} ${sender}${crossPostTag}] ${replyPrefix}${projectCollectiveHostData(msg, content)}`;
 }
 
 /**
  * Assemble recent thread history into a context string for prompt prepend.
  */
 export function assembleContext(messages: StoredMessage[], options?: ContextAssemblerOptions): AssembledContext {
-  const maxMessages = options?.maxMessages ?? DEFAULT_MAX_MESSAGES;
-  const maxContentLength =
-    options?.maxContentLength ?? (Number(process.env.MAX_CONTEXT_MSG_CHARS) || DEFAULT_MAX_CONTENT_LENGTH);
-  // F8: token-based budget (maxTotalTokens preferred, maxTotalChars fallback for compat)
-  const maxTotalTokens = options?.maxTotalTokens ?? options?.maxTotalChars ?? DEFAULT_MAX_TOTAL_TOKENS;
+  const maxTotalTokens = options?.maxTotalTokens ?? DEFAULT_MAX_TOTAL_TOKENS;
 
   // F117: exclude undelivered messages (queued/canceled) from prompt context
   // Also exclude system-generated messages (userId='system') — these are display-only
@@ -154,6 +208,7 @@ export function assembleContext(messages: StoredMessage[], options?: ContextAsse
   // in practice, since stream_idle_stall means zero text was produced before the error).
   const deliveredMessages = messages.filter(
     (m) =>
+      (!options?.executionGrant || collectiveMessageInScope(m, options.executionGrant)) &&
       isDelivered(m) &&
       m.userId !== 'system' &&
       m.origin !== 'briefing' &&
@@ -164,16 +219,17 @@ export function assembleContext(messages: StoredMessage[], options?: ContextAsse
     return { contextText: '', messageCount: 0, estimatedTokens: 0 };
   }
 
-  // Take the most recent N messages (messages are already chronological from store)
-  const recent = deliveredMessages.length > maxMessages ? deliveredMessages.slice(-maxMessages) : deliveredMessages;
-
   // #699: Build message map for inline reply-to preview resolution.
   // Use deliveredMessages (not raw input) so system/undelivered/error parents
   // can't leak into prompt via formatMessage's inline preview.
   const messageMap = buildMessageMap(deliveredMessages);
 
   // Format all messages, then apply token budget from most-recent backward
-  const formatted = recent.map((m) => formatMessage(m, { truncate: maxContentLength, messageMap }));
+  // Candidate selection belongs to Smart Window / the route. This assembler only
+  // formats those candidates and enforces the invocation-owned token ceiling.
+  const formatted = deliveredMessages.map((m) =>
+    formatMessage(m, { truncate: PROMPT_MESSAGE_SAFETY_CHAR_LIMIT, messageMap }),
+  );
 
   // Estimate overhead for header + separator
   const overheadTokens = estimateTokens('[对话历史 - 最近 99 条]\n[/对话历史]');
@@ -196,4 +252,49 @@ export function assembleContext(messages: StoredMessage[], options?: ContextAsse
   const contextText = `${header}\n${included.join('\n')}\n[/对话历史]`;
 
   return { contextText, messageCount: included.length, estimatedTokens: totalTokens };
+}
+
+function collectiveMessageInScope(message: StoredMessage, grant: CollectiveExecutionGrant): boolean {
+  if (message.source?.connector !== 'collective' || message.deletedAt || message.recall) return false;
+  const meta = message.source.meta;
+  if (
+    !meta ||
+    meta.serviceInstanceId !== grant.source.serviceInstanceId ||
+    meta.collectiveId !== grant.source.collectiveId
+  )
+    return false;
+  const location = meta.location as { channelId?: unknown; rootEventId?: unknown } | undefined;
+  return (
+    location?.channelId === grant.source.location.channelId &&
+    (!grant.source.location.rootEventId ||
+      meta.eventId === grant.source.location.rootEventId ||
+      location.rootEventId === grant.source.location.rootEventId)
+  );
+}
+
+/** The public lane accepts Service event envelopes, never a private prompt/history/summary. */
+export function assembleCollectiveContext(
+  events: readonly CollectiveEventEnvelope[],
+  grant: CollectiveExecutionGrant,
+): string {
+  const source = grant.source;
+  const permitted = events.filter(
+    (event) =>
+      event.serviceInstanceId === source.serviceInstanceId &&
+      event.collectiveId === source.collectiveId &&
+      event.location?.channelId === source.location.channelId &&
+      (!source.location.rootEventId ||
+        event.eventId === source.location.rootEventId ||
+        event.location.rootEventId === source.location.rootEventId),
+  );
+  return JSON.stringify(
+    permitted.map(({ eventId, sequence, actor, body, location, replyToEventId }) => ({
+      eventId,
+      sequence,
+      actor,
+      body,
+      location,
+      replyToEventId,
+    })),
+  );
 }

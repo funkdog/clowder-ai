@@ -66,6 +66,15 @@ describe('chatStore multi-thread state', () => {
     expect(msgs[1].id).toBe('a2');
   });
 
+  it('marks a first-visit thread as hydrating instead of presenting an empty conversation', () => {
+    useChatStore.getState().setCurrentThread('thread-cold');
+
+    const state = useChatStore.getState();
+    expect(state.currentThreadId).toBe('thread-cold');
+    expect(state.messages).toEqual([]);
+    expect(state.isLoadingHistory).toBe(true);
+  });
+
   it('preserves catStatuses when switching threads', () => {
     // Set cat status on thread A
     useChatStore.getState().setTargetCats(['opus', 'codex']);
@@ -171,6 +180,44 @@ describe('chatStore multi-thread state', () => {
       expect(messages[0].content).toBe('hello');
     });
 
+    it('atomically rekeys active-thread projection source ids with the persisted message id', () => {
+      useChatStore.getState().addMessage({
+        ...makeMsg('temp-stream-1', 'visible CLI output'),
+        type: 'assistant',
+        projectionSourceMessageIds: ['stream-sibling', 'temp-stream-1'],
+      });
+
+      useChatStore.getState().replaceMessageId('temp-stream-1', 'msg-server-1');
+
+      expect(useChatStore.getState().messages).toEqual([
+        expect.objectContaining({
+          id: 'msg-server-1',
+          projectionSourceMessageIds: ['stream-sibling', 'msg-server-1'],
+        }),
+      ]);
+    });
+
+    it('rekeys the media origins a live record left on its bubble (F309 entry 20)', () => {
+      const gallery = { kind: 'media-gallery' as const, blockId: 'g1', itemIndex: 0 };
+      const sibling = { kind: 'content-block' as const, index: 0 };
+      useChatStore.getState().addMessage({
+        ...makeMsg('msg-live-codex-sol', ''),
+        type: 'assistant',
+        projectionSourceMessageIds: ['msg-live-codex-sol', 'callback-1'],
+        projectionPublicationOrigins: {
+          'media-gallery:g1:0': { messageId: 'msg-live-codex-sol', messageRevision: '2000', item: gallery },
+          'content-block:0': { messageId: 'callback-1', messageRevision: '1900', item: sibling },
+        },
+      });
+
+      useChatStore.getState().replaceMessageId('msg-live-codex-sol', 'msg-server-1');
+
+      expect(useChatStore.getState().messages[0]?.projectionPublicationOrigins).toEqual({
+        'media-gallery:g1:0': { messageId: 'msg-server-1', messageRevision: '2000', item: gallery },
+        'content-block:0': { messageId: 'callback-1', messageRevision: '1900', item: sibling },
+      });
+    });
+
     it('drops the optimistic active-thread duplicate when the canonical id already exists', () => {
       useChatStore.getState().addMessage(makeMsg('temp-user-1', 'hello'));
       useChatStore.getState().addMessage(makeMsg('msg-server-1', 'hello'));
@@ -262,6 +309,23 @@ describe('chatStore multi-thread state', () => {
       expect(messages).toHaveLength(1);
       expect(messages[0].id).toBe('msg-server-2');
       expect(messages[0].content).toBe('background');
+    });
+
+    it('atomically rekeys background-thread projection source ids with the persisted message id', () => {
+      useChatStore.getState().addMessageToThread('thread-b', {
+        ...makeMsg('temp-stream-2', 'visible CLI output'),
+        type: 'assistant',
+        projectionSourceMessageIds: ['stream-sibling', 'temp-stream-2'],
+      });
+
+      useChatStore.getState().replaceThreadMessageId('thread-b', 'temp-stream-2', 'msg-server-2');
+
+      expect(useChatStore.getState().threadStates['thread-b']?.messages).toEqual([
+        expect.objectContaining({
+          id: 'msg-server-2',
+          projectionSourceMessageIds: ['stream-sibling', 'msg-server-2'],
+        }),
+      ]);
     });
 
     it('drops the optimistic background-thread duplicate when the canonical id already exists', () => {

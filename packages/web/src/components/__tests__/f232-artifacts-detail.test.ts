@@ -16,17 +16,22 @@ vi.mock('@/hooks/useThreadArtifacts', () => ({
 }));
 vi.mock('@/hooks/useCatData', () => ({
   useCatData: () => ({
-    getCatById: (id: string) => (id === 'opus-48' ? { nickname: '宪宪' } : undefined),
+    getCatById: (id: string) =>
+      id === 'opus-48' ? { displayName: '布偶猫', variantLabel: '4.8', nickname: '宪宪' } : undefined,
   }),
 }));
 
 import { useChatStore } from '@/stores/chatStore';
+import { apiFetch } from '@/utils/api-client';
 import { ArtifactsPanel } from '../ArtifactsPanel';
+
+const panelRoots = new Set<ReturnType<typeof createRoot>>();
 
 function renderPanel() {
   const container = document.createElement('div');
   document.body.appendChild(container);
   const root = createRoot(container);
+  panelRoots.add(root);
   act(() => {
     root.render(createElement(ArtifactsPanel, { threadId: 'T' }));
   });
@@ -41,10 +46,15 @@ describe('F232 AC-A7 ArtifactsPanel 内容查看交互', () => {
     delete (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT;
   });
   beforeEach(() => {
-    useChatStore.setState({ currentThreadId: 'T', workspaceWorktreeId: null });
+    useChatStore.setState({ currentThreadId: 'T', workspaceWorktreeId: null, workspaceOpenRequest: null });
+    vi.mocked(apiFetch).mockReset();
     mockState.artifacts = [];
   });
   afterEach(() => {
+    act(() => {
+      for (const root of panelRoots) root.unmount();
+      panelRoots.clear();
+    });
     document.body.innerHTML = '';
     vi.clearAllMocks();
   });
@@ -85,17 +95,17 @@ describe('F232 AC-A7 ArtifactsPanel 内容查看交互', () => {
     expect(container.querySelector('input'), '返回后回到列表（搜索框再现）').toBeTruthy();
   });
 
-  it('AC-A5: 列表项显示猫昵称 + 相对时间（不是原始 catId）', () => {
+  it('AC-A5: 列表项显示标准成员名称 + 相对时间（不是原始 catId）', () => {
     mockState.artifacts = [
       { type: 'pr', name: 'PR #1', catId: 'opus-48', createdAt: Date.now(), sourceMessageId: null, ref: 'o/r#1' },
     ];
     const { container } = renderPanel();
-    expect(container.textContent).toContain('宪宪'); // 昵称映射
+    expect(container.textContent).toContain('布偶猫（4.8）'); // runtime roster 标准映射
     expect(container.textContent).not.toContain('opus-48'); // 不显示原始 catId
     expect(container.textContent).toContain('刚刚'); // 相对时间
   });
 
-  it('点击 image 产物行 → 详情显示图片', () => {
+  it('an image without persisted source coordinates remains unavailable instead of opening a weak preview', () => {
     mockState.artifacts = [
       {
         type: 'image',
@@ -111,9 +121,83 @@ describe('F232 AC-A7 ArtifactsPanel 内容查看交互', () => {
     act(() => {
       row.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
-    const img = container.querySelector('img');
-    expect(img, 'image view 应渲染 <img>').toBeTruthy();
-    expect(img?.getAttribute('src')).toContain('/uploads/arch.png');
+    expect(container.querySelector('img')).toBeNull();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain('原发布消息没有可核验的内容坐标');
+    expect(useChatStore.getState().workspaceOpenRequest).toBeNull();
+    expect(apiFetch).not.toHaveBeenCalled();
+  });
+
+  it('opens a verified published image through the shared Workspace target while preserving its exact message item', async () => {
+    const item = { kind: 'media-gallery', blockId: 'original-gallery', itemIndex: 1 };
+    mockState.artifacts = [
+      {
+        type: 'image',
+        name: 'arch.png',
+        catId: 'opus-48',
+        createdAt: 12345,
+        sourceMessageId: 'original',
+        publicationItem: item,
+        url: '/uploads/arch.png',
+      },
+    ];
+    const { container, root } = renderPanel();
+    await act(async () => {
+      container.querySelector<HTMLElement>('[data-artifact-row]')?.click();
+      for (let n = 0; n < 8; n++) await Promise.resolve();
+    });
+    // 20d39d1d: the list hands the exact artifact to the shared Workspace with its own return state;
+    // ArtifactPublicationSurface resolves the publication there (publication-surface.test.ts).
+    expect(vi.mocked(apiFetch).mock.calls.some(([url]) => url === '/api/content-publications/resolve')).toBe(false);
+    expect(useChatStore.getState().workspaceOpenRequest?.target).toEqual({
+      kind: 'artifact',
+      artifact: {
+        type: 'image',
+        name: 'arch.png',
+        catId: 'opus-48',
+        createdAt: 12345,
+        sourceMessageId: 'original',
+        publicationItem: item,
+        url: '/uploads/arch.png',
+      },
+      navigationOrigin: {
+        kind: 'artifact-list',
+        threadId: 'T',
+        view: { scope: 'thread', filter: 'all', query: '', grouping: 'time', catFilter: null, collapsed: [] },
+      },
+    });
+    expect(container.querySelector('img')).toBeNull();
+    act(() => root.unmount());
+    panelRoots.delete(root);
+  });
+
+  it('lets the F307 adapter consume the exact owner DTO instead of creating a second selected-record store', () => {
+    const artifact = {
+      type: 'pr',
+      name: 'PR #4030',
+      catId: 'opus-48',
+      createdAt: Date.now(),
+      sourceMessageId: 'message-review',
+      ref: 'zts212653/cat-cafe#4030',
+    };
+    mockState.artifacts = [artifact];
+    const onSelectArtifact = vi.fn();
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    act(() => root.render(createElement(ArtifactsPanel, { threadId: 'T', onSelectArtifact })));
+
+    const row = container.querySelector<HTMLElement>('[data-artifact-row]');
+    act(() => row?.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+
+    // F309: the exact owner DTO is passed through unchanged, with the list view to return to.
+    expect(onSelectArtifact).toHaveBeenCalledWith(artifact, {
+      kind: 'artifact-list',
+      threadId: 'T',
+      view: { scope: 'thread', filter: 'all', query: '', grouping: 'time', catFilter: null, collapsed: [] },
+    });
+    expect(onSelectArtifact.mock.calls[0]?.[0]).toBe(artifact);
+    expect(container.querySelector('input')).toBeTruthy();
+    act(() => root.unmount());
   });
 
   it('P1-2: 切 thread 后清空选中详情（不串 thread）', () => {

@@ -23,6 +23,8 @@ const ALLOWLIST = new Map([
   ['HOME', 'OS-provided home directory'],
   ['SHELL', 'OS-provided shell path'],
   ['PATH', 'OS-provided executable search path'],
+  ['TMPDIR', 'OS-provided temporary directory passed to the isolated AGY CLI; not an app setting'],
+  ['Path', 'Windows OS-provided PATH alias; executable search input, not an app setting'],
   ['USER', 'OS-provided username'],
   ['USERNAME', 'Windows OS-provided username'],
   ['USERPROFILE', 'Windows OS-provided home directory (F212 sanitizer path redaction)'],
@@ -34,6 +36,9 @@ const ALLOWLIST = new Map([
   ['PROGRAMFILES', 'Windows OS variable (ImageExporter.ts Chrome detection)'],
   ['PATHEXT', 'Windows OS variable (capability-orchestrator.ts executable extension lookup)'],
   ['NODE_ENV', 'Node.js standard'],
+  ['GH_HOST', 'Inherited GitHub CLI host used to partition credential quota; not an app setting'],
+  ['GH_CONFIG_DIR', 'GitHub CLI-owned configuration location used to identify its auth store'],
+  ['XDG_CONFIG_HOME', 'XDG configuration root inherited by GitHub CLI; not an app setting'],
   ['https_proxy', 'Standard proxy convention (lowercase variant of HTTPS_PROXY)'],
   ['http_proxy', 'Standard proxy convention (lowercase variant of HTTP_PROXY)'],
   ['all_proxy', 'Standard proxy convention (lowercase variant of ALL_PROXY)'],
@@ -41,6 +46,15 @@ const ALLOWLIST = new Map([
   ['npm_config_user_agent', 'Package-manager metadata injected by npm/pnpm; not user-configurable'],
   ['INIT_CWD', 'Package-manager metadata injected by npm/pnpm; original invocation directory'],
   ['COGVIDEO_API_KEY', 'F139 MediaHub CogVideoX provider — mcp-server-local credential'],
+  ['CLAUDE_BIN', 'F254 developer-only live fixture executable override; not a runtime setting'],
+  ['CODEX_BIN', 'F254 developer-only live fixture executable override; not a runtime setting'],
+  ['F254_CLAUDE_MODEL', 'F254 developer-only Claude capability fixture model override; not a runtime setting'],
+  ['F254_CODEX_TRANSPORT', 'F254 developer-only Codex fixture transport selector; not a runtime setting'],
+  ['CAT_OPUS_MODEL', 'Existing provider model env reused only as a developer fixture fallback'],
+  [
+    'CAT_CAFE_GATE_BASE_SHA',
+    'Pre-merge gate internal exact-base handoff to MCP governance; not user or runtime configuration',
+  ],
   // F240: Per-connector env vars migrated to YAML manifests (connector.yaml / plugin.yaml).
   // Runtime still reads process.env as fallback in resolveConnectorEnv() chain, but
   // documentation/display is now driven by the YAML config.fields declarations.
@@ -51,6 +65,10 @@ const ALLOWLIST = new Map([
   ['FEISHU_BOT_OPEN_ID', 'F240: defined in connectors/feishu/connector.yaml'],
   ['FEISHU_ADMIN_OPEN_IDS', 'F240: defined in connectors/feishu/connector.yaml'],
   ['FEISHU_CONNECTION_MODE', 'F240: defined in connectors/feishu/connector.yaml'],
+  [
+    'FEISHU_GROUP_BOT_MENTIONS_JSON',
+    'F240: connector-scoped power-user env (#1035 — JSON map for outbound @alias resolution; .env-only, not surfaced in Hub UI)',
+  ],
   ['DINGTALK_APP_KEY', 'F240: defined in connectors/dingtalk/connector.yaml'],
   ['DINGTALK_APP_SECRET', 'F240: defined in connectors/dingtalk/connector.yaml'],
   ['XIAOYI_AK', 'F240: defined in connectors/xiaoyi/connector.yaml'],

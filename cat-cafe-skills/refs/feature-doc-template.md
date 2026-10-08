@@ -15,6 +15,10 @@ related_features: []
 topics: []
 doc_kind: spec
 created: {YYYY-MM-DD}
+description: "{stable identity statement, <=160 chars; not status/phase/implementation detail}"
+description_source: human
+description_author: {cat_id}
+description_updated_at: {YYYY-MM-DDTHH:mm:ssZ}
 ---
 
 # F{NNN}: {Feature Name}
@@ -38,6 +42,27 @@ created: {YYYY-MM-DD}
 ### Phase B: {Phase 名称}
 
 {Phase B 的设计说明。按需增减 Phase。}
+
+## User Journey
+
+<!-- F252 教训：用户旅程必须在 Design Gate 前落盘到 spec。涉及用户可感知变化的 feat 必填；纯后端/重构/无用户可感知变化写 `user_journey_exempt: {reason}`，不能靠缺段默认跳过。Discussion 阶段operator口述的期望必须回填到本节。 -->
+
+### Primary Journey: {用户语言命名}
+- **Scope unit**: thread | feature | session | message | workspace
+- **Actor**: operator / 猫猫 / 新用户
+- **Entry**: {从哪里开始}
+- **Flow**:
+  1. {入口} → 用户看到 ...
+  2. 用户点击 ... → 系统展示 ...
+  3. ... → {终态}
+- **Success evidence**: {截图 / 录屏 / Playwright path}
+- **Non-goals**: {明确不覆盖什么}
+
+### Supporting Journeys（多 surface / 多 actor 才写）
+
+| ID | Scope unit | Actor | Flow | Evidence |
+|----|------------|-------|------|----------|
+| S1 | {unit} | {谁} | {入口 → ... → 终态} | {截图路径} |
 
 ## Acceptance Criteria
 
@@ -105,6 +130,10 @@ created: {YYYY-MM-DD}
 | `topics` | ✅ | 分类标签，可为空 |
 | `doc_kind` | ✅ | `spec`（活跃）/ `note`（回顾/关闭） |
 | `created` | ✅ | `YYYY-MM-DD` |
+| `description` | ✅ | 一句话稳定身份说明，≤160 字；不能复述标题、阶段或实现状态 |
+| `description_source` | ✅ | `human` / `model`；`imported` 预留，暂不使用 |
+| `description_author` | ✅ | 负责写入或确认 description 的猫 |
+| `description_updated_at` | ✅ | ISO 8601 时间戳 |
 
 ### 2. Status 行（必须）
 ```
@@ -145,7 +174,7 @@ created: {YYYY-MM-DD}
 
 - **小 Feature**（≤1 Phase，几天完成）：可以省略 Timeline、Review Gate、Links、Key Decisions
 - **大 Feature**（多 Phase，跨周）：建议所有段落都填
-- **最低要求**：Frontmatter + Status 行 + Why + Current State + What + AC + Dependencies（全新能力的 Current State 写 "N/A（无既有基线）"）
+- **最低要求**：Frontmatter + Status 行 + Why + Current State + What + User Journey（或 `user_journey_exempt`）+ AC + Dependencies（全新能力的 Current State 写 "N/A（无既有基线）"）
 
 ---
 

@@ -6,7 +6,9 @@
  * when N < threshold instead of triggering false alarms.
  */
 
+import type Database from 'better-sqlite3';
 import type { ToolEventLog } from '../cats/services/tool-usage/ToolEventLog.js';
+import { readExpansionFollowupCounts } from './ExpansionHealthMetrics.js';
 
 export interface ToolUsageMetric {
   value: number | null;
@@ -27,6 +29,7 @@ export interface ToolUsageMetricsReport {
   candidateSelectionDistribution: ToolUsageMetric; // % non-first selected
   listRecentAdoptionRate: ToolUsageMetric;
   nudgeFailureRate: ToolUsageMetric;
+  expansionFollowupRate: ToolUsageMetric;
   threadCount: number;
 }
 
@@ -34,11 +37,11 @@ export const N_THRESHOLDS = {
   toolCalls: 20,
   candidateSelections: 20,
   nudgeAnalyses: 20,
+  expansionAnalyses: 10,
   threadSampling: 5,
 } as const;
 
 const NUDGE_LOOKAHEAD_TURNS = 3;
-
 /**
  * Cold-start window — per (catId, threadId), first N memory-class MCP calls
  * count as cold-start. Matches AS-1 spec definition (F188 Phase F line 213):
@@ -70,6 +73,7 @@ async function listAllThreadIds(_eventLog: ToolEventLog): Promise<string[]> {
 export async function computeFromThreads(
   eventLog: ToolEventLog,
   threads: readonly ThreadSummary[],
+  sources: { recallDb?: Database.Database } = {},
 ): Promise<ToolUsageMetricsReport> {
   let totalSearch = 0;
   let totalGraph = 0;
@@ -165,6 +169,9 @@ export async function computeFromThreads(
 
   const totalMemoryToolCalls = totalSearch + totalGraph + totalRecent;
   const sufficient = totalMemoryToolCalls >= N_THRESHOLDS.toolCalls;
+  const expansionCounts = sources.recallDb
+    ? readExpansionFollowupCounts(sources.recallDb)
+    : { followedEvents: 0, presentedEvents: 0 };
 
   return {
     generatedAt: new Date().toISOString(),
@@ -186,6 +193,12 @@ export async function computeFromThreads(
     // for the "did the cat enter via list_recent at thread entry" signal.
     listRecentAdoptionRate: pct(coldStartListRecentCalls, coldStartMemoryCalls, N_THRESHOLDS.toolCalls),
     nudgeFailureRate: pct(totalNudgeTrulyFailed, totalNudgeEmitted, N_THRESHOLDS.nudgeAnalyses),
+    // F256 Wave 1b: durable V38 typed-target outcomes, never Redis result exposure.
+    expansionFollowupRate: pct(
+      expansionCounts.followedEvents,
+      expansionCounts.presentedEvents,
+      N_THRESHOLDS.expansionAnalyses,
+    ),
     // Note: above 'sufficient' check is per-metric; an aggregate flag could be added later
     ...(sufficient ? {} : {}),
   };

@@ -94,11 +94,31 @@ function fixedL0(body) {
   return fn;
 }
 
+// The service resolves its executable before it reaches the injected spawnFn.
+// Keep this test suite portable to public CI, where Codex itself is not installed.
+function createL0TestService(options) {
+  return new CodexAgentService({ ...options, cliCommand: process.execPath });
+}
+
+function assertCompiledL0Preserved(args, expectedL0) {
+  const developerInstructions = args.filter((arg) => arg.startsWith('developer_instructions='));
+  assert.equal(
+    developerInstructions.length,
+    1,
+    `argv must carry exactly one developer_instructions config; got: ${args.join(' ')}`,
+  );
+  assert.ok(
+    developerInstructions[0].startsWith(`developer_instructions="${expectedL0}`),
+    `developer_instructions must start with the compiled L0; got: ${developerInstructions[0]}`,
+  );
+  return developerInstructions[0];
+}
+
 test('Task 4: codex argv carries -c developer_instructions=<compiled L0>', async () => {
   const proc = createMockProcess();
   const spawnFn = mock.fn(() => proc);
   const l0CompilerFn = fixedL0('DEV-L0-BODY');
-  const service = new CodexAgentService({ spawnFn, catId: createCatId('codex'), l0CompilerFn });
+  const service = createL0TestService({ spawnFn, catId: createCatId('codex'), l0CompilerFn });
 
   const promise = collect(service.invoke('hi'));
   emitOk(proc);
@@ -109,10 +129,8 @@ test('Task 4: codex argv carries -c developer_instructions=<compiled L0>', async
 
   const args = spawnFn.mock.calls[0].arguments[1];
   assert.ok(args.includes('--config'), 'argv must include --config');
-  assert.ok(
-    args.includes('developer_instructions="DEV-L0-BODY"'),
-    `argv must carry TOML-encoded developer_instructions; got: ${args.join(' ')}`,
-  );
+  const developerInstructions = assertCompiledL0Preserved(args, 'DEV-L0-BODY');
+  assert.match(developerInstructions, /do not append the cat signature to commentary\/progress messages/);
 });
 
 test('P0 security: prompt 正文走 stdin 不进 argv（ps -o command= 跨进程泄露防护）', async () => {
@@ -122,7 +140,7 @@ test('P0 security: prompt 正文走 stdin 不进 argv（ps -o command= 跨进程
   const proc = createMockProcess();
   const spawnFn = mock.fn(() => proc);
   const l0CompilerFn = fixedL0('L0');
-  const service = new CodexAgentService({ spawnFn, catId: createCatId('codex'), l0CompilerFn });
+  const service = createL0TestService({ spawnFn, catId: createCatId('codex'), l0CompilerFn });
 
   const SECRET = 'SECRET-披着专业外衣的不太光彩偏好-R8-PROMPT-BODY';
   const promise = collect(service.invoke(SECRET));
@@ -141,7 +159,7 @@ test('Task 4: per-call argv is cat-scoped (no shared config.toml race)', async (
     const proc = createMockProcess();
     const spawnFn = mock.fn(() => proc);
     const l0CompilerFn = fixedL0(`L0-FOR-${catId}`);
-    const service = new CodexAgentService({ spawnFn, catId: createCatId(catId), l0CompilerFn });
+    const service = createL0TestService({ spawnFn, catId: createCatId(catId), l0CompilerFn });
     return { proc, spawnFn, l0CompilerFn, service };
   };
   const a = mk('codex');
@@ -156,8 +174,8 @@ test('Task 4: per-call argv is cat-scoped (no shared config.toml race)', async (
 
   assert.equal(a.l0CompilerFn.calls[0].catId, 'codex');
   assert.equal(b.l0CompilerFn.calls[0].catId, 'gpt52');
-  assert.ok(a.spawnFn.mock.calls[0].arguments[1].includes('developer_instructions="L0-FOR-codex"'));
-  assert.ok(b.spawnFn.mock.calls[0].arguments[1].includes('developer_instructions="L0-FOR-gpt52"'));
+  assertCompiledL0Preserved(a.spawnFn.mock.calls[0].arguments[1], 'L0-FOR-codex');
+  assertCompiledL0Preserved(b.spawnFn.mock.calls[0].arguments[1], 'L0-FOR-gpt52');
 });
 
 test('Task 4 fail-closed: L0 compile failure → error + done, codex not spawned', async () => {
@@ -166,7 +184,7 @@ test('Task 4 fail-closed: L0 compile failure → error + done, codex not spawned
   const failing = async () => {
     throw new Error('L0 compile exited code=2 for codex: boom');
   };
-  const service = new CodexAgentService({ spawnFn, catId: createCatId('codex'), l0CompilerFn: failing });
+  const service = createL0TestService({ spawnFn, catId: createCatId('codex'), l0CompilerFn: failing });
 
   const msgs = await collect(service.invoke('hi'));
 
@@ -192,7 +210,7 @@ test('Task 4 reserved key: cliConfigArgs CANNOT override system developer_instru
   const proc = createMockProcess();
   const spawnFn = mock.fn(() => proc);
   const l0CompilerFn = fixedL0('SYSTEM-L0-CONTENT');
-  const service = new CodexAgentService({ spawnFn, catId: createCatId('codex'), l0CompilerFn });
+  const service = createL0TestService({ spawnFn, catId: createCatId('codex'), l0CompilerFn });
 
   const promise = collect(
     service.invoke('hi', {
@@ -204,13 +222,11 @@ test('Task 4 reserved key: cliConfigArgs CANNOT override system developer_instru
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
-  assert.ok(
-    args.includes('developer_instructions="SYSTEM-L0-CONTENT"'),
-    `system L0 must remain in argv; got: ${args.join(' ')}`,
-  );
-  assert.ok(
-    !args.includes('developer_instructions="USER-OVERRIDE"'),
-    'user cliConfigArgs must NOT override system developer_instructions (fail-closed reserved key)',
+  const developerInstructions = assertCompiledL0Preserved(args, 'SYSTEM-L0-CONTENT');
+  assert.doesNotMatch(
+    developerInstructions,
+    /USER-OVERRIDE/,
+    'user cliConfigArgs must NOT enter system developer_instructions (fail-closed reserved key)',
   );
 });
 
@@ -222,7 +238,7 @@ test('Task 4 reserved key: short-form `-c` cannot override system developer_inst
   const proc = createMockProcess();
   const spawnFn = mock.fn(() => proc);
   const l0CompilerFn = fixedL0('SYSTEM-L0-CONTENT');
-  const service = new CodexAgentService({ spawnFn, catId: createCatId('codex'), l0CompilerFn });
+  const service = createL0TestService({ spawnFn, catId: createCatId('codex'), l0CompilerFn });
 
   const promise = collect(
     service.invoke('hi', {
@@ -234,12 +250,31 @@ test('Task 4 reserved key: short-form `-c` cannot override system developer_inst
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
-  assert.ok(
-    args.includes('developer_instructions="SYSTEM-L0-CONTENT"'),
-    `system L0 must remain; got: ${args.join(' ')}`,
+  const developerInstructions = assertCompiledL0Preserved(args, 'SYSTEM-L0-CONTENT');
+  assert.doesNotMatch(
+    developerInstructions,
+    /USER-OVERRIDE-SHORT/,
+    '`-c` short-form override must not enter system developer_instructions',
   );
-  assert.ok(
-    !args.includes('developer_instructions="USER-OVERRIDE-SHORT"'),
-    '`-c` short-form override must be stripped same as `--config`',
-  );
+});
+
+test('Task 4 reserved key: attached config spellings cannot override system developer_instructions', async () => {
+  for (const rawOverride of [
+    '--config=developer_instructions="USER-OVERRIDE-LONG-EQUALS"',
+    '-c=developer_instructions="USER-OVERRIDE-SHORT-EQUALS"',
+    '-cdeveloper_instructions="USER-OVERRIDE-SHORT-ATTACHED"',
+  ]) {
+    const proc = createMockProcess();
+    const spawnFn = mock.fn(() => proc);
+    const l0CompilerFn = fixedL0('SYSTEM-L0-CONTENT');
+    const service = createL0TestService({ spawnFn, catId: createCatId('codex'), l0CompilerFn });
+
+    const promise = collect(service.invoke('hi', { cliConfigArgs: [rawOverride] }));
+    emitOk(proc);
+    await promise;
+
+    const args = spawnFn.mock.calls[0].arguments[1];
+    const developerInstructions = assertCompiledL0Preserved(args, 'SYSTEM-L0-CONTENT');
+    assert.doesNotMatch(developerInstructions, /USER-OVERRIDE/, `reserved override survived: ${rawOverride}`);
+  }
 });

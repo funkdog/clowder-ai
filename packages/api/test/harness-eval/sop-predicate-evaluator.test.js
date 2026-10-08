@@ -16,6 +16,7 @@ const baseTrace = {
     { command: 'gh pr merge 1913 --squash --delete-branch', cwd: '/home/user/cat-cafe', exitCode: 0 },
     { command: 'gh pr comment 1913 --body "@codex review"', exitCode: 0 },
   ],
+  changedFiles: [],
   envSnapshot: {
     REDIS_URL: 'redis://localhost:6398',
   },
@@ -83,6 +84,43 @@ describe('Predicate: command_pattern', () => {
   it('handles pipe-separated patterns correctly', () => {
     const result = evalP({ type: 'command_pattern', mustMatch: 'pnpm gate|pnpm test|node --test' });
     assert.equal(result.status, 'pass'); // baseTrace has 'pnpm gate'
+  });
+
+  it('violates when mustMatch command has non-zero exitCode', () => {
+    const trace = {
+      ...baseTrace,
+      commands: [{ command: 'pnpm check:features', exitCode: 1 }],
+    };
+    const result = evalP({ type: 'command_pattern', mustMatch: 'pnpm check:features' }, trace);
+    assert.equal(result.status, 'violation');
+    assert.ok(result.violation?.message.includes('pnpm check:features'));
+  });
+
+  it('passes when mustMatch command has exitCode 0', () => {
+    const trace = {
+      ...baseTrace,
+      commands: [{ command: 'pnpm check:features', exitCode: 0 }],
+    };
+    const result = evalP({ type: 'command_pattern', mustMatch: 'pnpm check:features' }, trace);
+    assert.equal(result.status, 'pass');
+  });
+
+  it('passes when mustMatch command has no exitCode (backward compat)', () => {
+    const trace = {
+      ...baseTrace,
+      commands: [{ command: 'pnpm check:features' }],
+    };
+    const result = evalP({ type: 'command_pattern', mustMatch: 'pnpm check:features' }, trace);
+    assert.equal(result.status, 'pass');
+  });
+
+  it('violates mustNotMatch even when command has non-zero exitCode', () => {
+    const trace = {
+      ...baseTrace,
+      commands: [{ command: 'git merge --squash', exitCode: 1 }],
+    };
+    const result = evalP({ type: 'command_pattern', mustNotMatch: 'git merge --squash' }, trace);
+    assert.equal(result.status, 'violation');
   });
 });
 
@@ -272,6 +310,87 @@ describe('Predicate: command_sequence', () => {
       trace,
     );
     assert.equal(result.status, 'pass');
+  });
+});
+
+// ---- changed_files_require_command (F242 convention graph adoption) ----
+
+describe('Predicate: changed_files_require_command', () => {
+  const conventionSurfacePredicate = {
+    type: 'changed_files_require_command',
+    includeGlobs: [
+      'packages/mcp-server/src/tools/*.ts',
+      'packages/mcp-server/src/server-toolsets.ts',
+      'cat-cafe-skills/*/SKILL.md',
+    ],
+    excludeGlobs: ['**/*.test.ts'],
+    mustMatch: 'pnpm convention-graph:code-consumers|cat-cafe-convention-graph code-consumers',
+  };
+
+  it('violates when a convention-surface file changed without a convention graph query', () => {
+    const trace = {
+      ...baseTrace,
+      changedFiles: ['packages/mcp-server/src/tools/callback-tools.ts'],
+      commands: [{ command: 'pnpm test', exitCode: 0 }],
+    };
+
+    const result = evalP(conventionSurfacePredicate, trace);
+
+    assert.equal(result.status, 'violation');
+    assert.ok(result.violation?.message.includes('convention-graph:code-consumers'));
+    assert.ok(result.violation?.traceAnchor.includes('callback-tools.ts'));
+  });
+
+  it('passes when a matching convention graph query succeeded', () => {
+    const trace = {
+      ...baseTrace,
+      changedFiles: ['cat-cafe-skills/convention-graph-discovery/SKILL.md'],
+      changedFileEvents: [{ path: 'cat-cafe-skills/convention-graph-discovery/SKILL.md', eventNo: 10 }],
+      commands: [
+        {
+          command: 'pnpm convention-graph:code-consumers -- --repo . --domain skill-manifest',
+          exitCode: 0,
+          stdout: JSON.stringify({
+            targets: [
+              {
+                domainId: 'skill-manifest',
+                filePath: 'cat-cafe-skills/convention-graph-discovery/SKILL.md',
+              },
+            ],
+            freshness: { stale: false },
+          }),
+          eventNo: 5,
+        },
+      ],
+    };
+
+    const result = evalP(conventionSurfacePredicate, trace);
+
+    assert.equal(result.status, 'pass');
+  });
+
+  it('passes when changed files do not touch convention surfaces', () => {
+    const trace = {
+      ...baseTrace,
+      changedFiles: ['packages/api/src/domains/memory/CoverageSearchService.ts'],
+      commands: [],
+    };
+
+    const result = evalP(conventionSurfacePredicate, trace);
+
+    assert.equal(result.status, 'pass');
+  });
+
+  it('does not accept a failed convention graph query as evidence', () => {
+    const trace = {
+      ...baseTrace,
+      changedFiles: ['packages/mcp-server/src/tools/callback-tools.ts'],
+      commands: [{ command: 'pnpm convention-graph:code-consumers -- --repo . --domain mcp-tool', exitCode: 1 }],
+    };
+
+    const result = evalP(conventionSurfacePredicate, trace);
+
+    assert.equal(result.status, 'violation');
   });
 });
 
@@ -544,6 +663,7 @@ describe('evaluateSopDefinition (AC-E22)', () => {
         { command: 'gh pr view 99', exitCode: 0 },
         { command: 'pnpm check:features', exitCode: 0 },
       ],
+      changedFiles: [],
       envSnapshot: { REDIS_URL: 'redis://localhost:6398' },
       gitState: { branch: 'main', ahead: 0, behind: 0, clean: true },
       handles: { author: 'opus', reviewer: 'gpt52', guardian: 'opus47' },
@@ -557,11 +677,11 @@ describe('evaluateSopDefinition (AC-E22)', () => {
     const skipped = results.filter((r) => r.status === 'skipped');
     const violations = results.filter((r) => r.status === 'violation');
 
-    // 19 total rules in development.yaml
-    assert.equal(results.length, 19, `expected 19 rules, got ${results.length}`);
+    // 25 total rules in development.yaml (including F303 design-gate evidence)
+    assert.equal(results.length, 25, `expected 25 rules, got ${results.length}`);
 
-    // 8 manual_only rules -> skipped
-    assert.equal(skipped.length, 8, `expected 8 skipped (manual_only), got ${skipped.length}`);
+    // 11 manual_only rules -> skipped (runtime activation truth requires external live-state evidence)
+    assert.equal(skipped.length, 11, `expected 11 skipped (manual_only), got ${skipped.length}`);
 
     // Nominal trace should produce 0 violations
     assert.equal(
@@ -587,6 +707,9 @@ describe('evaluateSopDefinition (AC-E22)', () => {
 
     const selfReview = results.find((r) => r.ruleId === 'review-no-self-review');
     assert.equal(selfReview?.status, 'pass', 'review-no-self-review should pass');
+
+    const conventionGraph = results.find((r) => r.ruleId === 'impl-convention-graph-before-convention-edit');
+    assert.equal(conventionGraph?.status, 'pass', 'impl-convention-graph-before-convention-edit should pass');
 
     // Log summary for debugging
     console.log(
@@ -614,6 +737,7 @@ describe('evaluateSopDefinition (AC-E22)', () => {
         { command: 'git push origin main', exitCode: 0 },
         { command: 'gh pr close 99', exitCode: 0 },
       ],
+      changedFiles: [],
       envSnapshot: { REDIS_URL: 'redis://localhost:6399' }, // Wrong port!
       gitState: { branch: 'main', ahead: 2, behind: 1, clean: false },
       handles: { author: 'opus', reviewer: 'opus' }, // Self-review!

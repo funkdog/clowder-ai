@@ -1,5 +1,5 @@
 /**
- * F231 Phase C Task2: per-cat primer write + provenance (KD-12/KD-15).
+ * F231 Phase C/Topology: relationship-persona primer write + provenance (KD-12/KD-15/KD-18).
  *
  * P1-1 (codex review): the two file side-effects are SPLIT into separate functions so the
  * decision route can checkpoint `writtenPath` AFTER the primer write but BEFORE provenance
@@ -9,7 +9,7 @@
  * → writeProfileProvenance → route.recordCheckpoint(provenancePath) → finalize. Crash recovery
  * reads the checkpoint and skips the already-done step (no primer re-hash, no provenance dup).
  *
- * P1-2 (codex review): targetPath is validated as profile-dir-relative `relationship/{catId}-primer.md`
+ * P1-2 (codex review): targetPath is validated as profile-dir-relative `relationship/{relationshipKey}-primer.md`
  * — no absolute paths, no `..` escape.
  *
  * P1-2 optimistic lock: writeProfilePrimer re-reads the current primer and compares its hash to the
@@ -21,6 +21,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import type { ProfileUpdateProposal } from '@cat-cafe/shared';
+import { relationshipPrimerRelativePath } from '@cat-cafe/shared/profile-contract';
 
 export class StaleProfileUpdateError extends Error {
   constructor(
@@ -49,6 +50,7 @@ export type WritableProfileUpdate = Pick<
   | 'proposalId'
   | 'sourceCatId'
   | 'sourceThreadId'
+  | 'targetLayer'
   | 'targetPath'
   | 'afterContent'
   | 'baseContentHash'
@@ -72,16 +74,17 @@ export interface WriteProfilePrimerOptions {
 const DEFAULT_FILE_OPS: ProfileWriteFileOps = { writeFileSync, renameSync, rmSync };
 
 /**
- * P1-2: resolve + validate the per-cat primer path. AC-C1 enforces exactly
- * `relationship/{catId}-primer.md`, profile-dir-relative, no `..`/absolute escape.
+ * P1-2: resolve + validate the persona primer path. AC-C1 enforces exactly
+ * `relationship/{relationshipKey}-primer.md`, profile-dir-relative, no `..`/absolute escape.
  */
-export function resolvePrimerPath(profileDir: string, targetPath: string, catId: string): string {
-  const expected = join('relationship', `${catId}-primer.md`);
-  if (targetPath !== expected) {
+export function resolvePrimerPath(profileDir: string, targetPath: string, relationshipKey: string): string {
+  const expected = relationshipPrimerRelativePath(relationshipKey);
+  const normalizedTarget = targetPath.replaceAll('\\', '/');
+  if (normalizedTarget !== expected) {
     throw new InvalidPrimerPathError(`targetPath must be "${expected}", got "${targetPath}"`);
   }
   const base = resolve(profileDir);
-  const full = resolve(base, targetPath);
+  const full = resolve(base, normalizedTarget);
   const rel = relative(base, full);
   if (rel.startsWith('..') || resolve(base, rel) !== full || full === base) {
     throw new InvalidPrimerPathError(`targetPath escapes profileDir: "${targetPath}"`);
@@ -90,30 +93,47 @@ export function resolvePrimerPath(profileDir: string, targetPath: string, catId:
 }
 
 /** Deterministic provenance path (proposalId-based → retry overwrites same file, no dup). */
-export function provenancePathFor(profileDir: string, proposal: WritableProfileUpdate): string {
-  return join(profileDir, 'provenance', `${proposal.proposalId}-${proposal.sourceCatId}-primer.md`);
+export function provenancePathFor(
+  profileDir: string,
+  proposal: Pick<WritableProfileUpdate, 'proposalId' | 'sourceCatId' | 'targetLayer'>,
+): string {
+  return join(profileDir, 'provenance', `${proposal.proposalId}-${proposal.sourceCatId}-${proposal.targetLayer}.md`);
+}
+
+/**
+ * Phase E: generic target write — re-read current, optimistic-lock check, atomic write.
+ * Works for any target (primer, corpus) given the resolved absolute path.
+ * Returns the writtenPath; the route checkpoints it BEFORE calling writeProfileProvenance.
+ */
+export function writeProfileTarget(
+  proposal: WritableProfileUpdate,
+  absolutePath: string,
+  options: WriteProfilePrimerOptions = {},
+): { writtenPath: string } {
+  const fileOps = options.fileOps ?? DEFAULT_FILE_OPS;
+  const current = existsSync(absolutePath) ? readFileSync(absolutePath, 'utf8') : '';
+  const currentHash = hashContent(current);
+  if (currentHash !== proposal.baseContentHash) {
+    if (options.allowAlreadyApplied && current === proposal.afterContent) return { writtenPath: absolutePath };
+    throw new StaleProfileUpdateError(proposal.baseContentHash, currentHash);
+  }
+  mkdirSync(dirname(absolutePath), { recursive: true });
+  atomicWriteUtf8(absolutePath, proposal.afterContent, fileOps);
+  return { writtenPath: absolutePath };
 }
 
 /**
  * P1-1 step 1: re-read current primer, optimistic-lock check, write afterContent.
- * Returns the writtenPath; the route checkpoints it BEFORE calling writeProfileProvenance.
+ * Now a thin wrapper around writeProfileTarget with primer path resolution.
  */
 export function writeProfilePrimer(
   proposal: WritableProfileUpdate,
   profileDir: string,
+  relationshipKey: string,
   options: WriteProfilePrimerOptions = {},
 ): { writtenPath: string } {
-  const fileOps = options.fileOps ?? DEFAULT_FILE_OPS;
-  const primerPath = resolvePrimerPath(profileDir, proposal.targetPath, proposal.sourceCatId);
-  const current = existsSync(primerPath) ? readFileSync(primerPath, 'utf8') : '';
-  const currentHash = hashContent(current);
-  if (currentHash !== proposal.baseContentHash) {
-    if (options.allowAlreadyApplied && current === proposal.afterContent) return { writtenPath: primerPath };
-    throw new StaleProfileUpdateError(proposal.baseContentHash, currentHash);
-  }
-  mkdirSync(dirname(primerPath), { recursive: true });
-  atomicWriteUtf8(primerPath, proposal.afterContent, fileOps);
-  return { writtenPath: primerPath };
+  const primerPath = resolvePrimerPath(profileDir, proposal.targetPath, relationshipKey);
+  return writeProfileTarget(proposal, primerPath, options);
 }
 
 /**
@@ -136,6 +156,7 @@ function renderProvenance(proposal: WritableProfileUpdate): string {
     `# Provenance: profile-update ${proposal.proposalId}`,
     '',
     `- cat: ${proposal.sourceCatId}`,
+    `- layer: ${proposal.targetLayer}`,
     `- target: ${proposal.targetPath}`,
     `- thread: ${proposal.sourceThreadId}`,
     `- rationale: ${proposal.rationale}`,

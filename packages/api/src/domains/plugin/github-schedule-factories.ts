@@ -16,6 +16,7 @@ import type { IConnectorThreadBindingStore } from '../../infrastructure/connecto
 import type { ReconciliationDedup } from '../../infrastructure/connectors/github-repo-event/ReconciliationDedup.js';
 import type { RepoIssueComment } from '../../infrastructure/connectors/github-repo-event/RepoCommentPollTaskSpec.js';
 import { repoCommentPollTaskSpec } from '../../infrastructure/connectors/github-repo-event/RepoCommentPollTaskSpec.js';
+import type { ResolveRepoInboxCatId } from '../../infrastructure/connectors/github-repo-event/RepoInboxOwnerResolver.js';
 import type { GhIssueItem, GhPrItem } from '../../infrastructure/connectors/github-repo-event/RepoScanTaskSpec.js';
 import { createRepoScanTaskSpec } from '../../infrastructure/connectors/github-repo-event/RepoScanTaskSpec.js';
 import { createCiCdCheckTaskSpec } from '../../infrastructure/email/CiCdCheckTaskSpec.js';
@@ -24,29 +25,40 @@ import type { ConflictAutoExecutor } from '../../infrastructure/email/ConflictAu
 import { createConflictCheckTaskSpec } from '../../infrastructure/email/ConflictCheckTaskSpec.js';
 import type { ConflictRouter } from '../../infrastructure/email/ConflictRouter.js';
 import type { ConnectorInvokeTrigger } from '../../infrastructure/email/ConnectorInvokeTrigger.js';
+import type { PrCiStatusTarget } from '../../infrastructure/email/ci-status-batch-fetcher.js';
 import type {
   ConnectorDeliveryDeps,
   ConnectorDeliveryInput,
   ConnectorDeliveryResult,
 } from '../../infrastructure/email/deliver-connector-message.js';
 import type { IssueComment, IssueCommentRouter } from '../../infrastructure/email/IssueCommentRouter.js';
-import { createIssueCommentTaskSpec } from '../../infrastructure/email/IssueCommentTaskSpec.js';
+import {
+  createIssueCommentTaskSpec,
+  type IssueTrackingMetadata,
+} from '../../infrastructure/email/IssueCommentTaskSpec.js';
 import type {
   PrFeedbackComment,
   PrReviewDecision,
   ReviewFeedbackRouter,
 } from '../../infrastructure/email/ReviewFeedbackRouter.js';
-import type { ReviewFeedbackPrMetadata } from '../../infrastructure/email/ReviewFeedbackTaskSpec.js';
+import type {
+  PrFeedbackCommentCursors,
+  ReviewFeedbackPrMetadata,
+  ReviewFeedbackTaskSpecOptions,
+} from '../../infrastructure/email/ReviewFeedbackTaskSpec.js';
 import { createReviewFeedbackTaskSpec } from '../../infrastructure/email/ReviewFeedbackTaskSpec.js';
 import type { TaskSpec_P1 } from '../../infrastructure/scheduler/types.js';
 import type { ITaskStore } from '../cats/services/stores/ports/TaskStore.js';
 import type { IThreadStore } from '../cats/services/stores/ports/ThreadStore.js';
 import type { ICommunityEventLog } from '../community/CommunityEventLog.js';
 import type { ICommunityObjectStore } from '../community/CommunityObjectStore.js';
-import type { GitHubSnapshot } from '../community/CommunityReconciler.js';
-import { createCommunityReconcilerTaskSpec } from '../community/CommunityReconcilerTaskSpec.js';
-import type { CommunityReconciliationFindingStore } from '../community/CommunityReconciliationFindingStore.js';
 import type { SlaPolicy } from '../community/community-sla-policy.js';
+import type { ExternalReviewCoordinator } from '../community/external-review/ExternalReviewCoordinator.js';
+import type { IssueCommentClassification } from '../community/issue-analysis/issue-comment-classifier.js';
+import type { GitHubSnapshot } from '../community/reconciliation/CommunityReconciler.js';
+import { createCommunityReconcilerTaskSpec } from '../community/reconciliation/CommunityReconcilerTaskSpec.js';
+import type { CommunityReconciliationFindingStore } from '../community/reconciliation/CommunityReconciliationFindingStore.js';
+import type { GitHubWaitLifecycleService } from '../github-signals/GitHubWaitLifecycleService.js';
 import type { ScheduleFactory, ScheduleFactoryDeps, ScheduleFactoryRegistry } from './ScheduleFactoryRegistry.js';
 
 /** Minimal projector interface for optional DI in factories — avoids importing concrete class. */
@@ -63,7 +75,10 @@ interface IFactoryProjectorMin {
 export interface GitHubScheduleDeps extends ScheduleFactoryDeps {
   taskStore: ITaskStore;
   cicdRouter: CiCdRouter;
-  fetchPrStatus?: (repoFullName: string, prNumber: number) => Promise<CiPollResult | null>;
+  fetchPrStatuses?: (
+    targets: readonly PrCiStatusTarget[],
+    signal?: AbortSignal,
+  ) => Promise<ReadonlyMap<string, CiPollResult | null>>;
   conflictRouter: ConflictRouter;
   reviewFeedbackRouter: ReviewFeedbackRouter;
   /** F140/#949 correction + F167 R2: `get` lets ReviewFeedbackTaskSpec repair already-rotated
@@ -72,17 +87,27 @@ export interface GitHubScheduleDeps extends ScheduleFactoryDeps {
   invokeTrigger: ConnectorInvokeTrigger;
   // Repo-scan connector delivery deps. Review-feedback delivery stays encapsulated
   // in ReviewFeedbackRouter; no rotation/backlink delivery path exists post-#2394.
-  checkMergeable: (repo: string, pr: number) => Promise<{ mergeState: string; headSha: string }>;
+  checkMergeable: (repo: string, pr: number, signal?: AbortSignal) => Promise<{ mergeState: string; headSha: string }>;
   autoExecutor: ConflictAutoExecutor;
-  fetchPrMetadata: (repo: string, pr: number) => Promise<ReviewFeedbackPrMetadata | null>;
-  fetchComments: (repo: string, pr: number, sinceId?: number) => Promise<PrFeedbackComment[]>;
-  fetchReviews: (repo: string, pr: number, sinceId?: number) => Promise<PrReviewDecision[]>;
+  fetchPrMetadata: (repo: string, pr: number, signal?: AbortSignal) => Promise<ReviewFeedbackPrMetadata | null>;
+  fetchComments: (
+    repo: string,
+    pr: number,
+    cursors: PrFeedbackCommentCursors,
+    signal?: AbortSignal,
+  ) => Promise<PrFeedbackComment[]>;
+  fetchReviews: (repo: string, pr: number, signal?: AbortSignal) => Promise<PrReviewDecision[]>;
+  fetchReviewThreads?: ReviewFeedbackTaskSpecOptions['fetchReviewThreads'];
   isEchoComment: (c: PrFeedbackComment) => boolean;
   isEchoReview: (r: PrReviewDecision) => boolean;
   isNoiseComment: (c: PrFeedbackComment) => boolean;
+  externalReviewCoordinator?: Pick<ExternalReviewCoordinator, 'recordCloud' | 'shouldContinueTracking'>;
+  /** Self-merge filter: returns true if the given GitHub login is our own authenticated identity. */
+  isSelfMerge?: (mergedByLogin: string) => boolean;
   // repo-scan deps — optional, not available when redis is not configured
   repoAllowlist?: string[];
   inboxCatId?: string;
+  resolveInboxCatId?: ResolveRepoInboxCatId;
   defaultUserId?: string;
   reconciliationDedup?: Pick<
     ReconciliationDedup,
@@ -91,13 +116,29 @@ export interface GitHubScheduleDeps extends ScheduleFactoryDeps {
   bindingStore?: Pick<IConnectorThreadBindingStore, 'getByExternal'>;
   deliverFn?: (deps: ConnectorDeliveryDeps, input: ConnectorDeliveryInput) => Promise<ConnectorDeliveryResult>;
   deliveryDeps?: ConnectorDeliveryDeps;
-  fetchOpenPRs?: (repo: string) => Promise<GhPrItem[]>;
-  fetchOpenIssues?: (repo: string) => Promise<GhIssueItem[]>;
+  fetchOpenPRs?: (repo: string, signal?: AbortSignal) => Promise<GhPrItem[]>;
+  fetchOpenIssues?: (repo: string, signal?: AbortSignal) => Promise<GhIssueItem[]>;
   // F202 Phase 2D: issue comment tracking deps
   issueCommentRouter?: IssueCommentRouter;
-  fetchIssueComments?: (repoFullName: string, issueNumber: number, sinceId?: number) => Promise<IssueComment[]>;
-  fetchIssueState?: (repoFullName: string, issueNumber: number) => Promise<'open' | 'closed'>;
+  waitLifecycle?: GitHubWaitLifecycleService;
+  fetchIssueComments?: (
+    repoFullName: string,
+    issueNumber: number,
+    sinceId?: number,
+    signal?: AbortSignal,
+  ) => Promise<IssueComment[]>;
+  fetchIssueState?: (repoFullName: string, issueNumber: number, signal?: AbortSignal) => Promise<'open' | 'closed'>;
+  fetchIssueMetadata?: (
+    repoFullName: string,
+    issueNumber: number,
+    signal?: AbortSignal,
+  ) => Promise<IssueTrackingMetadata>;
   isEchoIssueComment?: (c: IssueComment) => boolean;
+  /** F220 (clowder-ai#972): exact-identity bot setup-noise filter for the issue path
+   *  (mirrors the PR-review path's isNoiseComment; provided from the shared F140 filter). */
+  isNoiseIssueComment?: (c: IssueComment) => boolean;
+  /** Canonical issue-comment classifier used by every GitHub collection path. */
+  classifyIssueComment?: (c: { author: string; body: string }) => IssueCommentClassification;
   /**
    * F168 Phase A P1-1 fix: community event services.
    * Provided by index.ts when Redis is available; factories thread them to spec constructors.
@@ -111,7 +152,7 @@ export interface GitHubScheduleDeps extends ScheduleFactoryDeps {
    * event log + a Redis-backed per-repo cursor (read/write), NOT the delivery deps
    * (inbox / reconciliationDedup / bindingStore) that repo-scan uses.
    */
-  fetchRepoComments?: (repo: string, sinceIso?: string) => Promise<RepoIssueComment[]>;
+  fetchRepoComments?: (repo: string, sinceIso?: string, signal?: AbortSignal) => Promise<RepoIssueComment[]>;
   readRepoCommentCursor?: (repo: string) => Promise<string | undefined>;
   writeRepoCommentCursor?: (repo: string, cursor: string) => Promise<void>;
   /**
@@ -121,8 +162,8 @@ export interface GitHubScheduleDeps extends ScheduleFactoryDeps {
    */
   objectStore?: Pick<ICommunityObjectStore, 'get' | 'listSubjectKeys'>;
   findingStore?: CommunityReconciliationFindingStore;
-  fetchGitHubIssueState?: (repo: string, number: number) => Promise<GitHubSnapshot | null>;
-  fetchGitHubPrState?: (repo: string, number: number) => Promise<GitHubSnapshot | null>;
+  fetchGitHubIssueState?: (repo: string, number: number, signal?: AbortSignal) => Promise<GitHubSnapshot | null>;
+  fetchGitHubPrState?: (repo: string, number: number, signal?: AbortSignal) => Promise<GitHubSnapshot | null>;
   reconcilerSlaPolicy?: SlaPolicy;
   isReconcilerBaselineEstablished?: () => Promise<boolean>;
   markReconcilerBaselineEstablished?: () => Promise<void>;
@@ -131,6 +172,16 @@ export interface GitHubScheduleDeps extends ScheduleFactoryDeps {
    * Optional — only available when wired in index.ts (always, since InMemoryOpportunityStore).
    */
   distillationCheckpoint?: import('../../infrastructure/distillation/DistillationCheckpoint.js').DistillationCheckpoint;
+  /** F167 Phase Q: event-backed retirement for matching hold_ball timers. */
+  holdLifecycle?: {
+    retireSatisfiedWait(event: {
+      threadId: string;
+      subjectKey: string;
+      expectedSignalKey: string;
+      sourceKind: string;
+      sourceMessageId?: string;
+    }): void | Promise<unknown>;
+  };
 }
 
 /** Cast ScheduleFactoryDeps to GitHubScheduleDeps with runtime validation */
@@ -149,9 +200,13 @@ const cicdCheckFactory: ScheduleFactory = {
       id: instanceId,
       taskStore: d.taskStore,
       cicdRouter: d.cicdRouter,
-      fetchPrStatus: d.fetchPrStatus,
+      fetchPrStatuses: d.fetchPrStatuses,
       invokeTrigger: d.invokeTrigger,
+      isSelfMerge: d.isSelfMerge,
       log: d.log,
+      ...(d.externalReviewCoordinator
+        ? { continueDoneTracking: d.externalReviewCoordinator.shouldContinueTracking.bind(d.externalReviewCoordinator) }
+        : {}),
     }) as TaskSpec_P1;
   },
 };
@@ -184,6 +239,7 @@ const reviewFeedbackFactory: ScheduleFactory = {
       fetchPrMetadata: d.fetchPrMetadata,
       fetchComments: d.fetchComments,
       fetchReviews: d.fetchReviews,
+      fetchReviewThreads: d.fetchReviewThreads,
       reviewFeedbackRouter: d.reviewFeedbackRouter,
       threadStore: d.threadStore,
       invokeTrigger: d.invokeTrigger,
@@ -191,6 +247,7 @@ const reviewFeedbackFactory: ScheduleFactory = {
       isEchoComment: d.isEchoComment,
       isEchoReview: d.isEchoReview,
       isNoiseComment: d.isNoiseComment,
+      externalReviewCoordinator: d.externalReviewCoordinator,
       // F168 Phase A P1-1: thread community event services to spec
       eventLog: d.eventLog,
       projector: d.projector,
@@ -224,6 +281,7 @@ const repoScanFactory: ScheduleFactory = {
       id: instanceId,
       repoAllowlist: d.repoAllowlist,
       inboxCatId: d.inboxCatId,
+      resolveInboxCatId: d.resolveInboxCatId,
       defaultUserId: d.defaultUserId,
       reconciliationDedup: d.reconciliationDedup,
       bindingStore: d.bindingStore,
@@ -253,14 +311,21 @@ const issueTrackingFactory: ScheduleFactory = {
     if (!d.fetchIssueComments || !d.fetchIssueState) {
       throw new Error('[F202-2] github.issue-tracking requires fetchIssueComments and fetchIssueState in deps');
     }
+    if (!d.waitLifecycle) {
+      throw new Error('[F280] github.issue-tracking requires waitLifecycle in deps');
+    }
     return createIssueCommentTaskSpec({
       id: instanceId,
       taskStore: d.taskStore,
       issueCommentRouter: d.issueCommentRouter,
+      waitLifecycle: d.waitLifecycle,
       fetchComments: d.fetchIssueComments,
       fetchIssueState: d.fetchIssueState,
+      fetchIssueMetadata: d.fetchIssueMetadata,
       invokeTrigger: d.invokeTrigger,
       isEchoComment: d.isEchoIssueComment,
+      isNoiseComment: d.isNoiseIssueComment,
+      classifyComment: d.classifyIssueComment,
       log: d.log,
       // F168 Phase B Task 4: thread community event log for dual-cursor collection/delivery.
       // Without this, the dual-cursor code path in IssueCommentTaskSpec is never activated
@@ -271,6 +336,7 @@ const issueTrackingFactory: ScheduleFactory = {
       // projection immediately (awaiting_external → in_progress, lastExternalActivityAt) —
       // matches ReviewFeedbackTaskSpec + repoScanFactory wiring.
       projector: d.projector,
+      holdLifecycle: d.holdLifecycle,
     }) as TaskSpec_P1;
   },
 };
@@ -307,6 +373,7 @@ const repoCommentPollFactory: ScheduleFactory = {
       repoAllowlist: d.repoAllowlist,
       readCursor: d.readRepoCommentCursor,
       writeCursor: d.writeRepoCommentCursor,
+      classifyComment: d.classifyIssueComment,
       log: d.log,
     }) as TaskSpec_P1;
   },

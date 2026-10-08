@@ -1,15 +1,18 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCatTechnicalLabelResolver } from '@/hooks/useCatNameResolver';
 import { apiFetch } from '@/utils/api-client';
 import {
   formatBindingLabel,
   formatLifecycleBadge,
+  formatMissingCapabilities,
+  formatPolicyStatus,
+  formatPolicyStrategy,
   formatRuntimeLabel,
   formatRuntimeSessionTitle,
   formatSealReason,
   formatSurfaceBadge,
-  shortRuntimeId,
 } from './external-runtime-session-format';
 import type {
   ExternalRuntimeSessionListItem,
@@ -140,9 +143,11 @@ function RuntimeSessionRow({
   session: ExternalRuntimeSessionListItem;
   onViewSession?: (sessionId: string, catId?: string) => void;
 }) {
+  const resolveCatName = useCatTechnicalLabelResolver();
   const badge = formatLifecycleBadge(session.lifecycle);
   const sealReason = formatSealReason(session.lifecycle.sealReason);
   const surfaceBadge = formatSurfaceBadge(session.surface);
+  const policyMissingLabel = formatMissingCapabilities(session.sessionPolicy?.execution.missingCapabilities ?? []);
   return (
     <li className="min-w-0 bg-[var(--console-card-bg)] px-3 py-2" data-testid="runtime-session-row">
       <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-3">
@@ -158,20 +163,30 @@ function RuntimeSessionRow({
             )}
             {session.lifecycle.sealReason && <span className="text-micro text-cafe-muted">{sealReason}</span>}
             <span className="min-w-0 truncate text-xs font-semibold text-cafe-text">
-              {formatRuntimeSessionTitle(session)}
+              {formatRuntimeSessionTitle(session, resolveCatName)}
             </span>
           </div>
           <div className="grid min-w-0 gap-x-4 gap-y-1 text-micro text-cafe-muted sm:grid-cols-2">
             <span className="min-w-0 truncate">
-              {session.catId} · {session.model ?? 'model unknown'}
+              {resolveCatName(session.catId)} · {session.model ?? 'model unknown'}
             </span>
-            <span className="min-w-0 truncate font-mono">{shortRuntimeId(session.runtimeSessionId)}</span>
-            {session.runtimeConversationId && (
-              <span className="min-w-0 truncate font-mono">{session.runtimeConversationId}</span>
-            )}
+            <details className="min-w-0" data-testid="runtime-session-identity">
+              <summary className="cursor-pointer">会话标识</summary>
+              <p className="break-all font-mono">runtime 会话 ID：{session.runtimeSessionId}</p>
+              {session.runtimeConversationId && (
+                <p className="break-all font-mono">runtime 对话 ID：{session.runtimeConversationId}</p>
+              )}
+            </details>
             <span className="min-w-0 truncate">
               {formatBindingLabel(session.binding)} · {formatTimestamp(session.lastObservedAt)}
             </span>
+            {session.sessionPolicy && (
+              <span className="min-w-0 truncate">
+                策略 {formatPolicyStrategy(session.sessionPolicy.config.strategy)} ·{' '}
+                {formatPolicyStatus(session.sessionPolicy.execution.status)}
+                {policyMissingLabel ? ` · ${policyMissingLabel}` : ''}
+              </span>
+            )}
           </div>
         </div>
         <button

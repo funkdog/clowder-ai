@@ -53,7 +53,11 @@ const storeState = {
     content: string;
     isStreaming?: boolean;
     origin?: string;
-    extra?: { rich?: { v: 1; blocks: Array<{ id: string }> }; stream?: { invocationId?: string } };
+    extra?: {
+      rich?: { v: 1; blocks: Array<{ id: string }> };
+      stream?: { invocationId?: string; turnInvocationId?: string };
+      isExplicitPost?: boolean;
+    };
     timestamp: number;
   }>,
   addMessage: mockAddMessage,
@@ -89,7 +93,7 @@ const storeState = {
   setThreadMessageStreaming: mockSetThreadMessageStreaming,
   getThreadState: mockGetThreadState,
   currentThreadId: 'thread-1',
-  catInvocations: {} as Record<string, { invocationId?: string }>,
+  catInvocations: {} as Record<string, { invocationId?: string; turnInvocationId?: string }>,
   activeInvocations: {} as Record<string, { catId?: string }>,
 };
 
@@ -198,6 +202,59 @@ describe('useAgentMessages rich_block correlation (Bug A)', () => {
     expect(block.id).toBe('block-1');
     // Should NOT be attached to the streaming message
     expect(targetId).not.toBe(streamMsgId);
+  });
+
+  it('keeps an identity-bound rich_block on the current stream when an independent callback was posted first', () => {
+    act(() => {
+      root.render(React.createElement(Harness));
+    });
+
+    const parentInvocationId = 'parent-independent';
+    const turnInvocationId = 'turn-independent';
+    const streamMsgId = 'msg-stream-independent';
+    const callbackMsgId = 'msg-callback-independent';
+    storeState.messages.push(
+      {
+        id: streamMsgId,
+        type: 'assistant',
+        catId: 'opus',
+        content: 'current provider response',
+        isStreaming: true,
+        origin: 'stream',
+        extra: { stream: { invocationId: parentInvocationId, turnInvocationId } },
+        timestamp: Date.now() - 1000,
+      },
+      {
+        id: callbackMsgId,
+        type: 'assistant',
+        catId: 'opus',
+        content: 'independent proactive update',
+        origin: 'callback',
+        extra: {
+          isExplicitPost: true,
+          stream: { invocationId: parentInvocationId, turnInvocationId },
+        },
+        timestamp: Date.now(),
+      },
+    );
+    storeState.catInvocations = {
+      opus: { invocationId: parentInvocationId, turnInvocationId },
+    };
+
+    const block = { id: 'block-independent', kind: 'card', v: 1, title: 'current final' };
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'system_info',
+        catId: 'opus',
+        content: JSON.stringify({ type: 'rich_block', block }),
+        invocationId: parentInvocationId,
+        turnInvocationId,
+      });
+    });
+
+    expect(mockAppendRichBlock).toHaveBeenCalledTimes(1);
+    expect(mockAppendRichBlock).toHaveBeenCalledWith(streamMsgId, block);
+    expect(mockAppendRichBlock).not.toHaveBeenCalledWith(callbackMsgId, block);
   });
 
   it('replaces an overlapping stream bubble with callback text from the same invocation', () => {
@@ -688,6 +745,38 @@ describe('useAgentMessages rich_block correlation (Bug A)', () => {
     expect(mockAppendRichBlock).toHaveBeenCalledWith(explicitMsgId, testBlock);
   });
 
+  it('passes turn identity when a definitive callback rich event claims a stream preview', () => {
+    act(() => {
+      root.render(React.createElement(Harness));
+    });
+    const block = { id: 'preview-owned-by-callback', kind: 'card', v: 1, title: 'Moved' };
+    storeState.messages.push({
+      id: 'callback-owner',
+      type: 'assistant',
+      catId: 'opus',
+      content: 'persisted callback',
+      origin: 'callback',
+      extra: { stream: { invocationId: 'parent-1', turnInvocationId: 'turn-1' }, isExplicitPost: true },
+      timestamp: Date.now(),
+    });
+
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'system_info',
+        catId: 'opus',
+        content: JSON.stringify({ type: 'rich_block', block, messageId: 'callback-owner' }),
+        invocationId: 'parent-1',
+        turnInvocationId: 'turn-1',
+      });
+    });
+
+    expect(mockAppendRichBlock).toHaveBeenCalledWith('callback-owner', block, {
+      catId: 'opus',
+      invocationId: 'parent-1',
+      turnInvocationId: 'turn-1',
+    });
+  });
+
   it('AC-Z17: invocationless rich_block after done attaches to just-finalized stream bubble, not a new small bubble', () => {
     mockSetStreaming.mockImplementation((id: string, streaming: boolean) => {
       storeState.messages = storeState.messages.map((m) => (m.id === id ? { ...m, isStreaming: streaming } : m));
@@ -734,6 +823,71 @@ describe('useAgentMessages rich_block correlation (Bug A)', () => {
     expect(mockAddMessage).not.toHaveBeenCalled();
     expect(mockAppendRichBlock).toHaveBeenCalledTimes(1);
     expect(mockAppendRichBlock).toHaveBeenCalledWith('msg-voice-stream', voiceBlock);
+  });
+
+  it('F309 entry 20: done with the stored id and time settles the live bubble to both', () => {
+    mockSetStreaming.mockImplementation((id: string, streaming: boolean) => {
+      storeState.messages = storeState.messages.map((m) => (m.id === id ? { ...m, isStreaming: streaming } : m));
+    });
+    act(() => {
+      root.render(React.createElement(Harness));
+    });
+    storeState.messages.push({
+      id: 'msg-live-codex-sol',
+      type: 'assistant',
+      catId: 'opus',
+      content: '',
+      isStreaming: true,
+      origin: 'stream',
+      extra: { stream: { invocationId: 'inv-gallery' }, rich: { v: 1, blocks: [{ id: 'g1' }] } },
+      timestamp: 1790214966863,
+    });
+
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'done',
+        catId: 'opus',
+        invocationId: 'inv-gallery',
+        messageId: '0001790214949235-000003-43bcc559',
+        messageTimestamp: 1790214949235,
+        isFinal: true,
+      });
+    });
+
+    expect(mockReplaceMessageId).toHaveBeenCalledWith('msg-live-codex-sol', '0001790214949235-000003-43bcc559');
+    expect(mockPatchMessage).toHaveBeenCalledWith(
+      '0001790214949235-000003-43bcc559',
+      expect.objectContaining({ timestamp: 1790214949235 }),
+    );
+    expect(storeState.messages[0]).toMatchObject({ id: '0001790214949235-000003-43bcc559', timestamp: 1790214949235 });
+  });
+
+  it('F309 entry 20: done without a stored time leaves the live clock as it is', () => {
+    act(() => {
+      root.render(React.createElement(Harness));
+    });
+    storeState.messages.push({
+      id: 'msg-live-2',
+      type: 'assistant',
+      catId: 'opus',
+      content: '',
+      isStreaming: true,
+      origin: 'stream',
+      extra: { stream: { invocationId: 'inv-no-time' } },
+      timestamp: 4242,
+    });
+
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'done',
+        catId: 'opus',
+        invocationId: 'inv-no-time',
+        messageId: 'stored-2',
+        isFinal: true,
+      });
+    });
+
+    expect(storeState.messages[0]).toMatchObject({ id: 'stored-2', timestamp: 4242 });
   });
 
   it('does not attach explicit rich_block from a new invocation to the previous finalized bubble', () => {

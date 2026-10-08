@@ -67,6 +67,50 @@ function expectedSymlinkTarget(linkPath, sourcePath) {
 }
 
 describe('Mount Rules Route (F228)', () => {
+  it('PUT /api/mount-rules persists provider rules outside the runtime worktree', async () => {
+    const prevOwner = process.env.DEFAULT_OWNER_USER_ID;
+    const prevRuntimeRoot = process.env.CAT_CAFE_RUNTIME_ROOT;
+    const prevWorkspaceRoot = process.env.CAT_CAFE_WORKSPACE_ROOT;
+    process.env.DEFAULT_OWNER_USER_ID = OWNER_ID;
+    const runtimeRoot = await mkdtemp(join(tmpdir(), 'mount-rules-runtime-root-'));
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'mount-rules-workspace-root-'));
+    const canonicalWorkspaceRoot = await realpath(workspaceRoot);
+    process.env.CAT_CAFE_RUNTIME_ROOT = runtimeRoot;
+    process.env.CAT_CAFE_WORKSPACE_ROOT = workspaceRoot;
+    const rules = {
+      ...DEFAULT_MOUNT_RULES,
+      mountPoints: Object.fromEntries(
+        Object.entries(DEFAULT_MOUNT_RULES.mountPoints).map(([id, provider]) => [id, { ...provider, enabled: false }]),
+      ),
+      customPaths: [],
+    };
+    const app = await buildMountRulesApp({ mainProjectRoot: canonicalWorkspaceRoot });
+
+    try {
+      const res = await app.inject({
+        method: 'PUT',
+        url: '/api/mount-rules',
+        headers: LOCAL_WRITE_HEADERS,
+        payload: { projectPath: runtimeRoot, rules },
+      });
+
+      assert.equal(res.statusCode, 200, res.body);
+      assert.equal(JSON.parse(res.body).projectRoot, canonicalWorkspaceRoot);
+      assert.equal(await exists(join(workspaceRoot, '.cat-cafe/capabilities.json')), true);
+      assert.equal(await exists(join(runtimeRoot, '.cat-cafe/capabilities.json')), false);
+    } finally {
+      if (prevOwner === undefined) delete process.env.DEFAULT_OWNER_USER_ID;
+      else process.env.DEFAULT_OWNER_USER_ID = prevOwner;
+      if (prevRuntimeRoot === undefined) delete process.env.CAT_CAFE_RUNTIME_ROOT;
+      else process.env.CAT_CAFE_RUNTIME_ROOT = prevRuntimeRoot;
+      if (prevWorkspaceRoot === undefined) delete process.env.CAT_CAFE_WORKSPACE_ROOT;
+      else process.env.CAT_CAFE_WORKSPACE_ROOT = prevWorkspaceRoot;
+      await app.close();
+      await rm(runtimeRoot, { recursive: true, force: true });
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
+  });
+
   it('PUT /api/mount-rules waits for capability lock before writing project rules', async () => {
     const prevOwner = process.env.DEFAULT_OWNER_USER_ID;
     process.env.DEFAULT_OWNER_USER_ID = OWNER_ID;
@@ -250,6 +294,7 @@ describe('Mount Rules Route (F228)', () => {
     const skillName = 'debugging';
     const oldClaudeRoot = join(canonicalProjectDir, '.claude/skills');
     const newClaudeLink = join(canonicalProjectDir, '.project-claude/skills', skillName);
+    const canonicalSharedRefsAlias = join(skillsSource, '.cat-cafe-shared-refs');
     const oldClaudeTarget = expectedSymlinkTarget(oldClaudeRoot, skillsSource);
     const newClaudeTarget = expectedSymlinkTarget(newClaudeLink, join(skillsSource, skillName));
     const newRules = {
@@ -276,6 +321,11 @@ describe('Mount Rules Route (F228)', () => {
 
       assert.equal(res.statusCode, 200);
       assert.equal(await exists(oldClaudeRoot), false, 'legacy provider root symlink should be removed');
+      assert.equal(
+        await realpath(canonicalSharedRefsAlias),
+        await realpath(join(skillsSource, 'refs')),
+        'cleaning an old directory-level mount must not traverse into and delete the canonical shared refs alias',
+      );
       assert.equal(
         resolve(dirname(newClaudeLink), await readlink(newClaudeLink)),
         resolve(dirname(newClaudeLink), newClaudeTarget),
@@ -1116,6 +1166,30 @@ describe('Mount Rules Route (F228)', () => {
     }
   });
 
+  it('syncProject mounts the stable shared refs coordinate beside first-party skills', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'sync-shared-skill-refs-'));
+    const canonicalDir = await realpath(projectDir);
+    const skillsSource = await resolveRepoSkillsDir();
+    const rules = {
+      ...DEFAULT_MOUNT_RULES,
+      mountPoints: {
+        claude: { enabled: false, path: '.claude/skills' },
+        codex: { enabled: true, path: '.codex/skills' },
+        gemini: { enabled: false, path: '.gemini/skills' },
+        kimi: { enabled: false, path: '.kimi/skills' },
+      },
+    };
+
+    try {
+      await syncProject(canonicalDir, skillsSource, { mountRules: rules });
+      const aliasPath = join(canonicalDir, '.codex/skills/.cat-cafe-shared-refs');
+      assert.ok((await lstat(aliasPath)).isSymbolicLink());
+      assert.equal(resolve(dirname(aliasPath), await readlink(aliasPath)), resolve(skillsSource, 'refs'));
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
   it('syncProject ignores config entries with path-traversal skill ids', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'mount-rules-invalid-id-'));
     const canonicalDir = await realpath(projectDir);
@@ -1172,6 +1246,67 @@ describe('Mount Rules Route (F228)', () => {
     } finally {
       await rm(projectDir, { recursive: true, force: true });
       await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('mountSkillSymlinks establishes the shared refs coordinate for a first-party skill', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'mount-shared-skill-refs-'));
+    const canonicalDir = await realpath(projectDir);
+    const skillsSource = await resolveCatCafeSkillsSource();
+    const rules = {
+      ...DEFAULT_MOUNT_RULES,
+      mountPoints: {
+        claude: { enabled: false, path: '.claude/skills' },
+        codex: { enabled: true, path: '.codex/skills' },
+        gemini: { enabled: false, path: '.gemini/skills' },
+        kimi: { enabled: false, path: '.kimi/skills' },
+      },
+    };
+
+    try {
+      await mountSkillSymlinks(canonicalDir, 'tdd', skillsSource, rules);
+      const aliasPath = join(canonicalDir, '.codex/skills/.cat-cafe-shared-refs');
+      assert.ok((await lstat(aliasPath)).isSymbolicLink());
+      assert.equal(resolve(dirname(aliasPath), await readlink(aliasPath)), resolve(skillsSource, 'refs'));
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  it('mountSkillSymlinks keeps plugin skill source separate from shared refs source', async () => {
+    const canonicalDir = await mkdtemp(join(tmpdir(), 'mount-skill-plugin-refs-'));
+    const builtInSource = join(canonicalDir, 'cat-cafe-skills');
+    const pluginSource = join(canonicalDir, 'plugin-skills');
+    await mkdir(join(builtInSource, 'refs'), { recursive: true });
+    await mkdir(join(pluginSource, 'plugin-skill'), { recursive: true });
+    const rules = {
+      ...DEFAULT_MOUNT_RULES,
+      mountPoints: {
+        claude: { enabled: false, path: '.claude/skills' },
+        codex: { enabled: true, path: '.codex/skills' },
+        gemini: { enabled: false, path: '.gemini/skills' },
+        kimi: { enabled: false, path: '.kimi/skills' },
+      },
+    };
+
+    try {
+      const result = await mountSkillSymlinks(
+        canonicalDir,
+        'plugin-skill',
+        pluginSource,
+        rules,
+        undefined,
+        builtInSource,
+      );
+      const aliasPath = join(canonicalDir, '.codex/skills/.cat-cafe-shared-refs');
+      assert.equal(result.conflicts.length, 0);
+      assert.equal(await realpath(aliasPath), await realpath(join(builtInSource, 'refs')));
+      assert.equal(
+        await realpath(join(canonicalDir, '.codex/skills/plugin-skill')),
+        await realpath(join(pluginSource, 'plugin-skill')),
+      );
+    } finally {
+      await rm(canonicalDir, { recursive: true, force: true });
     }
   });
 

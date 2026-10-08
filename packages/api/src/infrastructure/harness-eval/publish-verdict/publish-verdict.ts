@@ -1,59 +1,33 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import type { CapabilityWakeupSourceSelector } from '../capability-wakeup/capability-wakeup-trial-provider.js';
-import { validateCapabilityWakeupSelector } from '../capability-wakeup/capability-wakeup-trial-provider.js';
-import { getEvalCatOverride } from '../domain/eval-domain-override.js';
-import { loadDomains } from '../hub/eval-hub-read-model.js';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
+import { parse as parseYaml } from 'yaml';
+import { assertMeasurementVerdictActionAllowed } from '../measurement/measurement-bundle-census.js';
 import {
-  assertCanCrossThreadHandoff,
-  parseVerdictHandoffPacket,
-  type VerdictHandoffPacket,
-} from '../verdict-handoff.js';
+  ensureMeasurementBundleCensusFile,
+  refreshMeasurementBundleCensusFile,
+} from '../measurement/measurement-bundle-census-file.js';
 import { mapPublishVerdictError } from './error-mapping.js';
-import { computePublishPolicy } from './publish-policy.js';
-import type {
-  GitPublisher,
-  HandlerError,
-  PublishVerdictDeps,
-  PublishVerdictInput,
-  PublishVerdictSuccess,
-  VerdictGenerator,
-} from './types.js';
 import {
-  assertNoNewlineInBulletFields,
-  inferSourceRefsKind,
-  isA2aSourceRefs,
-  isAnchorTelemetrySourceRefs,
-  isFrictionSourceRefs,
-  isKnownSourceRefsKind,
-  isMemorySourceRefs,
-  isSopSourceRefs,
-  isTaskOutcomeSourceRefs,
-  validateAnchorTelemetrySelector,
-  validateFrictionRollupSelector,
-  validateMemoryRecallSelector,
-  validateSopTraceSelector,
-  validateSourceRefsFormat,
-  validateTaskOutcomeSourceRefs,
-} from './validation.js';
-
-export type {
+  generatedArtifactStagePaths,
+  writeGeneratedLifecycleArtifacts,
+} from './friction-findings/generated-lifecycle-artifacts.js';
+import { fetchAndCreateMainReader, resolveRepoRoot } from './publication/replay-detection.js';
+import { verdictEvidenceContractSuccessStatuses } from './publication/verdict-commit-status-publisher.js';
+import { computePublishPolicy } from './publish-policy.js';
+import { resolvePostPublishCollision, resolvePrePublishReplay } from './replay-orchestration.js';
+import type {
+  GeneratedFindingArtifact,
+  GeneratedVerdictArtifact,
   GitPublisher,
   HandlerError,
-  PublishOnIsolatedWorktreeOpts,
+  PublishedVerdictChildArtifact,
   PublishVerdictDeps,
   PublishVerdictInput,
+  PublishVerdictNoNewWindow,
   PublishVerdictSuccess,
-  ResolvedSourceRefs,
-  StageResult,
   VerdictGenerator,
-  VerdictSourceRefs,
 } from './types.js';
-
-// AC-H8: length + slug + idempotency (复用 generate-now 模式)
-const MAX_VERDICT_ID_LEN = 128;
-const MAX_PHENOMENON_LEN = 2048;
-const SAFE_VERDICT_ID = /^[a-z0-9][a-z0-9-]*$/;
+import { validatePublishInput } from './validate-publish-input.js';
 
 /**
  * F192 Phase H — Verdict Publishing Pipeline (砚砚 R0 Path B narrowed).
@@ -83,176 +57,50 @@ const defaultGitPublisher: GitPublisher = {
 export async function handlePublishVerdict(
   deps: PublishVerdictDeps,
   input: PublishVerdictInput,
-): Promise<PublishVerdictSuccess | HandlerError> {
-  // AC-H1: validate full packet schema
-  let packet: VerdictHandoffPacket;
-  try {
-    packet = parseVerdictHandoffPacket(input.packet);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { status: 400, error: 'invalid_packet', detail: message };
-  }
+): Promise<PublishVerdictSuccess | PublishVerdictNoNewWindow | HandlerError> {
+  // --- Input validation (extracted to validate-publish-input.ts for 350-line cap) ---
+  const validated = await validatePublishInput(deps, input);
+  if ('status' in validated) return validated;
+  const { packet, analysisFindings, publicationTime } = validated;
 
-  // AC-H7 partial: cross-check input.domain ↔ packet.domainId (consistency guard)
-  if (input.domain !== packet.domainId) {
-    return {
-      status: 400,
-      error: 'domain_mismatch',
-      detail: `input.domain '${input.domain}' does not match packet.domainId '${packet.domainId}'`,
-    };
-  }
-
-  // 砚砚 R11 P1 + AC-H1: completeness — schema validates "array", guard checks
-  // "non-empty". Cat owns metric/trace refs (NOT bundle-overridden); reject early
-  // before invoking generator if cat omitted them. snapshot/attribution placeholders
-  // also checked here (will be overridden by bundle but cat must still send shape).
-  const handoffDecision = assertCanCrossThreadHandoff(packet);
-  if (!handoffDecision.ok) {
-    return { status: 400, error: 'handoff_incomplete', detail: `handoff_incomplete: ${handoffDecision.reason}` };
-  }
-
-  // 砚砚 R18 P2 + cloud R18 P2: reject \r\n in fields renderer writes as single-line
-  // bullets (read-model regex parses first line — newline truncates + enables injection).
-  const newlineError = assertNoNewlineInBulletFields(packet);
-  if (newlineError) return newlineError;
-
-  // AC-H3 + 砚砚 R6 P1: catId from callback auth (MCP layer). Domain allowlist
-  // respects OQ-20 Redis override (symmetric with trigger-now), else static registry.
-  if (!input.catId) {
-    return {
-      status: 401,
-      error: 'unauthenticated',
-      detail: 'catId not provided — MCP layer must derive from callback',
-    };
-  }
-  const domains = loadDomains(deps.harnessFeedbackRoot);
-  const domainEntry = domains.get(packet.domainId as Parameters<typeof domains.get>[0]);
-  if (!domainEntry) {
-    return {
-      status: 400,
-      error: 'domain_not_registered',
-      detail: `Domain '${packet.domainId}' not found in eval-domains/ registry`,
-    };
-  }
-  // 砚砚 R6 P1: prefer Redis override if set, fallback to static registry cat
-  let allowedCatId = domainEntry.evalCat.catId as string;
-  let overrideApplied = false;
-  if (deps.redis) {
-    try {
-      const override = await getEvalCatOverride(deps.redis, packet.domainId);
-      if (override) {
-        allowedCatId = override.catId;
-        overrideApplied = true;
-      }
-    } catch {
-      // Redis read failure: fall back to static cat (safer than open-fail)
-    }
-  }
-  if (input.catId !== allowedCatId) {
-    return {
-      status: 403,
-      error: 'not_allowed',
-      detail: `catId '${input.catId}' is not the eval cat for domain '${packet.domainId}' (expected '${allowedCatId}'${overrideApplied ? ' via OQ-20 Redis override' : ' from registry'})`,
-    };
-  }
-
-  // AC-H8: length + slug + idempotency (复用 generate-now 模式)
-  if (packet.id.length > MAX_VERDICT_ID_LEN) {
-    return {
-      status: 400,
-      error: 'invalid_packet_id',
-      detail: `packet.id must be <= ${MAX_VERDICT_ID_LEN} chars (got ${packet.id.length})`,
-    };
-  }
-  if (!SAFE_VERDICT_ID.test(packet.id)) {
-    return {
-      status: 400,
-      error: 'invalid_packet_id',
-      detail: `packet.id must match safe slug pattern /^[a-z0-9][a-z0-9-]*$/ (lowercase alphanumeric + hyphens, no leading hyphen). Got: '${packet.id}'`,
-    };
-  }
-  if (packet.phenomenon.length > MAX_PHENOMENON_LEN) {
-    return {
-      status: 400,
-      error: 'invalid_packet',
-      detail: `packet.phenomenon must be <= ${MAX_PHENOMENON_LEN} chars (got ${packet.phenomenon.length})`,
-    };
-  }
-  // Idempotency fast-fail: live-tree existsSync catches common dup quickly.
-  // 砚砚 R3 P1 #2 cloud: NOT authoritative — if API checkout is stale vs origin/main,
-  // dup-on-main slips through. Authoritative re-check inside isolated worktree below.
-  const liveVerdictPath = resolve(deps.harnessFeedbackRoot, 'verdicts', `${packet.id}.md`);
-  const liveBundleDir = resolve(deps.harnessFeedbackRoot, 'bundles', packet.id);
-  if (existsSync(liveVerdictPath) || existsSync(liveBundleDir)) {
-    return {
-      status: 409,
-      error: 'verdict_already_exists',
-      detail: `packet.id '${packet.id}' already has a verdict file or bundle directory in the live worktree. Pick a different id — overwriting existing Eval Hub evidence is forbidden (data integrity).`,
-    };
-  }
-
-  // PR-2 (砚砚 R1 P1): handler pre-validates sourceRefs shape per kind for proper
-  // 4xx error codes. Adapter-level validation is defense-in-depth (catches when
-  // generator called outside handler flow), but user-facing validation lives here.
+  // --- Replay detection (R7: centralized canonical authority) ---
   //
-  // cloud R8 P2 (PR-2): cross-check sourceRefs.kind ↔ packet.domainId BEFORE
-  // per-kind validation. Wrong-shape input for a supported domain (e.g. a2a refs
-  // sent for capability-wakeup domain, or cw selector sent for a2a domain) is
-  // user-correctable; rejecting at 400 here is better UX than letting it
-  // dispatch to adapter → throw `*_adapter_wrong_kind` → 500 generator_failed.
-  const refsKind = inferSourceRefsKind(input.sourceRefs);
-  const expectedKind = domainEntry.sourceRefsKind;
-  if (expectedKind && expectedKind !== refsKind) {
-    return {
-      status: 400,
-      error: 'sourceRefs_kind_mismatch',
-      detail: `Domain '${packet.domainId}' expects sourceRefs.kind='${expectedKind}', got '${refsKind}'. Registry sourceRefsKind is the contract; explicit validator/generator wiring must still exist for the domain to publish.`,
-    };
-  }
-  if (!isKnownSourceRefsKind(refsKind)) {
-    return {
-      status: 501,
-      error: 'unsupported_source_refs_kind',
-      detail: `Domain '${packet.domainId}' declares sourceRefs.kind='${refsKind}', but publish-verdict has no validator wiring for that selector kind yet. Add explicit validator/generator wiring before using this kind.`,
-    };
-  }
+  // All no_new_window decisions are centralized in replay-orchestration.ts.
+  // Success requires canonical proof from fresh origin/main + source identity.
+  // Live-tree state alone is never sufficient for typed success when replay
+  // infrastructure (source verification) is present.
+  //
+  // R5 P1-3: FreshMainReader only created for domains with replay resolvers.
+  const repoRootForRefresh =
+    (!deps.mainReader || !deps.createFreshMainReader) && (deps.replayPreflight || deps.checkStoredSourceEquivalence)
+      ? await resolveRepoRoot(deps.harnessFeedbackRoot, { signal: deps.signal })
+      : null;
+  const createFreshMainReader =
+    deps.createFreshMainReader ??
+    (repoRootForRefresh
+      ? async () => (await fetchAndCreateMainReader(repoRootForRefresh, { signal: deps.signal })) ?? undefined
+      : undefined);
+  const mainReader =
+    deps.mainReader ??
+    (repoRootForRefresh
+      ? ((await fetchAndCreateMainReader(repoRootForRefresh, { signal: deps.signal })) ?? undefined)
+      : undefined);
 
-  if (isSopSourceRefs(input.sourceRefs)) {
-    const selectorError = validateSopTraceSelector(input.sourceRefs);
-    if (selectorError) return { status: 400, error: 'invalid_source_ref', detail: selectorError };
-  } else if (isMemorySourceRefs(input.sourceRefs)) {
-    const selectorError = validateMemoryRecallSelector(input.sourceRefs);
-    if (selectorError) return { status: 400, error: 'invalid_source_ref', detail: selectorError };
-  } else if (isFrictionSourceRefs(input.sourceRefs)) {
-    // ⚠️ friction branch MUST precede the a2a branch: isA2aSourceRefs returns true
-    // for undefined/missing-kind refs (backward-compat default).
-    const selectorError = validateFrictionRollupSelector(input.sourceRefs);
-    if (selectorError) return { status: 400, error: 'invalid_source_ref', detail: selectorError };
-  } else if (isAnchorTelemetrySourceRefs(input.sourceRefs)) {
-    // F236 Track-2: anchor-telemetry-snapshot selector (砚砚 R1 P1-1).
-    const selectorError = validateAnchorTelemetrySelector(input.sourceRefs);
-    if (selectorError) return { status: 400, error: 'invalid_source_ref', detail: selectorError };
-  } else if (isA2aSourceRefs(input.sourceRefs)) {
-    const refsCheck = validateSourceRefsFormat(input.sourceRefs);
-    if (!refsCheck.ok) return refsCheck.error;
-  } else if (isTaskOutcomeSourceRefs(input.sourceRefs)) {
-    const refsCheck = validateTaskOutcomeSourceRefs(input.sourceRefs);
-    if (!refsCheck.ok) return refsCheck.error;
-  } else {
-    const cwSelector = input.sourceRefs as unknown as CapabilityWakeupSourceSelector;
-    // PR-1a structural validator (capability non-empty / no newlines / window edges finite + ordered).
-    const selectorError = validateCapabilityWakeupSelector(cwSelector);
-    if (selectorError) return { status: 400, error: 'invalid_source_ref', detail: selectorError };
-    // trial-ids selector remains unsupported until a durable trial store ships.
-    // Window selectors may omit sessionIds: provider resolves an unbiased runtime-session
-    // window scan when production wires SessionWindowEnumerator.
-    if (cwSelector.kind !== 'capability-wakeup-trial-window') {
-      return {
-        status: 400,
-        error: 'invalid_source_ref',
-        detail: `PR-2 wired only 'capability-wakeup-trial-window' kind for capability-wakeup domain (got '${cwSelector.kind}'; trial-ids selector reserved for future durable trial store PR)`,
-      };
-    }
+  const replayCtx = {
+    mainReader,
+    createFreshMainReader,
+    harnessFeedbackRoot: deps.harnessFeedbackRoot,
+    domainId: packet.domainId,
+    replayPreflight: deps.replayPreflight,
+    checkStoredSourceEquivalence: deps.checkStoredSourceEquivalence,
+  };
+
+  const prePublish = await resolvePrePublishReplay(packet.id, input.sourceRefs, replayCtx);
+  if (prePublish.outcome === 'replay') {
+    return { ok: true, outcome: 'no_new_window', canonicalVerdictId: prePublish.canonicalVerdictId };
+  }
+  if (prePublish.outcome === 'conflict') {
+    return prePublish.error;
   }
 
   // PR-2 (砚砚 R1 P1): route layer dispatches per-domain generator from
@@ -275,13 +123,11 @@ export async function handlePublishVerdict(
   const domainSlug = packet.domainId.replace(/:/g, '-');
   const branchName = `verdict/auto/${domainSlug}/${packet.id}`;
 
-  let artifact: {
-    verdictPath: string;
-    bundleDir: string;
-    extraStagedPaths?: string[];
-    afterPublish?: () => void | Promise<void>;
-  } | null = null;
+  let artifact: GeneratedVerdictArtifact | null = null;
+  let findingArtifacts: GeneratedFindingArtifact[] = [];
+  let childArtifacts: PublishedVerdictChildArtifact[] = [];
   try {
+    deps.signal?.throwIfAborted();
     const { commitSha, prUrl } = await gitPublisher.publishOnIsolatedWorktree({
       branchName,
       sourceBase: 'origin/main',
@@ -295,13 +141,45 @@ export async function handlePublishVerdict(
             `verdict_already_exists_on_main: packet.id '${packet.id}' already exists on origin/main. Pick a different id.`,
           );
         }
-        artifact = await generator(packet, input.sourceRefs, {
+        // Freeze reviewed census metadata before the generator receives write access
+        // to the isolated harness root; only publisher-derived fields may change.
+        const cleanCensusSource = ensureMeasurementBundleCensusFile(worktreeRoot, packet.createdAt).source;
+        assertMeasurementVerdictActionAllowed(parseYaml(cleanCensusSource), packet.domainId, packet.verdict);
+        const generatedArtifact = await generator(packet, input.sourceRefs, {
           harnessFeedbackRoot: isolatedHarnessFeedback,
           liveHarnessFeedbackRoot: deps.harnessFeedbackRoot,
+          publicationTime,
           ownerUserId: input.ownerUserId,
           taskOutcomeDbPath: deps.taskOutcomeDbPath,
           eventMemoryDbPath: deps.eventMemoryDbPath,
+          ...(analysisFindings ? { analysisFindings } : {}),
         });
+        childArtifacts = writeGeneratedLifecycleArtifacts(generatedArtifact, packet, isolatedHarnessFeedback);
+
+        // Stamp invocation-authenticated sourceThreadId into provenance.json.
+        // Centralized here (not in 10+ generators) so: (a) new generators get it
+        // for free, (b) client can never forge it — it comes from CallbackPrincipal.
+        // agent_key principals have no threadId, so the field is omitted gracefully.
+        if (input.sourceThreadId) {
+          const provenancePath = join(generatedArtifact.bundleDir, 'provenance.json');
+          if (existsSync(provenancePath)) {
+            const prov = JSON.parse(readFileSync(provenancePath, 'utf8'));
+            prov.sourceThreadId = input.sourceThreadId;
+            writeFileSync(provenancePath, `${JSON.stringify(prov, null, 2)}\n`);
+          } else {
+            console.warn(
+              `[publish-verdict] provenance.json not found at ${provenancePath}, sourceThreadId not stamped — generator may have failed to produce it`,
+            );
+          }
+        }
+
+        const refreshedCensusPath = refreshMeasurementBundleCensusFile(
+          worktreeRoot,
+          packet.createdAt,
+          cleanCensusSource,
+        );
+        artifact = generatedArtifact;
+        findingArtifacts = generatedArtifact.findingArtifacts ?? [];
         // PR-3 (砚砚 R2): read attribution.json from bundle to compute publish policy.
         // Generator writes attribution.json into bundleDir; if absent or parse fails,
         // `computePublishPolicy` fail-opens to regular_pr (砚砚 R2 contract).
@@ -324,12 +202,13 @@ export async function handlePublishVerdict(
         return {
           // PR-2 R3 P1 (cloud): stage extra paths the generator wrote (cw raw inputs)
           // so the auto-PR includes all evidence referenced by provenance.json.
-          paths: [artifact.verdictPath, artifact.bundleDir, ...(artifact.extraStagedPaths ?? [])],
+          paths: [...generatedArtifactStagePaths(generatedArtifact), refreshedCensusPath],
           commitMessage: `verdict(${packet.domainId}): ${packet.id} — ${packet.verdict}\n\n${packet.phenomenon}\n\n[published via cat_cafe_publish_verdict MCP]`,
           prTitle: `verdict(${packet.domainId}): ${packet.id}`,
-          prBody: `Verdict published via cat_cafe_publish_verdict MCP tool.\n\nVerdict: ${packet.verdict}\nDomain: ${packet.domainId}\nPhenomenon: ${packet.phenomenon}\n\nReviewed by: ${packet.ownerAsk.targetOwnerCatId}\nAction: ${packet.ownerAsk.requestedAction}${policyFooter}`,
+          prBody: `Verdict published via cat_cafe_publish_verdict MCP tool.\n\nVerdict: ${packet.verdict}\nDomain: ${packet.domainId}\nPhenomenon: ${packet.phenomenon}\n\nReviewed by: ${packet.ownerAsk.targetOwnerCatId}\nAction: ${packet.ownerAsk.requestedAction}${input.sourceThreadId ? `\nSource thread: ${input.sourceThreadId}` : ''}${policyFooter}`,
           labels: policy.labels,
-          afterPublish: artifact.afterPublish,
+          statusChecks: verdictEvidenceContractSuccessStatuses(),
+          afterPublish: generatedArtifact.afterPublish,
         };
       },
     });
@@ -347,9 +226,17 @@ export async function handlePublishVerdict(
       bundleDir: `docs/harness-feedback/bundles/${packet.id}`,
       commitSha,
       prUrl,
+      findingArtifacts,
+      childArtifacts,
     };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // --- Layer 2: Catch-block replay intercepts (R7: centralized authority) ---
+    // Delegates to replay-orchestration for canonical authority enforcement.
+    const collision = await resolvePostPublishCollision(message, packet.id, input.sourceRefs, replayCtx);
+    if (collision?.outcome === 'replay') {
+      return { ok: true, outcome: 'no_new_window', canonicalVerdictId: collision.canonicalVerdictId };
+    }
     const mapped = mapPublishVerdictError(message);
     if (mapped) return mapped;
     if (!artifact) return { status: 500, error: 'generator_failed', detail: message };

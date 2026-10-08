@@ -7,7 +7,7 @@ purpose: |
   operator说"Ragdoll/X 帮我接入 gpt-pro"或"在新机器上把云端 ChatGPT Pro Maine Coon接进来"
   → 接球猫按本指南从头操作，全程不要让operator点 CF dashboard（已经有过 4 次互相猜路径都猜错的教训）。
 related_features: [F247, F178]
-status: stable (B1a verified 2026-06-21 05:14 UTC — Path A no-CF-Access, ChatGPT 不支持 custom headers / service token)
+status: legacy-owner-operator-evidence (use docs/guides/chatgpt-cloud-cat-onboarding.md for new onboarding)
 revision_history:
   v1 (2026-06-21 04:57 UTC): 初稿 — Path B service token + CF Access App
   v2 (2026-06-21 05:14 UTC): 改 Path A — OpenAI 官方文档实锤 ChatGPT MCP 不支持 custom headers / machine-to-machine grants，Path B 走不通，B1a 简化为公网 + spike ?token= 单防线
@@ -18,7 +18,11 @@ trigger_phrases:
   - "云端猫 onboarding"
 ---
 
-# ChatGPT 云端猫接入指南（猫读 SOP）
+# ChatGPT 云端猫接入指南（历史 owner 运维证据）
+
+> **⛔ 新接入、社区用户或“让猫帮我配置”不要从本文件开始。**
+> 这份文档复现 2026-06 的单 owner B1a dogfood，包含环境特有的 Cloudflare/tunnel 假设和历史 token 形态；其中的账号、固定 ID、域名与命令不能复制给其他用户。
+> 当前入口是 `docs/guides/chatgpt-cloud-cat-onboarding.md`，用户页面是 `chatgpt-cloud-cat-onboarding.html`。
 
 > **接球前先读完整本 SOP**——里面踩坑的 dashboard UI 迷雾 + token scope 残缺
 > 都是 2026-06-21 那个晚上实测出来的，CF SaaS UI 还在频繁改组，**先信文不信
@@ -46,8 +50,8 @@ trigger_phrases:
 ## 1. 前置物料清单（不齐就先去补）
 
 ### 1.1 operator账号
-- Cloudflare account: `Lysanderlucianosu@gmail.com` (account_id `63e41eacd8c1597363fa363adb57b6ae`)
-- DNS zone: `clowder-ai.com` (zone_id `8646136dcb88ec90035de478749e0ad8`)
+- Cloudflare account: `owner@example.invalid` (account_id `<account-id>`)
+- DNS zone: `your-domain.example` (zone_id `<zone-id>`)
 - ChatGPT Pro 订阅（必需 Developer Mode 才有 Custom MCP Connector 功能）
 
 ### 1.2 本机文件（旧机器复用 / 新机器初始化必须有）
@@ -109,8 +113,8 @@ operator mint token 步骤（**B1a 只做一次**）：
 
 ```bash
 CF_TOKEN=$(cat ~/.cloudflared/cf-api-token | head -1)
-ACC=63e41eacd8c1597363fa363adb57b6ae
-ZONE=8646136dcb88ec90035de478749e0ad8
+ACC='<your-account-id>'
+ZONE='<your-zone-id>'
 # probe 2 endpoints, 任何一个 10000 Authentication error = 缺 scope
 curl -s -H "Authorization: Bearer $CF_TOKEN" "https://api.cloudflare.com/client/v4/accounts/$ACC/cfd_tunnel/67125a9e-8bca-4969-9fbd-0a7d8dc66832/configurations" | python3 -c "import sys,json; d=json.load(sys.stdin); print('TunnelEdit:', d.get('success'))"
 curl -s -H "Authorization: Bearer $CF_TOKEN" "https://api.cloudflare.com/client/v4/zones/$ZONE/dns_records?per_page=1" | python3 -c "import sys,json; d=json.load(sys.stdin); print('DnsEdit:', d.get('success'))"
@@ -179,7 +183,7 @@ print('gpt-pro present:', 'gpt-pro' in ids)
 "
 ```
 
-Avatar 现暂用 `/avatars/gpt52.png` fallback。Phase C @gemini 设计真头像后 PATCH update。
+Avatar 现暂用 `/avatars/gpt52.png` fallback。Phase C 由设计/审美席位（查 dossier 常驻索引）设计真头像后 PATCH update。
 
 ### 2.3 (deprecated) breeds[].variants[] — 不需要做
 
@@ -246,7 +250,7 @@ dig +short mcp.clowder-ai.com CNAME  # 应该返 67125a9e-8bca-4969-9fbd-0a7d8dc
 
 ```bash
 CF_TOKEN=$(cat ~/.cloudflared/cf-api-token | head -1)
-ACC=63e41eacd8c1597363fa363adb57b6ae
+ACC='<your-account-id>'
 TUN=67125a9e-8bca-4969-9fbd-0a7d8dc66832
 
 # 1. read current ingress
@@ -391,7 +395,7 @@ operator设置 ChatGPT custom MCP connector（路径：ChatGPT Settings → Conn
 | 字段 | 填 |
 |---|---|
 | **名称** | `cat-cafe` |
-| **描述** | `Cat Café MCP - 云端Maine Coon Pro 工具集` |
+| **描述** | `Clowder AI MCP - 云端Maine Coon Pro 工具集` |
 | **连接** | 选 **服务器 URL**（dropdown）|
 | **URL** | `https://mcp.clowder-ai.com/mcp?token=<B1A_TOKEN>` |
 | **身份验证** | 选 **未授权**（dropdown）|
@@ -449,7 +453,7 @@ cloudflared tunnel create cat-cafe
 | dashboard "Hostname routes (Beta)" 是 private network 表单 | CF UI 重组，public hostname 入口藏了 | **不走 dashboard，走 §4.2 CF API PUT** |
 | Maine Coon云端 read 工具 OK，但 `cat_cafe_post_message` 返 `Unknown catId filter: gpt-pro` 或 502 | cat-cafe API catRegistry 没注册 gpt-pro | **不要重启 API**，走 `POST /api/cats` 热加载（§2.2）。详见 LL-cat-cafe-api-has-hot-reload |
 | `post_message rejects threadId from invocation-token callers (F193 KD-1)` 错误（Maine Coon云端是 agent-key，本不该 fire）| spike server 继承父 invocation 的 `CAT_CAFE_INVOCATION_ID` + `CAT_CAFE_CALLBACK_TOKEN` env，MCP server gate 误判 | spike 启动加 `env -u CAT_CAFE_INVOCATION_ID -u CAT_CAFE_CALLBACK_TOKEN`（§5）。详见 LL-spike-server-env-contamination |
-| `Cat Café callback not configured. Missing ... agent-key credentials` 但你明明设了 `CAT_CAFE_AGENT_KEY_FILE` | spike 继承父 `CAT_CAFE_AGENT_KEY_FILES` (antigravity multi-cat map)，不含 gpt-pro → `resolveAgentKeySecret()` 走 map 路径返 undefined，**屏蔽** single AGENT_KEY_FILE | spike 启动 `-u CAT_CAFE_AGENT_KEY_FILES` 后重新 set 含 gpt-pro 的 map（§5） |
+| `Clowder AI callback not configured. Missing ... agent-key credentials` 但你明明设了 `CAT_CAFE_AGENT_KEY_FILE` | spike 继承父 `CAT_CAFE_AGENT_KEY_FILES` (antigravity multi-cat map)，不含 gpt-pro → `resolveAgentKeySecret()` 走 map 路径返 undefined，**屏蔽** single AGENT_KEY_FILE | spike 启动 `-u CAT_CAFE_AGENT_KEY_FILES` 后重新 set 含 gpt-pro 的 map（§5） |
 | `threadId required for agent-key auth` (cat-cafe API 错误) | agent-key caller 模式必传 `threadId`（vs invocation-token 必禁），Maine Coon ChatGPT 端没传 | 告诉Maine Coon他是 agent-key 模式 `post_message` 必须显式带 `threadId`（短 L0 已说明）。详见 LL-agent-key-vs-invocation-token-threadId |
 | ChatGPT 端 write 工具偶尔被 OpenAI safety check 拦截，read 工具不拦 | ChatGPT 对 `readOnlyHint=false` 工具更严格 + first-time write 可能要 user 确认 | 让Maine Coon在 ChatGPT UI 点确认按钮 (如有)；或多试几次。属于 OpenAI 平台行为，**我们不可控** |
 

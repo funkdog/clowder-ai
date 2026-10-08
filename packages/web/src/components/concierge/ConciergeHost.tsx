@@ -13,7 +13,7 @@
  *   Layer 3: ConciergePanel / bubble (surfaceState=bubble)
  *
  * Layout: ball + toolbar share a fixed wrapper (data-testid=concierge-ball-wrapper)
- * so toolbar's `absolute bottom-[calc(100%+8px)] right-0` resolves to that wrapper.
+ * so toolbar's `absolute top-[calc(100%+8px)]` resolves to that wrapper (BUG-UX-13: below, horizontal).
  * Panel has its own independent fixed position (viewport-relative).
  *
  * P1-A cloud fix: toolbar was a Fragment sibling of ConciergeBall's wrapper → no
@@ -23,26 +23,45 @@
  * P1-B cloud fix: muted=true → ballState=hidden → early return suppressed panel + toolbar,
  *   making the rail-toggle unmute path unreachable. Fix: when muted+surfaceState≠collapsed
  *   (user explicitly opened toolbar via rail toggle), override hidden→sleeping so the cat
- *   body and toolbar both render, allowing access to the panel's "取消静音" control.
+ *   body and toolbar still render as a defensive fallback if a legacy wake path opens first.
  */
 
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { flushSync } from 'react-dom';
 import { Rnd } from 'react-rnd';
+import { useConciergeDesktopStore, watchConciergeDesktop } from '@/stores/conciergeDesktopStore';
 import { projectBallState, useConciergeStore } from '@/stores/conciergeStore';
+import { type BallPositionConstraints, resolveBallPosition } from './ball-position';
 import { ConciergeBall } from './ConciergeBall';
+import { ConciergeDesktopFallbackNotice } from './ConciergeDesktopFallbackNotice';
 import { ConciergePanel } from './ConciergePanel';
 import { ConciergeToolbar } from './ConciergeToolbar';
+import { useConciergeReservedRects } from './concierge-reserved-rects';
+import { useDismissDesktopLossNoticeOnClose } from './useDismissDesktopLossNoticeOnClose';
+import { usePetBehavior } from './usePetBehavior';
 
-/** Ball button dimensions (V3: 72×72 squircle) */
-const BALL_SIZE = 72;
 /** Default margin from viewport edge — matches original Tailwind `bottom-6 right-6` (1.5rem = 24px) */
 const EDGE_MARGIN = 24;
+/** Extra vertical space needed below the ball for the toolbar (BUG-UX-13 R2).
+ *  Toolbar: top-[calc(100%+8px)] → 8px gap; buttons are h-9 (36px) → total 44px.
+ *  Used in default position AND clamp to ensure toolbar is never clipped. */
+const TOOLBAR_BELOW_HEIGHT = 44;
 /** Minimum drag distance (px) to distinguish drag from click (INV-P1)
  *  BUG-UX-5: root fix is removing pointerEvents:'none' (below); threshold stays at 5. */
 const DRAG_THRESHOLD = 5;
 
+function sameBallPosition(
+  left: { readonly x: number; readonly y: number },
+  right: { readonly x: number; readonly y: number },
+): boolean {
+  return left.x === right.x && left.y === right.y;
+}
+
 export function ConciergeHost() {
+  const desktopVisible = useConciergeDesktopStore((s) => s.visible);
+  const desktopLost = useConciergeDesktopStore((s) => s.desktopLost);
+  const lossNoticeVisible = useConciergeDesktopStore((s) => s.noticeVisible);
+  useEffect(watchConciergeDesktop, []);
   const fetchConfig = useConciergeStore((s) => s.fetchConfig);
 
   // Lazily load config once (INV-9: only one GET, guard inside fetchConfig)
@@ -67,52 +86,77 @@ export function ConciergeHost() {
   const unseenResultCount = useConciergeStore((s) => s.unseenResultCount);
   const surfaceState = useConciergeStore((s) => s.surfaceState);
   const inputFocused = useConciergeStore((s) => s.inputFocused);
+  const behaviorEnabled = useConciergeStore((s) => s.behaviorEnabled);
+  const lastMessageTimestamp = useConciergeStore((s) => s.lastMessageTimestamp);
 
-  // Ball position (PR-A3b INV-P1~P4)
+  useDismissDesktopLossNoticeOnClose(desktopLost, surfaceState, muted);
+
+  // Ball position (PR-A3b INV-P1~P4) + size (E3)
   const ballPosition = useConciergeStore((s) => s.ballPosition);
+  const ballSize = useConciergeStore((s) => s.ballSize);
   const setBallPosition = useConciergeStore((s) => s.setBallPosition);
+  const setBallSize = useConciergeStore((s) => s.setBallSize);
   const setIsDragging = useConciergeStore((s) => s.setIsDragging);
+  const reservedRects = useConciergeReservedRects();
+
+  const positionConstraints = useMemo<BallPositionConstraints>(
+    () => ({
+      viewport: {
+        width: typeof window === 'undefined' ? 0 : window.innerWidth,
+        height: typeof window === 'undefined' ? 0 : window.innerHeight,
+      },
+      ballSize,
+      edgeMargin: EDGE_MARGIN,
+      toolbarBelow: TOOLBAR_BELOW_HEIGHT,
+      reservedRects,
+    }),
+    [ballSize, reservedRects],
+  );
 
   // INV-P1: drag threshold — track start position to compare with stop position
   const dragStartPosRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   // Default position: bottom-right with margin (replaces CSS `fixed bottom-6 right-6`)
-  // Memoized once — window dimensions at mount time
+  // E3: depends on ballSize so default position adapts to cat size
   const defaultPosition = useMemo(() => {
     if (typeof window === 'undefined') return { x: 0, y: 0 };
-    return {
-      x: window.innerWidth - BALL_SIZE - EDGE_MARGIN,
-      y: window.innerHeight - BALL_SIZE - EDGE_MARGIN,
-    };
-  }, []);
+    return resolveBallPosition(
+      {
+        x: positionConstraints.viewport.width - ballSize - EDGE_MARGIN,
+        y: positionConstraints.viewport.height - ballSize - TOOLBAR_BELOW_HEIGHT - EDGE_MARGIN,
+      },
+      positionConstraints,
+    );
+  }, [ballSize, positionConstraints]);
 
   // INV-P2: clamp position to viewport on render (handles window resize / persisted
   // out-of-bounds values). Pure computation, no side effect.
+  // E3: uses ballSize instead of constant
   const clampedPosition = useMemo(() => {
     const raw = ballPosition ?? defaultPosition;
     if (typeof window === 'undefined') return raw;
-    return {
-      x: Math.max(0, Math.min(raw.x, window.innerWidth - BALL_SIZE)),
-      y: Math.max(0, Math.min(raw.y, window.innerHeight - BALL_SIZE)),
-    };
-  }, [ballPosition, defaultPosition]);
+    return resolveBallPosition(raw, positionConstraints);
+  }, [ballPosition, defaultPosition, positionConstraints]);
 
   // INV-P2: snap back on viewport resize (position may become out-of-bounds)
+  // E3: uses ballSize from store instead of constant
   useEffect(() => {
     const handleResize = () => {
-      const pos = useConciergeStore.getState().ballPosition;
+      const { ballPosition: pos, ballSize: size } = useConciergeStore.getState();
       if (!pos) return; // default position auto-adapts
-      const clamped = {
-        x: Math.max(0, Math.min(pos.x, window.innerWidth - BALL_SIZE)),
-        y: Math.max(0, Math.min(pos.y, window.innerHeight - BALL_SIZE)),
-      };
-      if (clamped.x !== pos.x || clamped.y !== pos.y) {
+      const clamped = resolveBallPosition(pos, {
+        ...positionConstraints,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        ballSize: size,
+        reservedRects: [],
+      });
+      if (!sameBallPosition(clamped, pos)) {
         void setBallPosition(clamped);
       }
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
-  }, [setBallPosition]);
+  }, [positionConstraints, setBallPosition]);
 
   const handleDragStart = useCallback(
     (_e: unknown, d: { x: number; y: number }) => {
@@ -134,7 +178,9 @@ export function ConciergeHost() {
         // mouseup handler. Without it, React 18 batches the Zustand update →
         // Rnd re-renders with old clampedPosition before the new position arrives
         // → ball visibly snaps back to origin then jumps to the correct position.
-        const pos = { x: d.x, y: d.y };
+        // Host reservations alter only the displayed position. Persist viewport
+        // clamping so leaving this route restores the user's chosen home.
+        const pos = resolveBallPosition({ x: d.x, y: d.y }, { ...positionConstraints, reservedRects: [] });
         flushSync(() => {
           useConciergeStore.setState({ ballPosition: pos });
         });
@@ -145,13 +191,32 @@ export function ConciergeHost() {
         setIsDragging(false);
       }
     },
-    [setBallPosition, setIsDragging],
+    [positionConstraints, setBallPosition, setIsDragging],
   );
 
-  // Wait for config before rendering — but if config fetch failed, render with optimistic
-  // defaults so ball/panel are still accessible (rail toggle + retry) (P2 R5)
-  if (!configLoaded && !configFailed) return null;
+  const handleResizeStop = useCallback(
+    (_e: unknown, _dir: unknown, ref: { readonly offsetWidth: number }) => {
+      const newSize = ref.offsetWidth;
+      const persisted = useConciergeStore.getState().ballPosition;
+      if (persisted) {
+        const viewportClamped = resolveBallPosition(persisted, {
+          ...positionConstraints,
+          ballSize: newSize,
+          reservedRects: [],
+        });
+        if (!sameBallPosition(viewportClamped, persisted)) {
+          flushSync(() => {
+            useConciergeStore.setState({ ballPosition: viewportClamped });
+          });
+          void setBallPosition(viewportClamped);
+        }
+      }
+      void setBallSize(newSize);
+    },
+    [positionConstraints, setBallPosition, setBallSize],
+  );
 
+  // Derive ball state for all code paths (needed by hook call below)
   const ballState = projectBallState({
     enabled,
     muted,
@@ -165,16 +230,63 @@ export function ConciergeHost() {
 
   // P1-B cloud fix: muted users who explicitly open toolbar/bubble via rail toggle
   // (surfaceState != collapsed) should see the ball + toolbar so the panel's
-  // "取消静音" control is reachable. We override hidden → sleeping only in this case.
+  // visibility control remains reachable. We override hidden → sleeping only in this case.
   // When surfaceState = collapsed the normal INV-3 "muted → zero DOM" is preserved.
   const effectiveBallState =
     ballState === 'hidden' && muted && surfaceState !== 'collapsed' ? ('sleeping' as const) : ballState;
 
+  // E4: Autonomous Behavior Engine — visual overlay on top of business state
+  // Hook called unconditionally (React rules). INV-3: hidden → zero activity,
+  // so force behaviorEnabled=false when hidden (even if user didn't mute).
+  const petBehavior = usePetBehavior({
+    ballState: effectiveBallState === 'hidden' ? 'idle' : effectiveBallState,
+    behaviorEnabled: behaviorEnabled && effectiveBallState !== 'hidden' && !desktopVisible,
+    muted,
+    ballPosition: clampedPosition,
+    ballSize,
+    edgeMargin: EDGE_MARGIN,
+    toolbarBelow: TOOLBAR_BELOW_HEIGHT,
+    reservedRects,
+    lastMessageTimestamp,
+  });
+
+  // E4 P1 fix: consume positionDelta from autonomous walk (AC-E4-4)
+  // When the hook emits a walk delta, apply it to local ball position (no API persist —
+  // autonomous walk is transient, position resets to user-dragged on next session).
+  const lastAppliedDeltaRef = useRef<{ dx: number; dy: number } | null>(null);
+  useEffect(() => {
+    const delta = petBehavior.positionDelta;
+    if (delta && petBehavior.isAutonomousActive) {
+      // Avoid applying the same delta twice (React strict mode / re-renders)
+      if (lastAppliedDeltaRef.current?.dx === delta.dx && lastAppliedDeltaRef.current?.dy === delta.dy) return;
+      lastAppliedDeltaRef.current = delta;
+      const current = useConciergeStore.getState().ballPosition ?? defaultPosition;
+      const newPos = resolveBallPosition(
+        { x: current.x + delta.dx, y: current.y + delta.dy },
+        {
+          ...positionConstraints,
+          viewport: { width: window.innerWidth, height: window.innerHeight },
+        },
+      );
+      // Local-only update — no API persist (autonomous walk is transient)
+      useConciergeStore.setState({ ballPosition: newPos });
+    } else {
+      lastAppliedDeltaRef.current = null;
+    }
+  }, [petBehavior.positionDelta, petBehavior.isAutonomousActive, defaultPosition, positionConstraints]);
+
+  // Wait for config before rendering — but if config fetch failed, render with optimistic
+  // defaults so ball/panel are still accessible (rail toggle + retry) (P2 R5)
+  if (!configLoaded && !configFailed) return null;
+
   // INV-3: hidden → zero DOM (no ball, no badge, no tooltip, no toolbar, no bubble)
   if (effectiveBallState === 'hidden') return null;
+  // The canonical conversation panel stays reachable; only the duplicate main body yields.
+  if (desktopVisible) return <ConciergePanel />;
 
   return (
     <>
+      {desktopLost && lossNoticeVisible && <ConciergeDesktopFallbackNotice />}
       {/* PR-A3b: Rnd wrapper replaces static `fixed bottom-6 right-6` div.
           - INV-P1: drag threshold ~5px (handleDragStart/handleDragStop above)
           - INV-P2: bounds="window" + clampedPosition keep ball in viewport
@@ -184,18 +296,38 @@ export function ConciergeHost() {
       <Rnd
         data-testid="concierge-ball-wrapper"
         position={clampedPosition}
-        size={{ width: BALL_SIZE, height: BALL_SIZE }}
-        enableResizing={false}
+        size={{ width: ballSize, height: ballSize }}
+        minWidth={48}
+        minHeight={48}
+        maxWidth={192}
+        maxHeight={192}
+        lockAspectRatio
+        enableResizing={{
+          bottomRight: true,
+          // Only bottom-right handle — cat stays anchored at top-left during resize
+          top: false,
+          right: false,
+          bottom: false,
+          left: false,
+          topRight: false,
+          bottomLeft: false,
+          topLeft: false,
+        }}
         bounds="window"
         onDragStart={handleDragStart}
         onDragStop={handleDragStop}
+        onResizeStop={handleResizeStop}
         style={{ position: 'fixed', zIndex: 30 }}
         // BUG-UX-5 fix: removed pointerEvents:'none' — it blocked react-rnd's
         // drag detection from receiving mousedown directly on the wrapper.
         // The ball button already fills the full 72×72 area.
       >
         {/* Layer 1: Cat body */}
-        <ConciergeBall ballState={effectiveBallState} />
+        <ConciergeBall
+          ballState={effectiveBallState}
+          visualOverride={petBehavior.isAutonomousActive ? petBehavior.visualState : null}
+          autonomousOverlay={petBehavior.isAutonomousActive ? petBehavior.overlay : null}
+        />
         {/* Layer 2: Ability toolbar — absolute, resolves relative to this wrapper */}
         <ConciergeToolbar />
       </Rnd>

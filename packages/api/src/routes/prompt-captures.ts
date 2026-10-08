@@ -5,7 +5,6 @@
 
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { getPromptCaptureStore } from '../infrastructure/debug/prompt-capture-bridge.js';
-import { isPromptCaptureEnabled } from '../infrastructure/debug/prompt-capture-store.js';
 import { requirePrivilegedRouteOwner } from '../utils/privileged-route-guard.js';
 
 const PROMPT_CAPTURE_GATE = {
@@ -23,10 +22,10 @@ export const promptCaptureRoutes: FastifyPluginAsync = async (app) => {
     if (!gate.ok) return gate.response;
     const store = getPromptCaptureStore();
     return {
-      enabled: isPromptCaptureEnabled(),
-      mode: process.env.PROMPT_CAPTURE ?? 'off',
+      enabled: false,
+      mode: 'legacy_read_only',
       catFilter: process.env.PROMPT_CAPTURE_CATS ?? null,
-      ...store.stats(),
+      ...(await store.stats()),
     };
   });
 
@@ -57,7 +56,7 @@ export const promptCaptureRoutes: FastifyPluginAsync = async (app) => {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(captureId)) {
       return reply.status(400).send({ error: 'Invalid captureId format' });
     }
-    const capture = getPromptCaptureStore().read(captureId, userId);
+    const capture = await getPromptCaptureStore().read(captureId, userId);
     if (!capture) {
       return reply.status(404).send({ error: 'Capture not found or expired' });
     }
@@ -67,7 +66,7 @@ export const promptCaptureRoutes: FastifyPluginAsync = async (app) => {
   app.post('/api/debug/prompt-captures/prune', async (request, reply) => {
     const gate = requirePromptCaptureOwner(request, reply);
     if (!gate.ok) return gate.response;
-    const removed = getPromptCaptureStore().prune();
+    const removed = await getPromptCaptureStore().prune();
     return { removed };
   });
 };

@@ -1,7 +1,7 @@
 /**
  * F113 Phase E: POST /api/projects/setup
- * Orchestrates project initialization: clone/init git + governance bootstrap.
- * Does NOT modify governance/confirm semantics — calls it internally.
+ * Orchestrates project initialization: clone/init/skip only.
+ * Optional governance installation is a separate explicit confirmation flow (F302).
  */
 
 import { execFile } from 'node:child_process';
@@ -9,7 +9,7 @@ import { readdir, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FastifyPluginAsync } from 'fastify';
 import { findMonorepoRoot } from '../utils/monorepo-root.js';
-import { validateProjectPath } from '../utils/project-path.js';
+import { redirectRuntimeProjectPath, validateExternalProjectPathDetailed } from '../utils/persistent-project-path.js';
 import { resolveHeaderUserId } from '../utils/request-identity.js';
 
 const VALID_MODES = ['clone', 'init', 'skip'] as const;
@@ -128,11 +128,14 @@ async function isEmptyDir(dirPath: string): Promise<boolean> {
     const entries = await readdir(dirPath);
     return entries.length === 0;
   } catch {
-    return true;
+    return false;
   }
 }
 
 export const projectSetupRoute: FastifyPluginAsync<ProjectSetupRouteOptions> = async (app, opts) => {
+  const catCafeRoot = await redirectRuntimeProjectPath(opts.catCafeRoot ?? findMonorepoRoot(process.cwd()));
+  if (!catCafeRoot) throw new Error('Unable to resolve persistent Clowder AI root for project setup');
+
   app.post('/api/projects/setup', async (request, reply) => {
     const userId = resolveHeaderUserId(request);
     if (!userId) {
@@ -160,18 +163,17 @@ export const projectSetupRoute: FastifyPluginAsync<ProjectSetupRouteOptions> = a
       return { error: `mode must be one of: ${VALID_MODES.join(', ')}` };
     }
 
-    const validated = await validateProjectPath(projectPath);
-    if (!validated) {
-      reply.status(403);
-      return { error: 'Project path not allowed' };
+    const validatedResult = await validateExternalProjectPathDetailed(projectPath, catCafeRoot);
+    if (!validatedResult.ok) {
+      const isOwnedPath = validatedResult.reason === 'cat_cafe_owned_path';
+      reply.status(isOwnedPath ? 400 : 403);
+      return {
+        error: isOwnedPath
+          ? 'Cannot setup governance inside Clowder AI; choose an external project'
+          : 'Project path not allowed',
+      };
     }
-
-    // Guard: never bootstrap Clowder AI's own directory (same as governance/confirm)
-    const catCafeRoot = opts?.catCafeRoot ?? findMonorepoRoot(process.cwd());
-    if (validated === catCafeRoot) {
-      reply.status(400);
-      return { error: 'Cannot setup governance for Clowder AI itself' };
-    }
+    const validated = validatedResult.path;
 
     // ── Mode: clone ──
     if (mode === 'clone') {
@@ -208,69 +210,59 @@ export const projectSetupRoute: FastifyPluginAsync<ProjectSetupRouteOptions> = a
       // Check if already a git repo (.git can be dir or file in worktrees)
       try {
         await stat(join(validated, '.git'));
-        // Already initialized — skip git init, still run governance
+        // Already initialized — skip git init.
       } catch {
         await gitInit(validated);
       }
     }
 
-    // ── Governance bootstrap (all modes) ──
-    try {
-      const { GovernanceBootstrapService } = await import('../config/governance/governance-bootstrap.js');
-      const service = new GovernanceBootstrapService(catCafeRoot);
-      const report = await service.bootstrap(validated, { dryRun: false });
-
-      // F152 Phase B: fire-and-forget memory bootstrap after governance succeeds
-      if (opts?.memoryBootstrapService) {
-        opts.memoryBootstrapService
-          .bootstrap(validated, {
-            onProgress: (p: unknown) => {
-              if (userId && opts.socketManager) {
-                opts.socketManager.emitToUser(userId, 'index:progress', {
-                  ...(p as Record<string, unknown>),
-                  projectPath: validated,
-                });
-              }
-            },
-          })
-          .then((raw: unknown) => {
-            const result = raw as {
-              status: string;
-              docsIndexed?: number;
-              durationMs?: number;
-              summary?: unknown;
-              error?: string;
-            };
-            if (!userId || !opts.socketManager) return;
-            if (result.status === 'ready') {
-              opts.socketManager.emitToUser(userId, 'index:complete', {
-                projectPath: validated,
-                docsIndexed: result.docsIndexed,
-                durationMs: result.durationMs,
-                summary: result.summary,
-              });
-            } else if (result.status === 'failed') {
-              opts.socketManager.emitToUser(userId, 'index:failed', {
-                projectPath: validated,
-                error: result.error ?? 'Unknown error',
-              });
-            }
-          })
-          .catch((err: unknown) => {
-            app.log.warn({ err, projectPath: validated }, 'Memory bootstrap failed (non-blocking)');
+    // F152 Phase B: indexing is Clowder AI-owned state and remains non-blocking.
+    if (opts?.memoryBootstrapService) {
+      opts.memoryBootstrapService
+        .bootstrap(validated, {
+          onProgress: (p: unknown) => {
             if (userId && opts.socketManager) {
-              opts.socketManager.emitToUser(userId, 'index:failed', {
+              opts.socketManager.emitToUser(userId, 'index:progress', {
+                ...(p as Record<string, unknown>),
                 projectPath: validated,
-                error: err instanceof Error ? err.message : 'Bootstrap failed',
               });
             }
-          });
-      }
-
-      return { ok: true, governanceReport: report };
-    } catch (err) {
-      reply.status(500);
-      return { ok: false, error: err instanceof Error ? err.message : 'Governance bootstrap failed' };
+          },
+        })
+        .then((raw: unknown) => {
+          const result = raw as {
+            status: string;
+            docsIndexed?: number;
+            durationMs?: number;
+            summary?: unknown;
+            error?: string;
+          };
+          if (!userId || !opts.socketManager) return;
+          if (result.status === 'ready') {
+            opts.socketManager.emitToUser(userId, 'index:complete', {
+              projectPath: validated,
+              docsIndexed: result.docsIndexed,
+              durationMs: result.durationMs,
+              summary: result.summary,
+            });
+          } else if (result.status === 'failed') {
+            opts.socketManager.emitToUser(userId, 'index:failed', {
+              projectPath: validated,
+              error: result.error ?? 'Unknown error',
+            });
+          }
+        })
+        .catch((err: unknown) => {
+          app.log.warn({ err, projectPath: validated }, 'Memory bootstrap failed (non-blocking)');
+          if (userId && opts.socketManager) {
+            opts.socketManager.emitToUser(userId, 'index:failed', {
+              projectPath: validated,
+              error: err instanceof Error ? err.message : 'Bootstrap failed',
+            });
+          }
+        });
     }
+
+    return { ok: true };
   });
 };

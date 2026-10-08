@@ -19,10 +19,22 @@
 
 import { spawn as nodeSpawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, rmSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { type AgyProfileConfig, type CatId, type CliDiagnostics, createCatId } from '@cat-cafe/shared';
+import { normalizeAgyGeminiModelSelector } from '../../../../../config/agy-gemini-models.js';
 import { getCatModel } from '../../../../../config/cat-models.js';
 import { createModuleLogger } from '../../../../../infrastructure/logger.js';
 import { buildCliDiagnostics, buildSilentCompletionDiagnostic } from '../../../../../utils/cli-diagnostics.js';
@@ -30,6 +42,7 @@ import { formatCliExitError } from '../../../../../utils/cli-format.js';
 import { formatCliNotFoundError, resolveCliCommand } from '../../../../../utils/cli-resolve.js';
 import {
   buildChildEnv,
+  type CliTimeoutEvent,
   isCliError,
   isCliPlainTextResult,
   isCliTimeout,
@@ -40,10 +53,24 @@ import { resolveCliTimeoutMs } from '../../../../../utils/cli-timeout.js';
 import type { SpawnFn } from '../../../../../utils/cli-types.js';
 import { readJsonlTail } from '../../../../../utils/jsonl-tail-reader.js';
 import { sanitizeCliStderr } from '../../../../../utils/sanitize-cli-stderr.js';
-import type { AgentMessage, AgentService, AgentServiceOptions, MessageMetadata, TokenUsage } from '../../types.js';
+import type {
+  AgentMessage,
+  AgentService,
+  AgentServiceOptions,
+  MessageMetadata,
+  PreparedProviderRequestV1,
+  TokenUsage,
+  ToolExecutionPolicy,
+} from '../../types.js';
 import { appendLocalImagePathHints, collectImageAccessDirectories } from '../providers/image-cli-bridge.js';
 import { extractImagePaths } from '../providers/image-paths.js';
-import { type AgyProfile, preflightAgyProfile, resolveAgyProfile, resolveAgySpawnCwd } from './agy-profile-manager.js';
+import {
+  type AgyProfile,
+  preflightAgyProfile,
+  preflightAgyRuntimePermissions,
+  resolveAgyProfile,
+  resolveAgySpawnCwd,
+} from './agy-profile-manager.js';
 import { extractAgyFinalTextFromSteps, parseAgyStepTools, readAgyTrajectorySteps } from './agy-trajectory-extractor.js';
 import {
   type AgyProgressEvent,
@@ -330,18 +357,44 @@ function formatAgyPrintTimeout(timeoutMs: number): string | null {
   return `${Math.max(1, Math.ceil(timeoutMs / 1000))}s`;
 }
 
-function removeValuedCliFlags(args: readonly string[], flags: ReadonlySet<string>): string[] {
+function appendAgyMcpIdentityContract(prompt: string, catId: CatId, hasCallbackEnv: boolean): string {
+  if (!hasCallbackEnv) return prompt;
+  return [
+    prompt,
+    '',
+    '[Clowder AI MCP identity contract]',
+    `When a Clowder AI MCP tool schema includes \`agentKeyCatId\`, pass \`agentKeyCatId="${catId}"\`.`,
+    'Never omit that selector or substitute a guessed/default identity.',
+  ].join('\n');
+}
+
+function removeValuedCliFlags(
+  args: readonly string[],
+  flags: ReadonlySet<string>,
+  options: { readonly consumeValueTokens?: 'single' | 'untilNextFlag' } = {},
+): string[] {
   const result: string[] = [];
+  const consumeUntilNextFlag = options.consumeValueTokens === 'untilNextFlag';
+  const skipValueTokens = (startIndex: number): number => {
+    let nextIndex = startIndex;
+    while (nextIndex < args.length) {
+      const nextArg = args[nextIndex];
+      if (nextArg == null || nextArg.startsWith('-')) break;
+      if (!consumeUntilNextFlag) return nextIndex + 1;
+      nextIndex++;
+    }
+    return nextIndex;
+  };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg == null) continue;
     const equalsIndex = arg.indexOf('=');
     if (equalsIndex > 0 && flags.has(arg.slice(0, equalsIndex))) {
+      if (consumeUntilNextFlag) i = skipValueTokens(i + 1) - 1;
       continue;
     }
     if (flags.has(arg)) {
-      const nextArg = args[i + 1];
-      if (nextArg != null && !nextArg.startsWith('-')) i++;
+      i = skipValueTokens(i + 1) - 1;
       continue;
     }
     result.push(arg);
@@ -349,7 +402,7 @@ function removeValuedCliFlags(args: readonly string[], flags: ReadonlySet<string
   return result;
 }
 
-const ANTIGRAVITY_USER_BLOCKED_FLAGS = new Set(['--dangerously-skip-permissions']);
+const ANTIGRAVITY_USER_BLOCKED_FLAGS = new Set(['--dangerously-skip-permissions', '--model']);
 
 function insertArgsBeforeFlag(args: string[], flag: string, insertion: readonly string[]): void {
   const index = args.indexOf(flag);
@@ -374,6 +427,19 @@ function removeAntigravityLogFile(logPath: string): void {
   } catch {
     // Best-effort cleanup only; provider result delivery should not fail on temp-file deletion.
   }
+}
+
+function withAgyPreflightFailure(metadata: MessageMetadata, reason: string): MessageMetadata {
+  return {
+    ...metadata,
+    diagnostics: {
+      ...(metadata.diagnostics ?? {}),
+      antigravityCli: {
+        ...((metadata.diagnostics?.antigravityCli as Record<string, unknown> | undefined) ?? {}),
+        preflight: { ok: false, reason },
+      },
+    },
+  };
 }
 
 function resolveAgyDebugHomeMode(
@@ -472,6 +538,36 @@ export class GeminiAgentService implements AgentService {
     this.agyProfileConfig = options?.agyProfile;
   }
 
+  supportsToolExecutionPolicy(policy: ToolExecutionPolicy): boolean {
+    return policy.mode === 'read_only' && this.adapter !== 'antigravity';
+  }
+
+  contextCapability(): import('../../types.js').AgentContextCapability {
+    return this.adapter === 'gemini-cli'
+      ? {
+          provider: 'google',
+          carrier: 'gemini_cli',
+          reportsRuntimeWindow: true,
+          authoritativeUsage: true,
+          usageTelemetry: 'available',
+          nativeWindowControl: false,
+          nativeCompressionControl: false,
+          observesCompression: true,
+          reason: 'Gemini CLI session files provide last-turn context usage',
+        }
+      : {
+          provider: 'google',
+          carrier: this.adapter,
+          reportsRuntimeWindow: false,
+          authoritativeUsage: false,
+          usageTelemetry: 'unavailable',
+          nativeWindowControl: false,
+          nativeCompressionControl: false,
+          observesCompression: false,
+          reason: 'Antigravity carrier does not expose authoritative context telemetry',
+        };
+  }
+
   async *invoke(prompt: string, options?: AgentServiceOptions): AsyncIterable<AgentMessage> {
     if (this.adapter === 'antigravity') {
       yield* this.invokeAntigravity(prompt, options);
@@ -483,6 +579,7 @@ export class GeminiAgentService implements AgentService {
   }
 
   private async *invokeGeminiCLI(prompt: string, options?: AgentServiceOptions): AsyncIterable<AgentMessage> {
+    const readOnly = options?.toolExecutionPolicy?.mode === 'read_only';
     const effectiveModel = options?.callbackEnv?.CAT_CAFE_GEMINI_MODEL_OVERRIDE ?? this.model;
     const metadata: MessageMetadata = { provider: 'google', model: effectiveModel };
 
@@ -500,16 +597,37 @@ export class GeminiAgentService implements AgentService {
     // Prefer resume when sessionId is available so Gemini follows the same
     // session semantics as Claude/Codex (session-chain + self-heal).
     const modelArgs = effectiveModel ? ['--model', effectiveModel] : [];
+    let adminPolicyDir: string | undefined;
+    let executionPolicyArgs = ['-y'];
+    if (readOnly) {
+      adminPolicyDir = mkdtempSync(join(tmpdir(), 'cat-cafe-gemini-read-only-'));
+      const adminPolicyPath = join(adminPolicyDir, 'admin-policy.toml');
+      writeFileSync(
+        adminPolicyPath,
+        '[[rule]]\ntoolName = "*"\ndecision = "deny"\npriority = 1000000\nmodes = ["plan"]\n',
+        'utf8',
+      );
+      executionPolicyArgs = ['--approval-mode', 'plan', '--admin-policy', adminPolicyPath];
+    }
     const args: string[] = options?.sessionId
-      ? ['--resume', options?.sessionId!, ...modelArgs, '-p', effectivePrompt, '-o', 'stream-json', '-y']
-      : [...modelArgs, '-p', effectivePrompt, '-o', 'stream-json', '-y'];
+      ? [
+          '--resume',
+          options.sessionId,
+          ...modelArgs,
+          '-p',
+          effectivePrompt,
+          '-o',
+          'stream-json',
+          ...executionPolicyArgs,
+        ]
+      : [...modelArgs, '-p', effectivePrompt, '-o', 'stream-json', ...executionPolicyArgs];
     for (const dir of imageAccessDirs) {
       args.push('--include-directories', dir);
     }
 
     // User-defined CLI args from the member editor (#567).
     const userParts: string[] = [];
-    for (const arg of options?.cliConfigArgs ?? []) {
+    for (const arg of readOnly ? [] : (options?.cliConfigArgs ?? [])) {
       userParts.push(...arg.trim().split(/\s+/));
     }
     if (userParts.length > 0) {
@@ -545,13 +663,39 @@ export class GeminiAgentService implements AgentService {
       let sawAssistantText = false;
       let suppressCliExitError = false;
       let fullAssistantText = '';
+      const childEnv = { ...(options?.callbackEnv ?? {}), ...(options?.accountEnv ?? {}) };
+      if (readOnly) childEnv.CAT_CAFE_READONLY = 'true';
+      const promptIndex = args.lastIndexOf('-p');
+      const submittedPrompt = promptIndex >= 0 ? args[promptIndex + 1] : undefined;
+      if (typeof submittedPrompt !== 'string') throw new Error('gemini_request_prompt_unavailable');
+      const preparedRequest: PreparedProviderRequestV1 = Object.freeze({
+        v: 1,
+        message: Object.freeze({
+          body: submittedPrompt,
+          ...(submittedPrompt !== effectivePrompt ? { injectionDecision: 'member_cli_prompt_override' } : {}),
+        }),
+        nativeInstructions: Object.freeze([]),
+        runtime: Object.freeze({
+          provider: 'google',
+          carrier: 'gemini_cli',
+          ...(effectiveModel ? { model: effectiveModel } : {}),
+          protocol: 'stream-json',
+          ...(readOnly ? { toolExecutionPolicy: 'read_only' as const } : {}),
+        }),
+        tools: Object.freeze({
+          finalSurface: readOnly ? ('exact' as const) : ('unknown' as const),
+          ...(readOnly ? { catCafeSchemas: Object.freeze([]) } : {}),
+        }),
+        providerNativeVisibility: 'unknown',
+      });
+      await options?.beforeProviderLaunch?.(preparedRequest);
+      if (!('body' in preparedRequest.message)) throw new Error('gemini_prepared_message_not_exact');
+      args[promptIndex + 1] = preparedRequest.message.body;
       const cliOpts = {
         command: geminiCommand,
         args,
         ...(options?.workingDirectory ? { cwd: options.workingDirectory } : {}),
-        ...(options?.callbackEnv || options?.accountEnv
-          ? { env: { ...(options?.callbackEnv ?? {}), ...(options?.accountEnv ?? {}) } }
-          : {}),
+        ...(Object.keys(childEnv).length > 0 ? { env: childEnv } : {}),
         ...(options?.signal ? { signal: options.signal } : {}),
         ...(options?.invocationId ? { invocationId: options.invocationId } : {}),
         ...(options?.cliSessionId ? { cliSessionId: options.cliSessionId } : {}),
@@ -577,6 +721,7 @@ export class GeminiAgentService implements AgentService {
               cliSessionId: event.cliSessionId,
               invocationId: event.invocationId,
               rawArchivePath: event.rawArchivePath,
+              terminalContext: event.terminalContext,
             }),
             timestamp: Date.now(),
           };
@@ -709,13 +854,25 @@ export class GeminiAgentService implements AgentService {
       };
       // Guarantee done after error so invoke-single-cat can set isFinal correctly
       yield { type: 'done', catId: this.catId, metadata, timestamp: Date.now() };
+    } finally {
+      if (adminPolicyDir) rmSync(adminPolicyDir, { recursive: true, force: true });
     }
   }
 
   private async *invokeAntigravityCLI(prompt: string, options?: AgentServiceOptions): AsyncIterable<AgentMessage> {
+    const readOnly = options?.toolExecutionPolicy?.mode === 'read_only';
     const yieldedToolCallIds = new Set<string>();
     const yieldedToolResults = new Set<string>();
-    const requestedModelOverride = options?.callbackEnv?.CAT_CAFE_GEMINI_MODEL_OVERRIDE;
+    const requestedModelOverrideRaw = options?.callbackEnv?.CAT_CAFE_GEMINI_MODEL_OVERRIDE?.trim();
+    const requestedModelOverride =
+      requestedModelOverrideRaw !== undefined && requestedModelOverrideRaw.length > 0
+        ? normalizeAgyGeminiModelSelector(requestedModelOverrideRaw)
+        : undefined;
+    const configuredAgyModel = normalizeAgyGeminiModelSelector(this.model);
+    let agyModel = configuredAgyModel;
+    if (requestedModelOverride !== undefined) {
+      agyModel = requestedModelOverride;
+    }
     // F210 cache-leak fix (cloud P2)：normalize 成绝对路径。spawn cwd 现在是独立 sandbox（与
     // workingDirectory 解耦），若 workingDirectory 是相对路径（AgentServiceOptions 不强制绝对，
     // 直连 caller/测试可传 `.`），`--add-dir workingDirectory` 会相对 sandbox cwd 解析 → AGY 授权
@@ -724,13 +881,13 @@ export class GeminiAgentService implements AgentService {
     const workingDirectory = resolve(options?.workingDirectory ?? process.cwd());
     let metadata: MessageMetadata = {
       provider: 'google',
-      model: 'account-selected (antigravity-cli)',
+      model: agyModel ? `${agyModel} (antigravity-cli --model)` : 'account-selected (antigravity-cli)',
       modelVerified: false,
       diagnostics: {
         antigravityCli: {
-          modelSelection: 'account-side selected model',
+          modelSelection: agyModel ? 'cli --model flag' : 'account-side selected model',
           configuredCatModel: this.model,
-          ...(requestedModelOverride ? { unsupportedModelOverride: requestedModelOverride } : {}),
+          ...(requestedModelOverride ? { requestedModelOverride } : {}),
         },
       },
     };
@@ -738,7 +895,7 @@ export class GeminiAgentService implements AgentService {
     try {
       agyProfile = resolveAgyProfile({
         catId: this.catId as string,
-        expectedModel: this.model,
+        expectedModel: configuredAgyModel,
         workingDirectory,
         config: this.agyProfileConfig,
       });
@@ -754,13 +911,17 @@ export class GeminiAgentService implements AgentService {
       return;
     }
     if (agyProfile) {
+      agyModel = agyProfile.expectedModel;
+      if (requestedModelOverride !== undefined) {
+        agyModel = requestedModelOverride;
+      }
       metadata = {
         provider: 'google',
-        model: `${agyProfile.expectedModel} (antigravity-cli profile)`,
+        model: agyModel ? `${agyModel} (antigravity-cli profile)` : 'account-selected (antigravity-cli profile)',
         modelVerified: false,
         diagnostics: {
           antigravityCli: {
-            modelSelection: 'isolated profile settings',
+            modelSelection: agyModel ? 'isolated profile settings + cli --model flag' : 'isolated profile settings',
             configuredCatModel: this.model,
             profile: {
               profileId: agyProfile.profileId,
@@ -769,7 +930,7 @@ export class GeminiAgentService implements AgentService {
               trustedWorkspaces: agyProfile.trustedWorkspaces,
               autoApprove: agyProfile.autoApprove,
             },
-            ...(requestedModelOverride ? { unsupportedModelOverride: requestedModelOverride } : {}),
+            ...(requestedModelOverride ? { requestedModelOverride } : {}),
           },
         },
       };
@@ -779,19 +940,24 @@ export class GeminiAgentService implements AgentService {
     const imagePaths = extractImagePaths(options?.contentBlocks, options?.uploadDir);
     const imageAccessDirs = collectImageAccessDirectories(imagePaths);
     effectivePrompt = appendLocalImagePathHints(effectivePrompt, imagePaths);
+    effectivePrompt = appendAgyMcpIdentityContract(effectivePrompt, this.catId, options?.callbackEnv !== undefined);
 
     const timeoutMs = resolveCliTimeoutMs(undefined);
     const printTimeout = formatAgyPrintTimeout(timeoutMs);
     const agyLogPath = options?.agyLogPathOverride ?? join(tmpdir(), `cat-cafe-agy-${randomUUID()}.log`);
     const args: string[] = ['--add-dir', workingDirectory];
-    if (agyProfile?.autoApprove) {
+    if (agyProfile?.autoApprove && !readOnly) {
       args.push('--dangerously-skip-permissions');
     }
+    if (readOnly) args.push('--mode', 'plan');
     for (const dir of imageAccessDirs) {
       args.push('--add-dir', dir);
     }
     if (printTimeout) {
       args.push('--print-timeout', printTimeout);
+    }
+    if (agyModel) {
+      args.push('--model', agyModel);
     }
     const requestedSessionId = options?.sessionId;
     let emittedSessionInit = false;
@@ -806,28 +972,15 @@ export class GeminiAgentService implements AgentService {
         timestamp: Date.now(),
       };
     }
-    if (requestedModelOverride) {
-      yield {
-        type: 'system_info',
-        catId: this.catId,
-        content: JSON.stringify({
-          type: 'antigravity_cli_model_override_unsupported',
-          requestedModel: requestedModelOverride,
-          reason: agyProfile
-            ? 'AGY CLI profile model selection is configured through isolated settings; no verified per-call --model/env override exists.'
-            : 'AGY CLI uses the account-side selected model; no verified per-call --model/env override exists.',
-        }),
-        metadata,
-        timestamp: Date.now(),
-      };
-    }
     args.push('--print', effectivePrompt);
 
     const userParts: string[] = [];
-    for (const arg of options?.cliConfigArgs ?? []) {
+    for (const arg of readOnly ? [] : (options?.cliConfigArgs ?? [])) {
       userParts.push(...arg.trim().split(/\s+/));
     }
-    const filteredUserParts = removeValuedCliFlags(userParts, ANTIGRAVITY_USER_BLOCKED_FLAGS);
+    const filteredUserParts = removeValuedCliFlags(userParts, ANTIGRAVITY_USER_BLOCKED_FLAGS, {
+      consumeValueTokens: 'untilNextFlag',
+    });
     if (filteredUserParts.length > 0) {
       const accumulativeFlags = new Set(['--add-dir']);
       const userFlags = new Set(filteredUserParts.filter((p) => p.startsWith('-')));
@@ -864,6 +1017,24 @@ export class GeminiAgentService implements AgentService {
         yield { type: 'done' as const, catId: this.catId, metadata, timestamp: Date.now() };
         return;
       }
+      const effectiveAgyHome =
+        agyProfile?.homePath ??
+        options?.accountEnv?.HOME ??
+        options?.callbackEnv?.HOME ??
+        process.env.HOME ??
+        homedir();
+      const permissionPreflight = preflightAgyRuntimePermissions(effectiveAgyHome);
+      if (!permissionPreflight.ok) {
+        yield {
+          type: 'error' as const,
+          catId: this.catId,
+          error: permissionPreflight.message,
+          metadata: withAgyPreflightFailure(metadata, permissionPreflight.reason),
+          timestamp: Date.now(),
+        };
+        yield { type: 'done' as const, catId: this.catId, metadata, timestamp: Date.now() };
+        return;
+      }
       if (agyProfile) {
         const preflight = preflightAgyProfile(agyProfile, { agyCommand, workingDirectory });
         if (!preflight.ok) {
@@ -871,19 +1042,7 @@ export class GeminiAgentService implements AgentService {
             type: 'error' as const,
             catId: this.catId,
             error: preflight.message,
-            metadata: {
-              ...metadata,
-              diagnostics: {
-                ...(metadata.diagnostics ?? {}),
-                antigravityCli: {
-                  ...((metadata.diagnostics?.antigravityCli as Record<string, unknown> | undefined) ?? {}),
-                  preflight: {
-                    ok: false,
-                    reason: preflight.reason,
-                  },
-                },
-              },
-            },
+            metadata: withAgyPreflightFailure(metadata, preflight.reason),
             timestamp: Date.now(),
           };
           yield { type: 'done' as const, catId: this.catId, metadata, timestamp: Date.now() };
@@ -892,33 +1051,43 @@ export class GeminiAgentService implements AgentService {
       }
 
       const childEnv =
-        options?.callbackEnv || options?.accountEnv || agyProfile
+        options?.callbackEnv || options?.accountEnv || agyProfile || readOnly
           ? {
               ...(options?.callbackEnv ?? {}),
               ...(options?.accountEnv ?? {}),
               ...(agyProfile ? { HOME: agyProfile.homePath } : {}),
+              ...(readOnly ? { CAT_CAFE_READONLY: 'true' } : {}),
             }
           : undefined;
+      const promptIndex = args.lastIndexOf('--print');
+      const submittedPrompt = promptIndex >= 0 ? args[promptIndex + 1] : undefined;
+      if (typeof submittedPrompt !== 'string') throw new Error('antigravity_cli_request_prompt_unavailable');
+      const preparedRequest: PreparedProviderRequestV1 = Object.freeze({
+        v: 1,
+        message: Object.freeze({
+          body: submittedPrompt,
+          ...(submittedPrompt !== effectivePrompt ? { injectionDecision: 'member_cli_prompt_override' } : {}),
+        }),
+        nativeInstructions: Object.freeze([]),
+        runtime: Object.freeze({
+          provider: 'google',
+          carrier: 'antigravity_cli',
+          ...(agyModel ? { model: agyModel } : {}),
+          protocol: 'plain_text',
+          ...(readOnly ? { toolExecutionPolicy: 'read_only' as const } : {}),
+        }),
+        tools: Object.freeze({
+          finalSurface: readOnly ? ('exact' as const) : ('unknown' as const),
+          ...(readOnly ? { catCafeSchemas: Object.freeze([]) } : {}),
+        }),
+        providerNativeVisibility: 'unknown',
+      });
+      await options?.beforeProviderLaunch?.(preparedRequest);
+      if (!('body' in preparedRequest.message)) throw new Error('antigravity_cli_prepared_message_not_exact');
+      args[promptIndex + 1] = preparedRequest.message.body;
       let stdout = '';
       let stderr = '';
-      let timeoutEvent:
-        | {
-            __cliTimeout: true;
-            timeoutMs: number;
-            message: string;
-            command: string;
-            silenceDurationMs?: number;
-            processAlive?: boolean;
-            lastEventType?: string;
-            firstEventAt?: number;
-            lastEventAt?: number;
-            cliSessionId?: string;
-            invocationId?: string;
-            rawArchivePath?: string;
-            // F212 Phase A (砚砚 2nd P2): cliDiagnostics piggyback on __cliTimeout
-            cliDiagnostics?: import('../../../../../utils/cli-diagnostics.js').CliDiagnostics;
-          }
-        | undefined;
+      let timeoutEvent: CliTimeoutEvent | undefined;
       let cliErrorEvent:
         | {
             __cliError: true;
@@ -1117,6 +1286,16 @@ export class GeminiAgentService implements AgentService {
               }),
               timestamp: Date.now(),
             };
+            if (progress.error) {
+              yield {
+                type: 'error' as const,
+                catId: this.catId,
+                error: progress.error,
+                errorCode: 'tool_error',
+                metadata,
+                timestamp: Date.now(),
+              };
+            }
             if (progress.payload) {
               const toolInfo = parseAgyStepTools(progress.payload, progress.idx);
               if (toolInfo && toolInfo.toolName && toolInfo.toolCallId) {
@@ -1164,9 +1343,7 @@ export class GeminiAgentService implements AgentService {
       const agyLogText = readAntigravityLogText(agyLogPath);
       const observedProfileModel = agyProfile ? extractAntigravityCliSelectedModelLabel(agyLogText) : null;
       const profileModelMissing = Boolean(agyProfile && !observedProfileModel);
-      const profileModelMismatch = Boolean(
-        agyProfile && observedProfileModel && observedProfileModel !== agyProfile.expectedModel,
-      );
+      const profileModelMismatch = Boolean(agyProfile && observedProfileModel && observedProfileModel !== agyModel);
       if (agyProfile && observedProfileModel) {
         metadata = {
           ...metadata,
@@ -1326,6 +1503,7 @@ export class GeminiAgentService implements AgentService {
             invocationId: timeoutEvent.invocationId ?? options?.invocationId,
             cliSessionId: timeoutEvent.cliSessionId ?? options?.cliSessionId,
             rawArchivePath: timeoutEvent.rawArchivePath,
+            terminalContext: timeoutEvent.terminalContext,
           }),
           timestamp: Date.now(),
         };
@@ -1388,7 +1566,7 @@ export class GeminiAgentService implements AgentService {
         yield {
           type: 'error',
           catId: this.catId,
-          error: `AGY profile selected model mismatch: expected "${agyProfile.expectedModel}", observed "${observedProfileModel}".`,
+          error: `AGY profile selected model mismatch: expected "${agyModel}", observed "${observedProfileModel}".`,
           metadata,
           timestamp: Date.now(),
         };
@@ -1396,7 +1574,7 @@ export class GeminiAgentService implements AgentService {
         yield {
           type: 'error',
           catId: this.catId,
-          error: `AGY profile selected model was not verified: expected "${agyProfile.expectedModel}", but no selected model label was observed in AGY logs.`,
+          error: `AGY profile selected model was not verified: expected "${agyModel}", but no selected model label was observed in AGY logs.`,
           metadata,
           timestamp: Date.now(),
         };
@@ -1469,7 +1647,23 @@ export class GeminiAgentService implements AgentService {
       // then merge callbackEnv overrides. Preserves API keys etc. from parent env.
       const childEnv = buildChildEnv(options.callbackEnv);
 
-      const child = this.antigravitySpawnFn('antigravity', ['chat', '--mode', 'agent', prompt], {
+      const preparedRequest: PreparedProviderRequestV1 = Object.freeze({
+        v: 1,
+        message: Object.freeze({ body: prompt }),
+        nativeInstructions: Object.freeze([]),
+        runtime: Object.freeze({
+          provider: 'google',
+          carrier: 'antigravity_adapter',
+          ...(this.model ? { model: this.model } : {}),
+          protocol: 'detached_cli',
+        }),
+        tools: Object.freeze({ finalSurface: 'unknown' as const }),
+        providerNativeVisibility: 'unknown',
+      });
+      await options.beforeProviderLaunch?.(preparedRequest);
+      if (!('body' in preparedRequest.message)) throw new Error('antigravity_prepared_message_not_exact');
+
+      const child = this.antigravitySpawnFn('antigravity', ['chat', '--mode', 'agent', preparedRequest.message.body], {
         detached: true,
         stdio: 'ignore',
         env: childEnv as Record<string, string>,

@@ -8,18 +8,59 @@
  * DELETE /api/tasks/:id     → 删除 (204)
  */
 
-import type { CatId, CreateTaskInput, UpdateTaskInput } from '@cat-cafe/shared';
-import { catIdSchema } from '@cat-cafe/shared';
+import type {
+  CatId,
+  CreateTaskInput,
+  EntrustedWorkTerminalClosureV1,
+  TaskItem,
+  UpdateTaskInput,
+} from '@cat-cafe/shared';
+import { catIdSchema, entrustedWorkTerminalActionV1Schema } from '@cat-cafe/shared';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import { MAX_BALL_CUSTODY_HTTP_PROBE_TIMEOUT_MS } from '../domains/ball-custody/BallCustodyProbeTaskSpec.js';
 import type { ITaskStore } from '../domains/cats/services/stores/ports/TaskStore.js';
+import { isEntrustedWorkTerminalActionRequiredError } from '../domains/cats/services/stores/ports/TaskStoreContract.js';
+import type { GitHubWaitLifecycleService } from '../domains/github-signals/GitHubWaitLifecycleService.js';
+import {
+  EntrustedWorkLifecycleError,
+  EntrustedWorkLifecycleService,
+} from '../domains/growing/EntrustedWorkLifecycleService.js';
+import type { PreparedArtifactReader } from '../domains/growing/EntrustedWorkOwnerReadService.js';
+import type { DeploymentWaitLifecycleService } from '../domains/runtime-deployment/DeploymentWaitLifecycleService.js';
 import { validateUrl } from '../infrastructure/scheduler/content-fetcher.js';
 import type { SocketManager } from '../infrastructure/websocket/index.js';
+import { resolveStrictUserId, resolveUserId } from '../utils/request-identity.js';
 
 export interface TasksRoutesOptions {
   taskStore: ITaskStore;
   socketManager: SocketManager;
+  artifactReader?: PreparedArtifactReader;
+  waitLifecycleHolder?: { current?: GitHubWaitLifecycleService };
+  deploymentWaitLifecycleHolder?: { current?: DeploymentWaitLifecycleService };
+}
+
+type WaitCancelLifecycle = {
+  cancel(taskId: string, actor: { readonly kind: 'user'; readonly userId: string }): Promise<unknown>;
+};
+
+type CancelWaitSelection =
+  | { readonly ok: true; readonly lifecycle: WaitCancelLifecycle }
+  | { readonly ok: false; readonly status: 403 | 409 | 503; readonly error: string };
+
+function selectCancelableWait(task: TaskItem, userId: string, options: TasksRoutesOptions): CancelWaitSelection {
+  if (!task.userId || task.userId !== userId) return { ok: false, status: 403, error: 'Not your wait' };
+  if (task.status === 'done' || (task.entrustedWork && task.entrustedWork.closure.state !== 'open')) {
+    return { ok: false, status: 409, error: 'Task has no active wait' };
+  }
+  const lifecycle =
+    task.kind === 'work' && (task.deploymentWait?.await || task.deploymentWait?.waitOutcome?.delivery === 'pending')
+      ? options.deploymentWaitLifecycleHolder?.current
+      : task.kind === 'pr_tracking' && task.automationState?.await
+        ? options.waitLifecycleHolder?.current
+        : null;
+  if (lifecycle === null) return { ok: false, status: 409, error: 'Task has no active wait' };
+  return lifecycle ? { ok: true, lifecycle } : { ok: false, status: 503, error: 'Wait lifecycle unavailable' };
 }
 
 const VALID_STATUSES = ['todo', 'doing', 'blocked', 'done'] as const;
@@ -102,8 +143,52 @@ function toUpdateInput(data: z.infer<typeof updateSchema>): UpdateTaskInput {
   return input;
 }
 
+async function terminalizeDeploymentWaitForPatch(
+  task: TaskItem | null,
+  patch: { readonly ownerCatId?: string | null; readonly status?: TaskItem['status'] },
+  holder: TasksRoutesOptions['deploymentWaitLifecycleHolder'],
+): Promise<void> {
+  if (
+    task?.kind !== 'work' ||
+    (!task.deploymentWait?.await && task.deploymentWait?.waitOutcome?.delivery !== 'pending')
+  ) {
+    return;
+  }
+  if (patch.ownerCatId !== undefined && patch.ownerCatId !== task.ownerCatId) {
+    await holder?.current?.ownerChanged(task.id);
+    return;
+  }
+  if (patch.status === 'done') await holder?.current?.taskCompleted(task.id);
+}
+
+function validateEntrustedWorkWebClose(
+  task: TaskItem,
+  userId: string,
+  closure: EntrustedWorkTerminalClosureV1,
+): { statusCode: 403; error: string } | null {
+  if (!task.userId || task.userId !== userId) {
+    return { statusCode: 403, error: 'Not your entrusted work' };
+  }
+  if (
+    closure.state !== 'satisfied' &&
+    (closure.disposition.actorKind !== 'human' || closure.disposition.actorRef !== `user:${userId}`)
+  ) {
+    return { statusCode: 403, error: 'Human disposition actor does not match the authenticated user' };
+  }
+  return null;
+}
+
+function entrustedWorkLifecycleHttpStatus(error: EntrustedWorkLifecycleError): 404 | 409 {
+  return error.code === 'ENTRUSTED_WORK_NOT_FOUND' ? 404 : 409;
+}
+
 export const tasksRoutes: FastifyPluginAsync<TasksRoutesOptions> = async (app, opts) => {
   const { taskStore, socketManager } = opts;
+  const entrustedWorkLifecycle = new EntrustedWorkLifecycleService(taskStore, {
+    ...(opts.artifactReader ? { artifactReader: opts.artifactReader } : {}),
+    onChanged: (ownerUserId) =>
+      socketManager.emitToUser(ownerUserId, 'entrusted_work_projection_invalidated', { ownerUserId }),
+  });
 
   // POST /api/tasks
   app.post('/api/tasks', async (request, reply) => {
@@ -153,7 +238,29 @@ export const tasksRoutes: FastifyPluginAsync<TasksRoutesOptions> = async (app, o
       return { error: 'Invalid request body', details: result.error.issues };
     }
 
-    const updated = await taskStore.update(id, toUpdateInput(result.data));
+    const before = await taskStore.get(id);
+    if (
+      before?.kind === 'pr_tracking' &&
+      before.automationState?.await &&
+      result.data.ownerCatId !== undefined &&
+      result.data.ownerCatId !== before.ownerCatId
+    ) {
+      await opts.waitLifecycleHolder?.current?.ownerChanged(id);
+    }
+    await terminalizeDeploymentWaitForPatch(before, result.data, opts.deploymentWaitLifecycleHolder);
+    let updated: TaskItem | null;
+    try {
+      updated = await taskStore.update(id, toUpdateInput(result.data));
+    } catch (error) {
+      if (isEntrustedWorkTerminalActionRequiredError(error)) {
+        reply.status(409);
+        return {
+          error: 'Entrusted work requires an evidence-backed typed closure action',
+          code: error.code,
+        };
+      }
+      throw error;
+    }
     if (!updated) {
       reply.status(404);
       return { error: 'Task not found' };
@@ -164,10 +271,87 @@ export const tasksRoutes: FastifyPluginAsync<TasksRoutesOptions> = async (app, o
     return updated;
   });
 
+  // POST /api/tasks/:id/cancel-wait — authenticated, server-bound terminal transition.
+  app.post('/api/tasks/:id/cancel-wait', async (request, reply) => {
+    const userId = resolveUserId(request);
+    if (!userId) {
+      reply.status(401);
+      return { error: 'Identity required' };
+    }
+    const body = z
+      .object({})
+      .strict()
+      .safeParse(request.body ?? {});
+    if (!body.success) {
+      reply.status(400);
+      return { error: 'Request body must be empty', details: body.error.issues };
+    }
+    const { id } = request.params as { id: string };
+    const task = await taskStore.get(id);
+    if (!task) {
+      reply.status(404);
+      return { error: 'Task not found' };
+    }
+    const selection = selectCancelableWait(task, userId, opts);
+    if (!selection.ok) {
+      reply.status(selection.status);
+      return { error: selection.error };
+    }
+    const result = await selection.lifecycle.cancel(task.id, { kind: 'user', userId });
+    const updated = await taskStore.get(task.id);
+    if (updated) socketManager.broadcastToRoom(`thread:${updated.threadId}`, 'task_updated', updated);
+    return { status: 'cancelled', result };
+  });
+
+  // POST /api/tasks/:id/entrusted-work/close — Task-owned typed terminal action.
+  app.post('/api/tasks/:id/entrusted-work/close', async (request, reply) => {
+    const userId = resolveStrictUserId(request);
+    if (!userId) {
+      reply.status(401);
+      return { error: 'Identity required' };
+    }
+    const parsed = entrustedWorkTerminalActionV1Schema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.status(400);
+      return { error: 'Invalid request body', details: parsed.error.issues };
+    }
+    const { id } = request.params as { id: string };
+    const existing = await taskStore.get(id);
+    if (!existing) {
+      reply.status(404);
+      return { error: 'Task not found' };
+    }
+    const { closure } = parsed.data;
+    const accessError = validateEntrustedWorkWebClose(existing, userId, closure);
+    if (accessError) {
+      reply.status(accessError.statusCode);
+      return { error: accessError.error };
+    }
+    try {
+      const task = await entrustedWorkLifecycle.close({ taskId: id, ...parsed.data });
+      socketManager.broadcastToRoom(`thread:${task.threadId}`, 'task_updated', task);
+      return { status: 'closed', task };
+    } catch (error) {
+      if (!(error instanceof EntrustedWorkLifecycleError)) throw error;
+      reply.status(entrustedWorkLifecycleHttpStatus(error));
+      return { error: error.message, code: error.code };
+    }
+  });
+
   // DELETE /api/tasks/:id
   app.delete('/api/tasks/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
-    const deleted = await taskStore.delete(id);
+    let deleted: boolean;
+    try {
+      deleted = await taskStore.delete(id);
+    } catch (error) {
+      if (!isEntrustedWorkTerminalActionRequiredError(error)) throw error;
+      reply.status(409);
+      return {
+        error: 'Entrusted work cannot be deleted outside its evidence-backed typed lifecycle',
+        code: error.code,
+      };
+    }
     if (!deleted) {
       reply.status(404);
       return { error: 'Task not found' };

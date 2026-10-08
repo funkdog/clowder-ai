@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { describe, it, mock } from 'node:test';
+import { describe, it } from 'node:test';
 
 describe('EmbeddingService (HTTP client to embed-api.py)', () => {
   it('isReady returns false before load', async () => {
@@ -49,9 +49,14 @@ describe('EmbeddingService (HTTP client to embed-api.py)', () => {
     svc.markReady();
     const originalFetch = globalThis.fetch;
     const seenBatchSizes = [];
-    globalThis.fetch = async (url, opts) => {
+    const seenPolicies = [];
+    globalThis.fetch = async (_url, opts) => {
       const body = JSON.parse(opts.body);
       seenBatchSizes.push(body.input.length);
+      seenPolicies.push({
+        deadlineMs: body.deadline_ms,
+        maxModelMemMb: body.max_model_mem_mb,
+      });
       const data = body.input.map((_, i) => ({
         index: i,
         embedding: [0.1, 0.2, 0.3, 0.4],
@@ -70,6 +75,50 @@ describe('EmbeddingService (HTTP client to embed-api.py)', () => {
       // 150 split into 64 + 64 + 22
       assert.deepEqual(seenBatchSizes, [64, 64, 22]);
       assert.ok(seenBatchSizes.every((n) => n <= 64));
+      assert.ok(
+        seenPolicies.every(
+          (policy) =>
+            Number.isInteger(policy.deadlineMs) &&
+            policy.deadlineMs > Date.now() &&
+            policy.deadlineMs <= Date.now() + 3_000 &&
+            policy.maxModelMemMb === 800,
+        ),
+        'every sidecar batch must carry the absolute deadline and configured memory budget',
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it('propagates a parent abort into an in-flight embedding HTTP request', async () => {
+    const { EmbeddingService } = await import('../../dist/domains/memory/EmbeddingService.js');
+    const svc = new EmbeddingService({
+      embedModel: 'qwen3-embedding-0.6b',
+      embedDim: 4,
+      embedTimeoutMs: 250,
+      maxModelMemMb: 800,
+    });
+    svc.markReady();
+    const originalFetch = globalThis.fetch;
+    const requestStarted = Promise.withResolvers();
+    let requestSignal;
+    globalThis.fetch = async (_url, options) =>
+      new Promise((_resolve, reject) => {
+        requestSignal = options.signal;
+        options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        requestStarted.resolve();
+      });
+    const controller = new AbortController();
+    const parentReason = new DOMException('coverage deadline', 'AbortError');
+    try {
+      const embedding = svc.embed(['abort me'], controller.signal);
+      const rejected = embedding.catch((error) => error);
+      await requestStarted.promise;
+      assert.equal(requestSignal.aborted, false, 'abort must happen after the HTTP request starts');
+      controller.abort(parentReason);
+      assert.equal(requestSignal.aborted, true, 'parent abort must reach the in-flight HTTP signal synchronously');
+      assert.equal(requestSignal.reason, parentReason, 'parent reason must win over the independent client timeout');
+      assert.equal(await rejected, parentReason, 'the HTTP rejection must preserve the exact parent reason');
     } finally {
       globalThis.fetch = originalFetch;
     }

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { describe, test } from 'node:test';
 
-const { preflightAgyProfile, resolveAgyProfile, resolveAgySpawnCwd } = await import(
+const { preflightAgyProfile, preflightAgyRuntimePermissions, resolveAgyProfile, resolveAgySpawnCwd } = await import(
   '../dist/domains/cats/services/agents/providers/agy-profile-manager.js'
 );
 
@@ -13,6 +13,155 @@ function readJson(path) {
 }
 
 describe('agy-profile-manager', () => {
+  test('runtime permission preflight rejects empty file grants before AGY builds an invalid sandbox', () => {
+    const home = mkdtempSync(join(tmpdir(), 'agy-runtime-home-'));
+    const configDir = join(home, '.gemini', 'config');
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(
+      join(configDir, 'config.json'),
+      JSON.stringify({
+        userSettings: {
+          globalPermissionGrants: {
+            allow: ['command(*)', 'write_file()', 'read_file()', 'read_file(/absolute/path)'],
+          },
+        },
+      }),
+    );
+
+    try {
+      const result = preflightAgyRuntimePermissions(home);
+
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'empty_file_permission_path');
+      assert.deepEqual(result.invalidGrants, ['write_file()', 'read_file()']);
+      assert.match(result.message, /non-absolute file path/i);
+      assert.match(result.message, /write_file\(\)/);
+      assert.match(result.message, /read_file\(\)/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('runtime permission preflight rejects a uniquely misnamespaced MCP grant', () => {
+    const home = mkdtempSync(join(tmpdir(), 'agy-runtime-home-'));
+    const configDir = join(home, '.gemini', 'config');
+    const settingsDir = join(home, '.gemini', 'antigravity-cli');
+    const schemaDir = join(settingsDir, 'mcp', 'cat-cafe-collab');
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(schemaDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({ userSettings: {} }));
+    writeFileSync(
+      join(configDir, 'mcp_config.json'),
+      JSON.stringify({
+        mcpServers: {
+          'cat-cafe-memory': { command: 'memory-server' },
+          'cat-cafe-collab': { command: 'collab-server' },
+        },
+      }),
+    );
+    writeFileSync(
+      join(settingsDir, 'settings.json'),
+      JSON.stringify({
+        permissions: {
+          allow: ['mcp(cat-cafe-memory/cat_cafe_get_thread_context)'],
+        },
+      }),
+    );
+    writeFileSync(join(schemaDir, 'cat_cafe_get_thread_context.json'), JSON.stringify({ name: 'get_thread_context' }));
+
+    try {
+      const result = preflightAgyRuntimePermissions(home);
+
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, 'mcp_permission_server_mismatch');
+      assert.deepEqual(result.invalidGrants, ['mcp(cat-cafe-memory/cat_cafe_get_thread_context)']);
+      assert.deepEqual(result.suggestedGrants, ['mcp(cat-cafe-collab/cat_cafe_get_thread_context)']);
+      assert.match(result.message, /cat-cafe-collab/);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  // F210 2026-09-20：生产 settings.json 已改用通配 grant `mcp(<server>/*)` 覆盖整个
+  // cat-cafe MCP 家族（原本是人工逐条攒的白名单，缺一个工具就在 headless 下静默 deny，
+  // 表现为「CLI 完成但无文字输出」）。通配是 AGY 原生语法，但它**不是**一个工具名。
+  //
+  // 通配目前被两道独立闸挡在 misnamespace 判定之外：(1) safeSegment 不收 `*`；
+  // (2) 即便收了，schema 文件 `<server>/*.json` 也不存在、解析不出候选 server。
+  // 变异实测（2026-09-20）：只拆任一道闸，本用例仍绿；两道同时拆才转红。
+  // 也就是说本用例钉的是**行为**（通配必须原样放行），不是某一道闸的实现细节——
+  // 将来谁把 preflight 改成「解析不出的 grant 一律判非法」并顺手放宽 safeSegment，
+  // 就会在这里被拦住，而不是在生产上把刚修好的权限面重新关上。
+  test('runtime permission preflight accepts wildcard MCP grants unchanged', () => {
+    const home = mkdtempSync(join(tmpdir(), 'agy-runtime-home-'));
+    const configDir = join(home, '.gemini', 'config');
+    const settingsDir = join(home, '.gemini', 'antigravity-cli');
+    const schemaDir = join(settingsDir, 'mcp', 'cat-cafe-collab');
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(schemaDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({ userSettings: {} }));
+    writeFileSync(
+      join(configDir, 'mcp_config.json'),
+      JSON.stringify({
+        mcpServers: {
+          'cat-cafe-memory': { command: 'memory-server' },
+          'cat-cafe-collab': { command: 'collab-server' },
+        },
+      }),
+    );
+    // `cat_cafe_get_message` 的 schema 只存在于 collab 名下；逐条 grant 写成 memory 会被判
+    // misnamespaced，但通配 grant 不承诺具体工具属于哪个 server，不该走同一条判定。
+    writeFileSync(join(schemaDir, 'cat_cafe_get_message.json'), JSON.stringify({ name: 'get_message' }));
+    writeFileSync(
+      join(settingsDir, 'settings.json'),
+      JSON.stringify({
+        permissions: {
+          allow: ['mcp(cat-cafe-collab/*)', 'mcp(cat-cafe-memory/*)', 'mcp(*)'],
+        },
+      }),
+    );
+
+    try {
+      assert.deepEqual(preflightAgyRuntimePermissions(home), { ok: true });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test('runtime permission preflight fails open when an MCP tool namespace is ambiguous', () => {
+    const home = mkdtempSync(join(tmpdir(), 'agy-runtime-home-'));
+    const configDir = join(home, '.gemini', 'config');
+    const settingsDir = join(home, '.gemini', 'antigravity-cli');
+    mkdirSync(configDir, { recursive: true });
+    mkdirSync(settingsDir, { recursive: true });
+    writeFileSync(join(configDir, 'config.json'), JSON.stringify({ userSettings: {} }));
+    writeFileSync(
+      join(configDir, 'mcp_config.json'),
+      JSON.stringify({
+        mcpServers: {
+          legacy: { command: 'legacy-server' },
+          first: { command: 'first-server' },
+          second: { command: 'second-server' },
+        },
+      }),
+    );
+    writeFileSync(
+      join(settingsDir, 'settings.json'),
+      JSON.stringify({ permissions: { allow: ['mcp(legacy/shared_tool)'] } }),
+    );
+    for (const server of ['first', 'second']) {
+      const schemaDir = join(settingsDir, 'mcp', server);
+      mkdirSync(schemaDir, { recursive: true });
+      writeFileSync(join(schemaDir, 'shared_tool.json'), JSON.stringify({ name: 'shared_tool' }));
+    }
+
+    try {
+      assert.deepEqual(preflightAgyRuntimePermissions(home), { ok: true });
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   test('creates isolated per-cat HOME settings with expected model and trusted workspace', () => {
     const root = mkdtempSync(join(tmpdir(), 'agy-profile-root-'));
     const worktree = mkdtempSync(join(tmpdir(), 'agy-profile-worktree-'));

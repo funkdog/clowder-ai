@@ -4,9 +4,8 @@
  * when the command is not in the Node.js process's PATH.
  */
 
-import { execSync } from 'node:child_process';
-import { existsSync, readdirSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { accessSync, constants, existsSync, readdirSync, statSync } from 'node:fs';
+import { delimiter, isAbsolute, resolve, win32 } from 'node:path';
 
 const IS_WINDOWS = process.platform === 'win32';
 
@@ -25,6 +24,10 @@ const UNIX_SEARCH_DIRS = [
   '.nix-profile/bin',
 ];
 
+/** Official Kimi Code installer layout (macOS / Linux). Kept command-specific
+ *  so other CLIs do not probe a Kimi-private directory. */
+const KIMI_CODE_UNIX_DIR = '.kimi-code/bin';
+
 /** Discover nvm-managed Node.js bin directories under ~/.nvm/versions/node/. */
 function collectNvmBinDirs(): string[] {
   const home = process.env.HOME ?? '';
@@ -40,6 +43,32 @@ function collectNvmBinDirs(): string[] {
 }
 
 const resolvedCache = new Map<string, string>();
+
+function normalizeWindowsDir(path: string): string {
+  return win32
+    .dirname(path)
+    .replace(/[\\/]+$/, '')
+    .toLowerCase();
+}
+
+/**
+ * Select the effective Windows PATH hit while preserving directory order.
+ *
+ * `where <command>` can return multiple entries from the same directory
+ * (for example `codex` and `codex.exe` from the Windows Store alias dir).
+ * We only apply `.cmd` / `.exe` preference within the first directory bucket;
+ * later directories must not override an earlier PATH wrapper/version pin.
+ */
+export function selectWindowsPathEntry(lines: readonly string[]): string | null {
+  if (lines.length === 0) return null;
+  const firstDir = normalizeWindowsDir(lines[0]);
+  const firstDirHits = lines.filter((line) => normalizeWindowsDir(line) === firstDir);
+  return (
+    firstDirHits.find((line) => /\.cmd$/i.test(line)) ||
+    firstDirHits.find((line) => /\.exe$/i.test(line)) ||
+    firstDirHits[0]
+  );
+}
 
 /**
  * Drop a cache entry. Accepts EITHER the bare command name (cache key) OR the
@@ -81,25 +110,31 @@ export function resolveCliCommand(command: string, opts?: { skipPathProbe?: bool
     resolvedCache.delete(command);
   }
 
+  // #1173: For the bare `kimi` command, probe the official Kimi Code layout
+  // before PATH. The official installer lays down `~/.kimi-code/bin/kimi`,
+  // while legacy `kimi-cli` users may still have a bare `kimi` on PATH that
+  // does not support ACP. Treating `kimi` as the official binary name keeps
+  // ACP `kimi acp` from silently selecting the legacy PATH hit. Users who want
+  // to force a specific PATH binary can still use a distinct command name.
+  if (!IS_WINDOWS && command === 'kimi') {
+    const home = process.env.HOME ?? '';
+    if (home) {
+      const kimiCodeCandidate = resolve(home, KIMI_CODE_UNIX_DIR, command);
+      if (existsSync(kimiCodeCandidate)) {
+        resolvedCache.set(command, kimiCodeCandidate);
+        return kimiCodeCandidate;
+      }
+    }
+  }
+
   // Fast path: already in PATH
   // #894: caller can skip this when PATH was already probed (e.g. client-detection
   // does its own `command -v`; repeating `which` is redundant + slower).
   if (!opts?.skipPathProbe) {
-    try {
-      const which = IS_WINDOWS ? `where ${command}` : `which ${command}`;
-      const result = execSync(which, { timeout: 5000, encoding: 'utf-8' }).trim();
-      if (result) {
-        const lines = result
-          .split('\n')
-          .map((l) => l.trim())
-          .filter(Boolean);
-        // On Windows, prefer the .cmd shim (more reliable for shim resolution)
-        const resolved = (IS_WINDOWS && lines.find((l) => /\.cmd$/i.test(l))) || lines[0];
-        resolvedCache.set(command, resolved);
-        return resolved;
-      }
-    } catch {
-      // fall through to manual search
+    const pathHit = findOnPath(command);
+    if (pathHit) {
+      resolvedCache.set(command, pathHit);
+      return pathHit;
     }
   }
 
@@ -153,6 +188,34 @@ export function resolveCliCommand(command: string, opts?: { skipPathProbe?: bool
   return null;
 }
 
+function isExecutableFile(path: string): boolean {
+  try {
+    if (!statSync(path).isFile()) return false;
+    accessSync(path, IS_WINDOWS ? constants.F_OK : constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Match PATH directory precedence without starting a shell or which/where. */
+function findOnPath(command: string): string | null {
+  const hasPath = isAbsolute(command) || /[\\/]/.test(command);
+  const searchPath = process.env.PATH ?? process.env.Path ?? (IS_WINDOWS ? '' : '/usr/bin:/bin');
+  const directories = hasPath ? [''] : searchPath.split(delimiter);
+  const extensions =
+    IS_WINDOWS && !/\.[^\\/]+$/.test(command)
+      ? ['', ...(process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';')]
+      : [''];
+  for (const directory of directories) {
+    const hits = extensions
+      .map((extension) => resolve(directory.replace(/^"|"$/g, ''), `${command}${extension}`))
+      .filter(isExecutableFile);
+    if (hits.length) return IS_WINDOWS ? selectWindowsPathEntry(hits) : hits[0];
+  }
+  return null;
+}
+
 /**
  * Resolve CLI command or return the bare command name as fallback.
  * Use this when you want to attempt spawn even if not found (e.g. Windows
@@ -174,8 +237,11 @@ export function formatCliNotFoundError(command: string, platform: NodeJS.Platfor
       platform === 'win32'
         ? 'curl.exe -fsSL https://antigravity.google/cli/install.cmd -o install.cmd && install.cmd && del install.cmd'
         : 'curl -fsSL https://antigravity.google/cli/install.sh | bash',
-    kimi: 'uv tool install --python 3.13 kimi-cli',
-    opencode: 'npm install -g opencode',
+    kimi:
+      platform === 'win32'
+        ? 'irm https://code.kimi.com/kimi-code/install.ps1 | iex'
+        : 'curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash',
+    opencode: 'npm install -g opencode-ai',
   };
   const hint = installHints[command] ?? `install the "${command}" CLI`;
   return `${command} CLI 未找到。请先运行 \`${hint}\` 安装，再重试。`;

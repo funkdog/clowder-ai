@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { BUILTIN_GPT_PRO_CANONICAL_MENTION, supportsCodexFastModel } from '@cat-cafe/shared';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { CatData } from '@/hooks/useCatData';
 import { apiFetch } from '@/utils/api-client';
 import type { ConfigData } from './config-viewer-types';
 import type { TemplateCard } from './first-run-quest/TemplateStep';
-import type { AccountsResponse, ProfileItem } from './hub-accounts.types';
+import type { AccountsResponse, BuiltinAccountClient, ProfileItem } from './hub-accounts.types';
 import { uploadAvatarAsset, uploadRefAudioAsset } from './hub-cat-editor.client';
 import {
   autoSlug,
@@ -29,10 +30,17 @@ import {
   toStrategyForm,
   withDefaultModelMentionPattern,
 } from './hub-cat-editor.model';
-import { AccountSection, IdentitySection, RoutingSection } from './hub-cat-editor.sections';
+import {
+  AccountSection,
+  IdentitySection,
+  ProtectedCloudIdentitySection,
+  RoutingSection,
+} from './hub-cat-editor.sections';
 import { AdvancedRuntimeSection } from './hub-cat-editor-advanced';
 import { PersistenceBanner } from './hub-cat-editor-fields';
 import type { CatStrategyEntry } from './hub-strategy-types';
+import { readApiError } from './settings/settings-utils';
+import { UnifiedAuthModal } from './UnifiedAuthModal';
 import { useConfirm } from './useConfirm';
 
 interface HubCatEditorProps {
@@ -58,6 +66,7 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
   const [strategyError, setStrategyError] = useState<string | null>(null);
   const [codexSettingsError, setCodexSettingsError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [restoringCloudIdentity, setRestoringCloudIdentity] = useState(false);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, boolean>>({});
   const [form, setForm] = useState<HubCatEditorFormState>(() => initialState(cat, draft));
@@ -68,17 +77,24 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
   const [codexSettingsBaseline, setCodexSettingsBaseline] = useState<CodexRuntimeSettings | null>(null);
   const [templates, setTemplates] = useState<TemplateCard[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>('custom');
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const pendingProfileIdRef = useRef<string | null>(null);
 
   const availableProfiles = useMemo(() => filterAccounts(form.clientId, profiles), [form.clientId, profiles]);
   const selectedProfile = useMemo(
     () => availableProfiles.find((profile) => profile.id === form.accountRef) ?? null,
     [availableProfiles, form.accountRef],
   );
+  const originalProfile = useMemo(
+    () => profiles.find((profile) => profile.id === cat?.accountRef) ?? null,
+    [cat?.accountRef, profiles],
+  );
   const modelOptions = useMemo(() => {
     if (form.clientId === 'antigravity') return [];
     return selectedProfile?.models ?? [];
   }, [form.clientId, selectedProfile]);
-  const showCodexSettings = form.clientId === 'openai';
+  const protectedCloudIdentity = cat?.identityProtection?.kind === 'builtin-cloud' ? cat.identityProtection : null;
+  const showCodexSettings = form.clientId === 'openai' && !protectedCloudIdentity;
   const codexSettingsEditable = !showCodexSettings || codexSettingsBaseline !== null;
 
   // Alias uniqueness: collect all patterns from OTHER cats (lowercase for comparison)
@@ -104,6 +120,9 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
     setCodexSettingsBaseline(null);
     setSelectedTemplateId('custom');
     setHasUnsavedChanges(false);
+    setRestoringCloudIdentity(false);
+    setShowAuthModal(false);
+    pendingProfileIdRef.current = null;
   }, [open, cat, draft]);
 
   // Re-fetch profiles when Provider Profiles page creates/saves/deletes an account.
@@ -146,7 +165,20 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
         return (await res.json()) as AccountsResponse;
       })
       .then((body) => {
-        if (!cancelled) setProfiles(body.providers);
+        if (cancelled) return;
+        setProfiles(body.providers);
+        const pendingProfileId = pendingProfileIdRef.current;
+        if (!pendingProfileId) return;
+        const createdProfile = body.providers.find((profile) => profile.id === pendingProfileId);
+        if (!createdProfile) return;
+        pendingProfileIdRef.current = null;
+        setHasUnsavedChanges(true);
+        setForm((prev) => ({
+          ...prev,
+          accountRef: createdProfile.id,
+          defaultModel: createdProfile.models?.[0] ?? '',
+          provider: '',
+        }));
       })
       .catch((err) => {
         if (!cancelled) setError(err instanceof Error ? err.message : '账号配置加载失败');
@@ -279,7 +311,11 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
 
   if (!open) return null;
 
-  const saveBlockedByProfileBinding = false;
+  const createAccountClient: BuiltinAccountClient | undefined =
+    form.clientId === 'antigravity' ? undefined : form.clientId === 'catagent' ? 'anthropic' : form.clientId;
+  const hasEmptyCreatableAccounts =
+    !cat && !loadingProfiles && createAccountClient !== undefined && availableProfiles.length === 0;
+  const saveBlockedByProfileBinding = hasEmptyCreatableAccounts;
 
   const patchForm = (patch: Partial<HubCatEditorFormState>) => {
     setHasUnsavedChanges(true);
@@ -370,6 +406,28 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
     );
   };
 
+  const handleRestoreBuiltinCloudIdentity = async (catId: string) => {
+    if (restoringCloudIdentity) return;
+    setRestoringCloudIdentity(true);
+    setError(null);
+    try {
+      const res = await apiFetch(`/api/cats/${catId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restoreBuiltinCloudIdentity: true }),
+      });
+      if (!res.ok) {
+        setError(await readApiError(res));
+        return;
+      }
+      await onSaved();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '云端身份恢复失败');
+    } finally {
+      setRestoringCloudIdentity(false);
+    }
+  };
+
   const handleSave = async () => {
     const errors: Record<string, boolean> = {};
     const errorMessages: string[] = [];
@@ -430,11 +488,22 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
     try {
       const effectiveForm =
         !cat && selectedProfile?.authType === 'api_key' ? withDefaultModelMentionPattern(form) : form;
-      const catPayload = cat ? buildCatPatchPayload(effectiveForm, cat) : buildCatPayload(effectiveForm, cat);
-      const rollbackCatPayload = cat ? buildCatPayload(initialState(cat, null), cat) : null;
-      const strategyEditable = Boolean(
-        cat && form.sessionChain === 'true' && (strategyForm?.sessionChainEnabled ?? true),
-      );
+      const payloadContext = { accountAuthType: selectedProfile?.authType ?? null };
+      const catPayload = cat
+        ? buildCatPatchPayload(effectiveForm, cat, payloadContext)
+        : buildCatPayload(effectiveForm, cat, payloadContext);
+      const rollbackCatPayload = cat
+        ? cat.identityProtection?.kind === 'builtin-cloud'
+          ? buildCatPatchPayload(initialState(cat, null), cat, {
+              accountAuthType: originalProfile?.authType ?? null,
+              forceServiceTier: true,
+            })
+          : buildCatPayload(initialState(cat, null), cat, {
+              accountAuthType: originalProfile?.authType ?? null,
+              forceServiceTier: true,
+            })
+        : null;
+      const strategyEditable = Boolean(cat && strategyForm);
       const nextStrategyPayload = strategyEditable && strategyForm ? buildStrategyPayload(strategyForm) : null;
       const baselineStrategyPayload =
         strategyEditable && strategyBaseline ? buildStrategyPayload(strategyBaseline) : null;
@@ -546,7 +615,9 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
   return createPortal(
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--console-overlay-medium)] px-4 backdrop-blur-sm"
-      onClick={requestClose}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) void requestClose();
+      }}
       data-bootcamp-host="cat-editor-modal"
     >
       <div
@@ -573,6 +644,11 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
         </div>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-7 py-5">
+          {!cat ? (
+            <p className="rounded-[14px] bg-[var(--console-field-bg)] px-4 py-3 text-xs font-semibold text-cafe-secondary">
+              首次安装默认只启用一个品种；可在成员管理继续添加其他成员。
+            </p>
+          ) : null}
           {!cat && templates.length > 0 && (
             <section
               data-guide-id="add-member.template-picker"
@@ -621,35 +697,72 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
             onAvatarUpload={handleAvatarUpload}
             onRefAudioUpload={handleRefAudioUpload}
           />
-          <AccountSection
-            form={form}
-            hasError={fieldErrors.account}
-            modelOptions={modelOptions}
-            availableProfiles={availableProfiles}
-            loadingProfiles={loadingProfiles}
-            onChange={patchForm}
-          />
+          {cat && protectedCloudIdentity ? (
+            <ProtectedCloudIdentitySection
+              protection={protectedCloudIdentity}
+              restoring={restoringCloudIdentity}
+              onRestore={() => handleRestoreBuiltinCloudIdentity(cat.id)}
+            />
+          ) : (
+            <AccountSection
+              form={form}
+              hasError={fieldErrors.account}
+              modelOptions={modelOptions}
+              availableProfiles={availableProfiles}
+              loadingProfiles={hasEmptyCreatableAccounts ? true : loadingProfiles}
+              effectiveCodexCarrier={cat?.codexCarrier}
+              codexLocalCapable={cat ? cat.cli != null : true}
+              onChange={patchForm}
+            />
+          )}
+          {hasEmptyCreatableAccounts ? (
+            <section
+              aria-label="认证账号空状态"
+              className="rounded-[18px] border border-[var(--console-border-soft)] bg-[var(--console-card-bg)] p-[18px]"
+            >
+              <p className="text-xs leading-5 text-cafe-secondary">
+                当前没有可用的认证账号。先新建或登录账号，再继续选择模型并保存成员。
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowAuthModal(true)}
+                className="mt-2 rounded-lg bg-cafe-accent px-3 py-1.5 text-xs font-semibold text-[var(--cafe-surface)] transition hover:bg-cafe-accent-hover"
+              >
+                新建 / 登录账号
+              </button>
+            </section>
+          ) : null}
           <RoutingSection
             form={form}
             hasError={fieldErrors.routing}
             reservedPatterns={reservedPatterns}
+            fixedPatterns={protectedCloudIdentity ? [BUILTIN_GPT_PRO_CANONICAL_MENTION] : undefined}
             onChange={patchForm}
           />
-          <AdvancedRuntimeSection
-            cat={cat}
-            form={form}
-            strategyForm={strategyForm}
-            loadingStrategy={loadingStrategy}
-            strategyError={strategyError}
-            codexSettings={codexSettings}
-            loadingCodexSettings={loadingCodexSettings}
-            codexSettingsError={codexSettingsError}
-            codexSettingsEditable={codexSettingsEditable}
-            showCodexSettings={showCodexSettings}
-            onChange={patchForm}
-            onStrategyChange={patchStrategy}
-            onCodexChange={patchCodex}
-          />
+          {!protectedCloudIdentity ? (
+            <AdvancedRuntimeSection
+              cat={cat}
+              form={form}
+              strategyForm={strategyForm}
+              loadingStrategy={loadingStrategy}
+              strategyError={strategyError}
+              codexSettings={codexSettings}
+              loadingCodexSettings={loadingCodexSettings}
+              codexSettingsError={codexSettingsError}
+              codexSettingsEditable={codexSettingsEditable}
+              showCodexSettings={showCodexSettings}
+              codexSpeedVisible={
+                form.clientId === 'openai' &&
+                selectedProfile?.authType === 'oauth' &&
+                !form.acpEnabled &&
+                (cat ? cat.cli != null : true)
+              }
+              codexFastSupported={supportsCodexFastModel(form.defaultModel)}
+              onChange={patchForm}
+              onStrategyChange={patchStrategy}
+              onCodexChange={patchCodex}
+            />
+          ) : null}
           <PersistenceBanner />
           {error ? <p className="rounded-2xl bg-conn-red-bg px-4 py-3 text-sm text-conn-red-text">{error}</p> : null}
         </div>
@@ -658,13 +771,23 @@ export function HubCatEditor({ cat, draft, existingCats, hasDossier, open, onClo
           <button
             type="button"
             onClick={handleSave}
-            disabled={saving || saveBlockedByProfileBinding}
+            disabled={saving || restoringCloudIdentity || saveBlockedByProfileBinding}
             className="h-8 rounded-[10px] bg-[var(--cafe-accent)] px-4 text-compact font-extrabold text-[var(--cafe-surface)] transition hover:bg-[var(--cafe-accent-hover)] disabled:opacity-50"
           >
             {saving ? '保存中…' : '保存'}
           </button>
         </div>
       </div>
+      <UnifiedAuthModal
+        open={showAuthModal && createAccountClient !== undefined}
+        initialClientId={createAccountClient}
+        onClose={() => setShowAuthModal(false)}
+        onCreated={(profileId) => {
+          pendingProfileIdRef.current = profileId;
+          setShowAuthModal(false);
+          setProfilesVersion((version) => version + 1);
+        }}
+      />
     </div>,
     document.body,
   );

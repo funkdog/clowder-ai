@@ -22,7 +22,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { beforeEach, describe, test } from 'node:test';
+import { afterEach, beforeEach, describe, test } from 'node:test';
 import Fastify from 'fastify';
 
 const { InMemorySpanExporter, SimpleSpanProcessor, NodeTracerProvider } = await import('@opentelemetry/sdk-trace-node');
@@ -33,9 +33,18 @@ const otelProvider = new NodeTracerProvider({
 });
 otelProvider.register();
 
+/** PR-O3: valid waitSourceRef fixture — wakeAfterMs now requires waitSourceRef. */
+const VALID_WAIT_SOURCE_REF = {
+  kind: 'github_issue',
+  value: 'test/c1-sample',
+  expectedSignal: 'test completion',
+  slaUntilMs: 3_600_000,
+};
+
 describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06-12 build verdict)', () => {
   let registry;
   let threadStore;
+  let holdQuotaStore;
 
   function makeStubDeps() {
     const insertedTasks = [];
@@ -67,6 +76,21 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
         getAll() {
           return insertedTasks.filter((t) => !removedIds.includes(t.id));
         },
+        getById(id) {
+          return insertedTasks.find((task) => task.id === id && !removedIds.includes(id)) ?? null;
+        },
+        updateParamsIfCurrent(id, current, next) {
+          const task = insertedTasks.find((candidate) => candidate.id === id && !removedIds.includes(id));
+          if (!task || task.params !== current) return false;
+          task.params = next;
+          return true;
+        },
+        setEnabled(id, enabled) {
+          const task = insertedTasks.find((candidate) => candidate.id === id && !removedIds.includes(id));
+          if (!task) return false;
+          task.enabled = enabled;
+          return true;
+        },
         remove(id) {
           removedIds.push(id);
           return true;
@@ -80,6 +104,7 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
       socketManager: {
         broadcastToRoom() {},
       },
+      holdQuotaStore,
       // R1 P1-2 (砚砚): hold-ball route now derives thread.system_kind from
       // threadStore at cancel time — proxy to the real ThreadStore so updateSystemKind
       // calls in the test surface via the route handler's lookup.
@@ -96,9 +121,16 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
       '../dist/domains/cats/services/agents/invocation/InvocationRegistry.js'
     );
     const { ThreadStore } = await import('../dist/domains/cats/services/stores/ports/ThreadStore.js');
+    const { HoldQuotaStore } = await import('../dist/domains/ball-custody/hold-quota-store.js');
     registry = new InvocationRegistry();
     threadStore = new ThreadStore();
+    holdQuotaStore = new HoldQuotaStore({ dbPath: ':memory:' });
     otelExporter.reset();
+  });
+
+  afterEach(() => {
+    holdQuotaStore?.close();
+    holdQuotaStore = null;
   });
 
   async function createApp(holdBallDeps) {
@@ -132,7 +164,7 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers,
-      payload: { reason: 'wait-A', nextStep: 'continue-A', wakeAfterMs: 5_000 },
+      payload: { reason: 'wait-A', nextStep: 'continue-A', wakeAfterMs: 5_000, waitSourceRef: VALID_WAIT_SOURCE_REF },
     });
     assert.equal(r1.statusCode, 200);
     const firstTaskId = JSON.parse(r1.body).taskId;
@@ -145,7 +177,7 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers,
-      payload: { reason: 'wait-B', nextStep: 'continue-B', wakeAfterMs: 60_000 },
+      payload: { reason: 'wait-B', nextStep: 'continue-B', wakeAfterMs: 60_000, waitSourceRef: VALID_WAIT_SOURCE_REF },
     });
     assert.equal(r2.statusCode, 200);
     const secondTaskId = JSON.parse(r2.body).taskId;
@@ -183,8 +215,14 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
 
     // Sanity: cancel side effects also happened
     assert.notEqual(firstTaskId, secondTaskId);
-    assert.ok(deps.dynamicTaskStore.getAll().length === 1);
-    assert.equal(deps.dynamicTaskStore.getAll()[0].id, secondTaskId);
+    const replacementTasks = deps.dynamicTaskStore.getAll();
+    const retired = replacementTasks.find((task) => task.id === firstTaskId);
+    const successor = replacementTasks.find((task) => task.id === secondTaskId);
+    assert.equal(replacementTasks.length, 2, 'replacement retains one tombstone plus the active successor');
+    assert.equal(retired?.enabled, false);
+    assert.equal(retired?.params.holdLifecycle.status, 'retired_by_replacement');
+    assert.equal(successor?.enabled, true);
+    assert.equal(successor?.params.holdLifecycle.status, 'active');
   });
 
   test('no span emitted when there is no prior hold to cancel (first hold)', async () => {
@@ -200,7 +238,7 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers,
-      payload: { reason: 'first', nextStep: 'continue', wakeAfterMs: 10_000 },
+      payload: { reason: 'first', nextStep: 'continue', wakeAfterMs: 10_000, waitSourceRef: VALID_WAIT_SOURCE_REF },
     });
     assert.equal(r.statusCode, 200);
 
@@ -220,7 +258,12 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers,
-      payload: { reason: 'long-wait', nextStep: 'await-external', wakeAfterMs: 30 * 60_000 },
+      payload: {
+        reason: 'long-wait',
+        nextStep: 'await-external',
+        wakeAfterMs: 30 * 60_000,
+        waitSourceRef: VALID_WAIT_SOURCE_REF,
+      },
     });
 
     otelExporter.reset();
@@ -229,7 +272,7 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers,
-      payload: { reason: 'new-wait', nextStep: 'pivot', wakeAfterMs: 60_000 },
+      payload: { reason: 'new-wait', nextStep: 'pivot', wakeAfterMs: 60_000, waitSourceRef: VALID_WAIT_SOURCE_REF },
     });
 
     const sampleSpan = otelExporter
@@ -256,14 +299,14 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers,
-      payload: { reason: 'wait-A', nextStep: 'continue-A', wakeAfterMs: 5_000 },
+      payload: { reason: 'wait-A', nextStep: 'continue-A', wakeAfterMs: 5_000, waitSourceRef: VALID_WAIT_SOURCE_REF },
     });
     otelExporter.reset();
     await app.inject({
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers,
-      payload: { reason: 'wait-B', nextStep: 'continue-B', wakeAfterMs: 60_000 },
+      payload: { reason: 'wait-B', nextStep: 'continue-B', wakeAfterMs: 60_000, waitSourceRef: VALID_WAIT_SOURCE_REF },
     });
 
     const sampleSpan = otelExporter.getFinishedSpans().find((s) => s.name === 'cat_cafe.a2a.c1.hold_zombie_sample');
@@ -287,14 +330,14 @@ describe('F192 D — C1 zombie-hold per-fire sample span event (eval:a2a 2026-06
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers,
-      payload: { reason: 'wait-A', nextStep: 'continue-A', wakeAfterMs: 5_000 },
+      payload: { reason: 'wait-A', nextStep: 'continue-A', wakeAfterMs: 5_000, waitSourceRef: VALID_WAIT_SOURCE_REF },
     });
     otelExporter.reset();
     await app.inject({
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers,
-      payload: { reason: 'wait-B', nextStep: 'continue-B', wakeAfterMs: 60_000 },
+      payload: { reason: 'wait-B', nextStep: 'continue-B', wakeAfterMs: 60_000, waitSourceRef: VALID_WAIT_SOURCE_REF },
     });
 
     const sampleSpan = otelExporter.getFinishedSpans().find((s) => s.name === 'cat_cafe.a2a.c1.hold_zombie_sample');

@@ -1,10 +1,11 @@
 import type { GameView } from '@cat-cafe/shared';
 import { useMemo } from 'react';
+import { useShallow } from 'zustand/react/shallow';
 import type { SocketCallbacks } from '@/hooks/useSocket';
 import { type Thread, useChatStore } from '@/stores/chatStore';
 import { useGameStore } from '@/stores/gameStore';
 import { type TaskItem, useTaskStore } from '@/stores/taskStore';
-import { apiFetch } from '@/utils/api-client';
+import { invalidateSidebarProjection } from '@/utils/sidebar-thread-snapshot';
 
 interface ExternalDeps {
   threadId: string;
@@ -12,8 +13,6 @@ interface ExternalDeps {
   handleAgentMessage: SocketCallbacks['onMessage'];
   resetTimeout: () => void;
   clearDoneTimeout: (threadId?: string) => void;
-  handleAuthRequest: NonNullable<SocketCallbacks['onAuthorizationRequest']>;
-  handleAuthResponse: NonNullable<SocketCallbacks['onAuthorizationResponse']>;
   onNavigateToThread?: (threadId: string) => void;
   onIndexEvent?: SocketCallbacks['onIndexEvent'];
 }
@@ -28,8 +27,6 @@ export function useChatSocketCallbacks({
   handleAgentMessage,
   resetTimeout,
   clearDoneTimeout,
-  handleAuthRequest,
-  handleAuthResponse,
   onNavigateToThread,
   onIndexEvent,
 }: ExternalDeps): SocketCallbacks {
@@ -42,7 +39,18 @@ export function useChatSocketCallbacks({
     setTargetCats,
     removeThreadMessage,
     requestStreamCatchUp,
-  } = useChatStore();
+  } = useChatStore(
+    useShallow((s) => ({
+      updateThreadTitle: s.updateThreadTitle,
+      updateThreadParticipants: s.updateThreadParticipants,
+      setLoading: s.setLoading,
+      setHasActiveInvocation: s.setHasActiveInvocation,
+      setIntentMode: s.setIntentMode,
+      setTargetCats: s.setTargetCats,
+      removeThreadMessage: s.removeThreadMessage,
+      requestStreamCatchUp: s.requestStreamCatchUp,
+    })),
+  );
   const { addTask, updateTask } = useTaskStore();
 
   return useMemo<SocketCallbacks>(
@@ -97,16 +105,22 @@ export function useChatSocketCallbacks({
       onMessageRestored: (data: { messageId: string; threadId: string }) => {
         requestStreamCatchUp(data.threadId);
       },
-      onThreadBranched: () => {
-        void apiFetch('/api/threads')
-          .then((res) => (res.ok ? res.json() : null))
-          .then((data) => {
-            if (data?.threads) useChatStore.getState().setThreads(data.threads);
-          })
-          .catch(() => {});
+      onMessageRecalled: (data) => {
+        if (data.verdict === 'zero_exposure') {
+          removeThreadMessage(data.threadId, data.messageId);
+          return;
+        }
+        requestStreamCatchUp(data.threadId);
       },
-      onAuthorizationRequest: handleAuthRequest,
-      onAuthorizationResponse: handleAuthResponse,
+      onMessageReceiptUpdated: (data) => {
+        requestStreamCatchUp(data.threadId);
+      },
+      onCustodyOfferUpdated: (data) => {
+        requestStreamCatchUp(data.threadId);
+      },
+      onThreadBranched: () => {
+        void invalidateSidebarProjection();
+      },
       onGameStateUpdate: (data) => {
         const view = data.view as GameView;
         // P1-3 fix: Only accept updates for the current thread
@@ -137,8 +151,6 @@ export function useChatSocketCallbacks({
       requestStreamCatchUp,
       resetTimeout,
       clearDoneTimeout,
-      handleAuthRequest,
-      handleAuthResponse,
       onNavigateToThread,
       onIndexEvent,
       threadId,

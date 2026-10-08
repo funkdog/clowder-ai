@@ -1,12 +1,13 @@
 ---
 name: expert-panel
+tips_exempt: "This revision only updates internal handoff references; the explicitly invoked expert-panel workflow and its existing user-facing outputs are unchanged."
+disable-model-invocation: true
 description: >
   多猫专家辩论团：在现有协作习惯上加一层轻量编排 + WHY 链标准 + 交付链。
-  Use when: 技术趋势判断、竞品分析、行业事件分析、需要多视角决策支持、operator说"帮我分析一下"。
-  Not for: 单猫能搞定的问题、代码实现、bug fix、日常聊天。
+  Use when: 用户明确要求 expert panel、专家辩论、多猫分析或三猫讨论。
+  Not for: 普通“帮我分析一下”、单猫能搞定的问题、代码实现、bug fix、日常聊天。
   Output: 洞察卡片(rich block) + 语音总结 + 正式报告(DOCX/PDF)。
 triggers:
-  - "帮我分析一下"
   - "专家辩论"
   - "expert panel"
   - "技术参谋"
@@ -20,6 +21,8 @@ triggers:
 
 # Expert Panel — 多猫专家辩论团
 
+> **仅显式调用**：这是高成本多猫编排能力。只有用户明确点名 `expert-panel` / “专家辩论” / “多猫分析”时才启用；普通“帮我分析一下”由单猫先判断和回答。
+
 **定位：编排层，不是独立流程。** 复用已有协作习惯，只添加三样东西：角色分配、WHY 链标准、交付链。
 
 **核心原则：结论不值钱，论证过程才值钱。**
@@ -30,7 +33,7 @@ triggers:
 2. **WHY 链标准**：每个结论必须有证据 → 推理 → 结论（这是 expert-panel 的独有增量）
 3. **交付链**：洞察卡片 + 语音 + 报告
 
-其余规则不重写，直接遵循已有 skill。协作交接用五件套（What/Why/Tradeoff/Open/Next）。
+其余规则不重写，直接遵循已有 skill。协作交接满足 `cross-cat-handoff` 的必要信息与责任要求；五项提示可选。
 
 ## 角色分配
 
@@ -162,11 +165,11 @@ Convergence Lead 汇总所有猫的分析，产出收敛报告。
 
 | 场景 | 用什么 |
 |------|--------|
-| 日常"帮我分析一下" | expert-panel 单独用（Light 调研档） |
+| 日常“帮我分析一下” | 不调用本 skill；单猫直接分析，按需使用 `deep-research` |
 | 高 stakes 决策、operator说"调研" | expert-panel + `deep-research`（Full 调研档） |
 | 分析后需要立项 | expert-panel → `feat-lifecycle` |
 | 分析后需要沉淀 | expert-panel → `collaborative-thinking` Mode C |
-| 需要和外部猫交接分析结果 | expert-panel → `cross-cat-handoff` 五件套 |
+| 需要和外部猫交接分析结果 | expert-panel → `cross-cat-handoff` 的接手信息与责任路径 |
 
 ## 交付时机铁律
 

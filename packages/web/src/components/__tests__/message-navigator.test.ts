@@ -1,7 +1,7 @@
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import { MessageNavigator } from '@/components/MessageNavigator';
+import { MessageNavigator, messageNavigatorPreviewText } from '@/components/MessageNavigator';
 import type { ChatMessage as ChatMessageData } from '@/stores/chatStore';
 
 vi.mock('@/hooks/useCoCreatorConfig', () => ({
@@ -25,7 +25,14 @@ function makeMsg(id: string, type: 'user' | 'assistant' | 'system', catId?: stri
 const nullRef = { current: null };
 
 function render(messages: ChatMessageData[]): string {
-  return renderToStaticMarkup(React.createElement(MessageNavigator, { messages, scrollContainerRef: nullRef }));
+  return renderToStaticMarkup(
+    React.createElement(MessageNavigator, {
+      messages,
+      scrollContainerRef: nullRef,
+      onJumpToMessage: () => false,
+      beginUserScroll: () => null,
+    }),
+  );
 }
 
 describe('MessageNavigator', () => {
@@ -79,8 +86,8 @@ describe('MessageNavigator', () => {
     // base colors come from useCatData (populated by /api/cats)
     expect(html).toContain('#9B7EBD');
     expect(html).toContain('#5B8C5A');
-    expect(html).toContain('跳转到 布偶猫（opus-45） 的消息');
-    expect(html).toContain('跳转到 缅因猫（spark） 的消息');
+    expect(html).toContain('跳转到 opus-45 的消息');
+    expect(html).toContain('跳转到 spark 的消息');
   });
 
   it('resolves non-hyphen variant catIds during fallback', () => {
@@ -97,26 +104,26 @@ describe('MessageNavigator', () => {
     expect(html).toContain('#9B7EBD'); // opus
     expect(html).toContain('#5B9BD5'); // gemini
 
-    expect(html).toContain('跳转到 缅因猫（gpt52） 的消息');
-    expect(html).toContain('跳转到 布偶猫（sonnet） 的消息');
-    expect(html).toContain('跳转到 暹罗猫（gemini25） 的消息');
+    expect(html).toContain('跳转到 gpt52 的消息');
+    expect(html).toContain('跳转到 sonnet 的消息');
+    expect(html).toContain('跳转到 gemini25 的消息');
   });
 
   it('treats messages with catId as assistant even when type is user', () => {
     const msgs = [makeMsg('m1', 'user'), makeMsg('m2', 'user', 'gpt52'), makeMsg('m3', 'assistant', 'codex')];
     const html = render(msgs);
 
-    expect(html).toContain('跳转到 缅因猫（gpt52） 的消息');
+    expect(html).toContain('跳转到 gpt52 的消息');
 
     const ownerLabels = html.match(/跳转到 始皇帝 的消息/g) ?? [];
     expect(ownerLabels.length).toBe(1);
   });
 
-  it('applies kimi fallback colors and labels before /api/cats loads', () => {
+  it('applies kimi fallback color but keeps the raw id until /api/cats loads', () => {
     const msgs = [makeMsg('m1', 'user'), makeMsg('m2', 'assistant', 'kimi'), makeMsg('m3', 'assistant', 'codex')];
     const html = render(msgs);
 
-    expect(html).toContain('跳转到 梵花猫 的消息');
+    expect(html).toContain('跳转到 kimi 的消息');
   });
 
   it('includes accessibility labels', () => {
@@ -124,7 +131,7 @@ describe('MessageNavigator', () => {
     const html = render(msgs);
 
     expect(html).toContain('跳转到 始皇帝 的消息');
-    expect(html).toContain('跳转到 缅因猫 的消息');
+    expect(html).toContain('跳转到 codex 的消息');
   });
 
   it('samples at fixed intervals when messages exceed MAX_DOTS (18)', () => {
@@ -151,5 +158,46 @@ describe('MessageNavigator', () => {
     expect(html).not.toContain('bg-gray-200');
     expect(html).not.toContain('bg-gray-300/50');
     expect(html).toContain('rounded-full');
+  });
+
+  it('does not leak a folded source body through the navigator tooltip projection', () => {
+    const source: ChatMessageData = {
+      ...makeMsg('m-folded', 'user'),
+      content: '这段正文只允许在 canonical child 显示',
+      extra: {
+        queueReceipt: {
+          version: 1,
+          entryId: 'entry-folded',
+          targets: [
+            {
+              catId: 'codex-sol',
+              state: 'handled',
+              invocationId: 'child-folded',
+              seenAt: 10,
+              outcome: {
+                invocationId: 'child-folded',
+                disposition: 'completed_with_turn',
+                evidenceRef: { kind: 'invocation_lineage', invocationId: 'child-folded' },
+                handledAt: 20,
+              },
+            },
+          ],
+          reminderAttempts: [],
+        },
+      },
+    };
+    const terminal: ChatMessageData = {
+      ...makeMsg('m-terminal', 'assistant', 'codex-sol'),
+      extra: {
+        turnExecution: {
+          invocationId: 'child-folded',
+          parentInvocationId: 'parent-folded',
+          executionKind: 'ordinary',
+        },
+      },
+    };
+
+    expect(messageNavigatorPreviewText(source, [source, terminal])).toBeNull();
+    expect(messageNavigatorPreviewText(source, [source])).toContain('这段正文只允许');
   });
 });

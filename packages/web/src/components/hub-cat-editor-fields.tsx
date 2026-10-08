@@ -71,8 +71,10 @@ export function TextField({
   onChange,
   inputMode,
   placeholder,
+  suggestions,
   required = false,
   tone = 'neutral',
+  ariaDescribedBy,
 }: {
   label: string;
   ariaLabel?: string;
@@ -80,9 +82,14 @@ export function TextField({
   onChange: (value: string) => void;
   inputMode?: HTMLAttributes<HTMLInputElement>['inputMode'];
   placeholder?: string;
+  suggestions?: readonly string[];
   required?: boolean;
   tone?: 'neutral' | 'success';
+  ariaDescribedBy?: string;
 }) {
+  const listId = suggestions?.length
+    ? `input-suggestions-${(ariaLabel ?? label).replace(/\s+/g, '-').toLowerCase()}`
+    : undefined;
   const inputColors =
     tone === 'success'
       ? 'border-transparent bg-[var(--console-runtime-field-bg)] focus:border-[var(--console-runtime-label)] focus:ring-[var(--console-runtime-label)]/30'
@@ -91,13 +98,22 @@ export function TextField({
     <FieldShell label={label} required={required} tone={tone}>
       <input
         aria-label={ariaLabel ?? label}
+        aria-describedby={ariaDescribedBy}
         value={value}
         onChange={(event) => onChange(event.target.value)}
         className={`w-full rounded-[10px] border px-3 py-1.5 text-compact leading-5 text-cafe-black placeholder:text-cafe-muted outline-none transition focus:ring-1 ${inputColors}`}
         inputMode={inputMode}
         placeholder={placeholder}
+        list={listId}
         required={required}
       />
+      {listId ? (
+        <datalist id={listId}>
+          {suggestions?.map((suggestion) => (
+            <option key={suggestion} value={suggestion} />
+          ))}
+        </datalist>
+      ) : null}
     </FieldShell>
   );
 }
@@ -147,7 +163,7 @@ export function SelectField({
   label: string;
   ariaLabel?: string;
   value: string;
-  options: Array<{ value: string; label: string }>;
+  options: Array<{ value: string; label: string; disabled?: boolean }>;
   onChange: (value: string) => void;
   disabled?: boolean;
   required?: boolean;
@@ -168,7 +184,7 @@ export function SelectField({
         className={`w-full rounded-[10px] border px-3 py-1.5 text-compact leading-5 text-cafe-black outline-none transition focus:ring-1 disabled:cursor-not-allowed disabled:opacity-60 ${inputColors}`}
       >
         {options.map((option) => (
-          <option key={option.value} value={option.value}>
+          <option key={option.value} value={option.value} disabled={option.disabled}>
             {option.label}
           </option>
         ))}

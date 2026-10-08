@@ -43,6 +43,49 @@ export type {
   A2ATask,
   A2ATaskStatus,
 } from './a2a.js';
+export {
+  A2A_INLINE_MENTION_MODE,
+  type A2ARoutingMode,
+  type A2ARoutingProjection,
+  isRoutingProjectionStartingNow,
+} from './a2a-routing-mode.js';
+// F167 Phase S: action-scoped A2A successor single-flight contract
+export {
+  ACTION_SUBJECT_REF_DESCRIPTION,
+  ACTION_SUBJECT_REF_MAX_LENGTH,
+  ACTION_SUBJECT_REF_PATTERN,
+  actionSubjectRefSchema,
+} from './action-subject-ref.js';
+export {
+  ACTION_SUCCESSOR_ACTION_FAMILIES,
+  ACTION_SUCCESSOR_SLOTS,
+  ACTION_TERMINAL_PREDICATE_KINDS,
+  type ActionSuccessorActionFamily,
+  type ActionSuccessorClaimOrigin,
+  type ActionSuccessorMode,
+  type ActionSuccessorRequestMetadata,
+  type ActionSuccessorSlot,
+  type ActionTerminalPredicateInput,
+  type ActionTerminalPredicateKind,
+  actionSuccessorMetadataSchema,
+  actionTerminalPredicateInputSchema,
+  DISPATCH_PROPOSED_ACTION_CAPABILITIES,
+  type DispatchProposedActionInput,
+  dispatchProposedActionInputSchema,
+  isAllowedActionSuccessorSlot,
+} from './action-successor.js';
+// F295 execution-scoped liveness and cancellation projection.
+export type {
+  ActiveExecutionCancelability,
+  ActiveExecutionCancelTarget,
+  ActiveExecutionKind,
+  ActiveExecutionListResponse,
+  ActiveExecutionNonCancelableReason,
+  ActiveExecutionProjection,
+  LiveInvocationCancelTarget,
+  ManagedCommandActivity,
+  ManagedCommandCancelTarget,
+} from './active-execution.js';
 // F178 Phase B: agent-key record + verify result
 export type { AgentKeyRecord, AgentKeyVerifyResult } from './agent-key.js';
 // F178 Phase B: agent-key reason taxonomy
@@ -51,20 +94,32 @@ export {
   type AgentKeyFailureReason,
   isAgentKeyFailureReason,
 } from './agent-key-reasons.js';
-// Approval Hub types (F246 统一审批中心)
-export type { ApprovalFeatureId, ApprovalItem, ApprovalItemStatus } from './approval-hub.js';
-// Authorization types (猫猫授权系统)
-export type {
-  AuthorizationAuditEntry,
-  AuthorizationRequestEvent,
-  AuthorizationRespondEvent,
-  AuthorizationRule,
-  PendingRequestRecord,
-  PermissionRequest,
-  PermissionResponse,
-  PermissionStatusResponse,
-  RespondScope,
-} from './authorization.js';
+export {
+  type ApprovalCardRef,
+  type ApprovalDecisionMode,
+  type ApprovalEnvelope,
+  type ApprovalEnvelopeIdentity,
+  ApprovalFeatureId,
+  ApprovalHubItem,
+  ApprovalItem,
+  ApprovalItemStatus,
+  type ApprovalNavigation,
+  type ApprovalOriginRef,
+  type ApprovalProducerId,
+  type ApprovalPublication,
+  assertApprovalEnvelopeIdentity,
+  commitApprovalEnvelope,
+  SettledApprovalHubItem,
+  SettledApprovalItem,
+  SettledStatus,
+  validateApprovalCardRef,
+  validateApprovalEnvelope,
+  validateApprovalNavigation,
+  validateApprovalOriginRef,
+  validateApprovalPublication,
+} from './approval-hub.js';
+// Approval Hub types and provenance validators (F246 Phase I)
+export * from './approval-lifecycle.js';
 // Backlog types (F049 Mission Control)
 export type {
   AcquireBacklogLeaseInput,
@@ -107,11 +162,12 @@ export type {
   BallResolveMode,
   BallState,
 } from './ball-custody.js';
-// Brake types (F085 Phase 4 — 平台级健康守护)
+// Brake types (F085 Phase 4+6 — 平台级健康守护 + 社区 opt-in + 双档)
 export type {
   BrakeCheckinRequest,
   BrakeCheckinResponse,
   BrakeEvent,
+  BrakeMode,
   BrakeSettings,
   BrakeState,
 } from './brake.js';
@@ -130,6 +186,19 @@ export {
   isBubbleEventType,
   isBubbleKind,
 } from './bubble-pipeline.js';
+export {
+  BUILTIN_CLOUD_IDENTITY_LOCKED_FIELDS,
+  BUILTIN_GPT_PRO_CANONICAL_MENTION,
+  BUILTIN_GPT_PRO_CAT_ID,
+  BUILTIN_GPT_PRO_IDENTITY,
+  type BuiltinCloudIdentityCandidate,
+  type BuiltinCloudIdentityLockedField,
+  type BuiltinCloudIdentityProtectedField,
+  type BuiltinCloudIdentityProtection,
+  hasBuiltinGptProCanonicalMention,
+  isBuiltinGptProIdentity,
+  projectBuiltinCloudIdentityProtection,
+} from './builtin-cloud-identity.js';
 // F174 Phase A: shared reason taxonomy for callback auth failures
 export {
   CALLBACK_AUTH_FAILURE_REASONS,
@@ -146,8 +215,12 @@ export type {
   CapabilityAuditEntry,
   CapabilityBoardItem,
   CapabilityBoardResponse,
+  CapabilityConfigUnreadableCause,
   CapabilityEntry,
   CapabilityPatchRequest,
+  CapabilityReadEnvelope,
+  CapabilityReadScope,
+  CapabilitySnapshotResponse,
   CatCapabilityOverride,
   CatFamily,
   DispatchExecutionDigest,
@@ -157,19 +230,34 @@ export type {
   GovernanceFinding,
   GovernanceHealthSummary,
   GovernancePackMeta,
+  GovernanceProvider,
   GovernanceRule,
+  GovernanceSelection,
   LockVersion,
   McpDeleteParams,
+  McpEnvEntry,
   McpInstallPreview,
   McpInstallRequest,
   McpServerDescriptor,
+  McpSyncState,
   McpToolInfo,
   McpTransport,
   ProbeState,
   SkillHealthSummary,
 } from './capability.js';
+// Capability evolution control-plane contracts (F311 Phase 1)
+export * from './capability-evolution.js';
+export * from './capability-evolution-asset-review.js';
+export * from './capability-evolution-exploration.js';
+export * from './capability-evolution-exploration-record.js';
+export * from './capability-evolution-name.js';
+export * from './capability-evolution-observation.js';
+export * from './capability-evolution-preparation.js';
+export * from './capability-evolution-preparation-review.js';
+export * from './capability-evolution-refs.js';
 // Cat types
 export type {
+  AgyNativeCodingGrantConfig,
   AgyProfileConfig,
   CatColor,
   CatConfig,
@@ -193,7 +281,6 @@ export type {
   CliConfig,
   // F067: Co-Creator config for @ mention routing
   CoCreatorConfig,
-  ContextBudget,
   CredentialEntry,
   MissionHubSelfClaimScope,
   // F032: Roster types for collaboration rules
@@ -204,13 +291,35 @@ export type {
 // F182: Cat routing error types
 export type { CatAlternative, CatRoutingError } from './cat-routing.js';
 // F212: CLI error diagnostics (cross-package data contract; classifier/sanitizer impl stays in api)
-export type { CliDiagnostics, CliErrorReasonCode } from './cli-diagnostics.js';
+export type { CliActiveWriterRecoveryState, CliDiagnostics, CliErrorReasonCode } from './cli-diagnostics.js';
 export type { BuiltinAccountClient } from './client-routing.js';
 export {
+  BUILTIN_ACCOUNT_CLIENT_FOR_ID,
   builtinAccountFamilyForClient,
+  builtinAccountFamilyForRef,
   builtinAccountIdForClient,
+  legacyAccountFamilyForRef,
   protocolForClient,
 } from './client-routing.js';
+export type {
+  CloudBridgeDomFingerprintV1,
+  CloudBridgeFailureDiagnosticV1,
+  CloudBridgeIdempotencyDisposition,
+  CloudBridgeOutboundReceiptV1,
+  CloudBridgeOutboundStatus,
+  CloudBridgeOutboundTransport,
+  CloudBridgeRecoveryV1,
+} from './cloud-bridge-outbound-receipt.js';
+export {
+  isCloudBridgeFailureDiagnosticV1,
+  isCloudBridgeOutboundReceiptV1,
+  isCloudBridgeRecoveryV1,
+} from './cloud-bridge-outbound-receipt.js';
+export * from './collective.js';
+export * from './collective-collaboration.js';
+export * from './collective-decision-vote.js';
+export * from './collective-reaction.js';
+export * from './collective-vote.js';
 // Command types (F142 Phase B — slash command framework)
 export type {
   CommandSource,
@@ -220,6 +329,7 @@ export type {
 } from './command.js';
 // Community Ops Event types (F168 Phase A/B — event-sourcing engine)
 export type {
+  CloudReviewPolicy,
   CommunityClosureWaiver,
   CommunityEvent,
   CommunityEventClassification,
@@ -227,7 +337,16 @@ export type {
   CommunityNextOwner,
   CommunityObjectProjection,
   CommunityObjectState,
+  ExternalCiStatus,
+  ExternalCloudReviewStatus,
+  ExternalReviewAggregate,
+  ExternalReviewLifecycle,
+  ExternalReviewMode,
   GitHubAuthorAssociation,
+  IssueCommentSuppressionReason,
+  IssueFixEvidence,
+  PendingExternalReviewVerdict,
+  ReviewDeliveryOutcome,
 } from './community-event.js';
 export type {
   CommunityIssueItem,
@@ -303,7 +422,13 @@ export type {
   TriagePlanStatus,
   TriagePlanTarget,
 } from './concierge.js';
-export { CONCIERGE_CONFIG_DEFAULTS } from './concierge.js';
+export {
+  BALL_SIZE_DEFAULT,
+  BALL_SIZE_MAX,
+  BALL_SIZE_MIN,
+  CONCIERGE_CONFIG_DEFAULTS,
+  clampBallSize,
+} from './concierge.js';
 // Unified Config Field types (F240 KD-15 — shared by Plugin + IM Connector)
 export type {
   ActionDef,
@@ -313,11 +438,12 @@ export type {
   ListConfigField,
   OperationConfigField,
   OperationState,
+  RequiredWhen,
   SelectConfigField,
   ToggleConfigField,
   ValueConfigField,
 } from './config-field.js';
-export { isOperationField, isValueField } from './config-field.js';
+export { isOperationField, isValueField, matchesRequiredWhen } from './config-field.js';
 export { decodeFieldValue, encodeFieldValue } from './config-field-codec.js';
 // Connector types (F97 外部信息源抽象)
 export type {
@@ -335,11 +461,35 @@ export type {
 export {
   getAllConnectorDefinitions,
   getConnectorDefinition,
+  isSelectableManagedHoldConnectorSource,
   isStaticConnectorId,
   registerConnectorDefinition,
   SCHEDULER_TRIGGER_PREFIX,
   unregisterConnectorDefinition,
 } from './connector.js';
+export {
+  type CliOutputQuoteSource,
+  CONTEXT_ATTACHMENT_COMMENT_MAX_LENGTH,
+  CONTEXT_ATTACHMENT_MAX_COUNT,
+  CONTEXT_ATTACHMENT_PROMPT_MAX_CHARS,
+  CONTEXT_ATTACHMENT_QUOTE_MAX_LENGTH,
+  CONTEXT_ATTACHMENT_VERSION,
+  type ContextAttachment,
+  type ContextAttachmentContent,
+  type MessageQuoteSource,
+  type QuoteContextAttachment,
+  type QuoteContextSource,
+  serializeContextAttachmentsPrompt,
+  type ThreadContextAttachment,
+  type WorkspaceFileContextAttachment,
+  type WorkspaceFileQuoteSource,
+} from './context-attachment.js';
+export type {
+  CrossThreadCoordination,
+  CrossThreadCoordinationInput,
+  CrossThreadCoordinationInputPhase,
+} from './cross-thread-coordination.js';
+export { isCrossThreadProvenance } from './cross-thread-coordination.js';
 // Deliberate types (4-E 两轮制 - 类型预埋)
 export type {
   DeliberateEvent,
@@ -347,8 +497,15 @@ export type {
   DeliberateSession,
   DeliberateTransition,
 } from './deliberate.js';
+export * from './development-return.js';
+export * from './development-work-actions.js';
 // Dispatch proposal types (F246 Phase B: F193 E3 cross-thread dispatch)
-export type { DispatchProposal, DispatchProposalStatus, EffectClass } from './dispatch-proposal.js';
+export {
+  type DispatchProposal,
+  type DispatchProposalStatus,
+  deriveDispatchProposalSourceInvocationId,
+  type EffectClass,
+} from './dispatch-proposal.js';
 // Dossier distillation proposal types (F208 Phase E 画像蒸馏)
 export type {
   DistillationEvidenceRef,
@@ -362,6 +519,51 @@ export {
 } from './dossier-distillation.js';
 // F233 Phase A: 值班简报 DTO (pure-projection aggregator output; impl stays in api)
 export type { BallEntry, BallEntryKind, DutyBriefing, DutyBriefingCounts } from './duty-briefing.js';
+// Entity proposal types (F260 Phase A 实体治理)
+export type {
+  EntityConflictContext,
+  EntityConflictReason,
+  EntityConflictRecord,
+  EntityConflictResolutionAction,
+  EntityConflictResolutionRequest,
+  EntityProposal,
+  EntityProposalApprovalDetail,
+  EntityProposalProvenance,
+  EntityProposalStatus,
+  EntityStance,
+  EntityType as SharedEntityType,
+  EntityVisibilityScope,
+} from './entity-proposal.js';
+export {
+  ENTITY_CONFLICT_RESOLUTION_ACTIONS,
+  ENTITY_STANCES,
+  ENTITY_VISIBILITY_SCOPES,
+} from './entity-proposal.js';
+// F310 Phase B: source-owned custody, Task-owned entrusted work, and shared owner-read contracts.
+export {
+  type CustodyAdmissionRequestV1,
+  type CustodyAuthorityProvenanceV1,
+  custodyAdmissionRequestV1Schema,
+  custodyAuthorityProvenanceV1Schema,
+  type EntrustedWorkClosureSpecV1,
+  type EntrustedWorkTerminalActionV1,
+  type EntrustedWorkTerminalClosureV1,
+  type EntrustedWorkUpdateActionV1,
+  entrustedWorkClosureSpecV1Schema,
+  entrustedWorkTerminalActionV1Schema,
+  entrustedWorkTerminalClosureV1Schema,
+  entrustedWorkUpdateActionV1Schema,
+  type F310CustodyGrantRegistryV1,
+  PHASE_B_INITIAL_CUSTODY_GRANT_REGISTRY,
+  type RegisteredCustodyGrantV1,
+  registeredCustodyGrantV1Schema,
+} from './entrusted-work-actions.js';
+export {
+  type EntrustedWorkBriefV1,
+  type EntrustedWorkOwnerReadV1,
+  entrustedWorkBriefV1Schema,
+  entrustedWorkOwnerReadV1Schema,
+} from './entrusted-work-owner-read.js';
 // F227: Event Memory types (cognitive-transition event index)
 export {
   COGNITIVE_TRANSITIONS,
@@ -399,6 +601,23 @@ export type {
   TrajectoryProvenance,
 } from './feat-trajectory.js';
 export { makeGitRefEntryId } from './feat-trajectory.js';
+// F254 Phase E: persistent catch-closure responsibility and output-commit decisions
+export type {
+  ClosureDraftBody,
+  FreshnessClosureAggregate,
+  FreshnessClosureAttempt,
+  FreshnessClosureBlockedReason,
+  FreshnessClosureDisposition,
+  FreshnessClosureProjection,
+  FreshnessClosureStatus,
+  FreshnessSupplementAggregate,
+  FreshnessSupplementFailureReason,
+  FreshnessSupplementProjection,
+  FreshnessSupplementStatus,
+  LegacyClosureMigrationOutcomeCounts,
+  OutputCommitDecision,
+  PublishedFreshnessAnnotation,
+} from './freshness-closure.js';
 // F245: Friction Signal Eval types
 export type {
   ActionableFrictionCandidate,
@@ -459,6 +678,133 @@ export {
   isValidActionStatus,
   isValidScope,
 } from './game.js';
+export {
+  type AwaitStateV1,
+  commentAudienceForPerspective,
+  createWaitContinuationCarrier,
+  DEFAULT_GITHUB_TRACKING_NEXT_STEP,
+  describeGitHubNotificationCoverage,
+  expandGitHubIssueTracking,
+  expandGitHubPrTrackingGoal,
+  GITHUB_ISSUE_WAIT_PREDICATE_KINDS,
+  GITHUB_ISSUE_WAIT_PREDICATE_LIMIT,
+  GITHUB_PR_WAIT_PREDICATE_KINDS,
+  GITHUB_PR_WAIT_PREDICATE_LIMIT,
+  GITHUB_WAIT_PREDICATE_KINDS,
+  type GitHubCiBaselineBucket,
+  type GitHubCommentAudienceV1,
+  type GitHubIssueAwaitStateV1,
+  type GitHubIssueWaitBaseline,
+  type GitHubIssueWaitPredicate,
+  type GitHubNotificationCoverageV1,
+  type GitHubNotificationPerspective,
+  type GitHubPrAwaitStateV1,
+  type GitHubPrTrackingGoal,
+  type GitHubPrTrackingGoalExpansion,
+  type GitHubPrWaitBaseline,
+  type GitHubPrWaitPredicate,
+  type GitHubReviewerGround,
+  type GitHubReviewThreadBaseline,
+  type GitHubReviewVerdictState,
+  type GitHubReviewVerdicts,
+  type GitHubTrackingIdentityGap,
+  type GitHubTrackingIdentityV1,
+  type GitHubWaitBaseline,
+  type GitHubWaitMatchedDelta,
+  type GitHubWaitOutcomeV1,
+  type GitHubWaitPredicate,
+  type GitHubWaitPredicateKind,
+  type GitHubWaitSubjectRef,
+  issueCommentAudience,
+  parseWaitContinuationCarrier,
+  parseWaitOwnerFence,
+  resolveGitHubIssueNotificationPerspective,
+  resolveGitHubNotificationPerspective,
+  sameGitHubLogin,
+  type UnifiedAwaitStateV1,
+  type WaitContinuationCarrierV1,
+  type WaitOutcomeBaseV1,
+  type WaitOutcomeDelivery,
+  type WaitOutcomeV1,
+  type WaitOwnerFence,
+} from './github-wait.js';
+export {
+  type CustodyAdmissionResultV1,
+  type CustodyAdmissionStateV1,
+  type CustodyOfferV1,
+  custodyAdmissionResultV1Schema,
+  custodyAdmissionStateV1Schema,
+  custodyOfferV1Schema,
+  type EntrustedWorkTaskRefV1,
+  type EntrustedWorkV1,
+  entrustedWorkTaskRefV1Schema,
+  entrustedWorkV1Schema,
+  growingSourceMessageRevisionV1Schema,
+  NEEDS_ME_PRODUCER_IDS,
+  type NeedsMeProducerId,
+  PHASE_B_NEEDS_ME_PRODUCER_IDS,
+  type PhaseBNeedsMeProducerId,
+  type ProducerAttentionReceiptV1,
+  type ProducerAttentionReevaluationLinkV1,
+  producerAttentionReceiptV1Schema,
+  producerAttentionReevaluationLinkV1Schema,
+} from './growing.js';
+// F086/F216: structured A2A scheduling mode (serial vs parallel) — never inferred from ordering
+export * from './growing-development.js';
+export {
+  CUSTODY_OPPORTUNITY_CONTRACT_VIOLATION_CODES,
+  type CustodyOpportunityCohortSnapshotV1,
+  type CustodyOpportunityContractViolationV1,
+  type CustodyOpportunityEpisodeInputV1,
+  type CustodyOpportunityEpisodeV1,
+  type CustodyOpportunityVectorV1,
+  custodyOpportunityContractViolationV1Schema,
+  custodyOpportunityEpisodeInputV1Schema,
+  custodyOpportunityEpisodeV1Schema,
+} from './growing-opportunity.js';
+// F281 Phase A: server-bound human disposition feedback and exact-subject eligibility contract
+export {
+  buildHumanDispositionEnvelope,
+  buildHumanDispositionLedgerEntry,
+  buildHumanDispositionLedgerReceipt,
+  classifyHumanDispositionFeedbackReplay,
+  classifyHumanDispositionSourceReplay,
+  HUMAN_DISPOSITION_REASON_CODES,
+  HUMAN_DISPOSITION_REASON_CORRECTIONS,
+  type HumanDispositionDecision,
+  type HumanDispositionDecisionEpisode,
+  type HumanDispositionEligibilityContext,
+  type HumanDispositionEnvelope,
+  type HumanDispositionExpiry,
+  type HumanDispositionFeedbackInput,
+  type HumanDispositionFeedbackReplay,
+  type HumanDispositionInteractionKind,
+  type HumanDispositionInvalidator,
+  type HumanDispositionInvalidatorTruth,
+  type HumanDispositionLedgerEntry,
+  type HumanDispositionLedgerReceipt,
+  type HumanDispositionLineageTruth,
+  type HumanDispositionReasonCode,
+  type HumanDispositionScope,
+  type HumanDispositionServerBinding,
+  type HumanDispositionSourceRef,
+  type HumanDispositionSourceReplay,
+  humanDispositionDecisionEpisodeSchema,
+  humanDispositionDecisionSchema,
+  humanDispositionEligibilityContextSchema,
+  humanDispositionEnvelopeSchema,
+  humanDispositionExpirySchema,
+  humanDispositionFeedbackInputSchema,
+  humanDispositionInteractionKindSchema,
+  humanDispositionInvalidatorSchema,
+  humanDispositionInvalidatorTruthSchema,
+  humanDispositionLedgerEntrySchema,
+  humanDispositionLedgerReceiptSchema,
+  humanDispositionLineageTruthSchema,
+  humanDispositionScopeSchema,
+  humanDispositionServerBindingSchema,
+  isHumanDispositionEnvelopeEligible,
+} from './human-disposition-feedback.js';
 // ID types
 export type {
   CatId,
@@ -481,6 +827,15 @@ export {
   generateSessionId,
   generateThreadId,
 } from './ids.js';
+// F237: Injection Trace types (v0 — observability layer)
+export type {
+  DeliveryChannel,
+  InjectionStage,
+  InjectionTraceDetail,
+  InjectionTraceSummary,
+  ObservedSegment,
+  StageDeliveryDecision,
+} from './injection-trace.js';
 // Intent Card + Need Audit types (F076 需求翻译官)
 export type {
   CreateIntentCardInput,
@@ -496,6 +851,16 @@ export type {
   TriageIntentCardInput,
   TriageResult,
 } from './intent-card.js';
+// F299: invocation-first trajectory projection and typed source navigation.
+export type {
+  InvocationPromptInputProjection,
+  InvocationPromptMessageProjection,
+  InvocationTrajectoryListResponse,
+  InvocationTrajectoryStatus,
+  InvocationTrajectorySummary,
+  InvocationTrajectoryTokens,
+  TrajectoryOriginRef,
+} from './invocation-trajectory.js';
 // Leaderboard types (F075 排行榜)
 export type {
   Achievement,
@@ -513,6 +878,12 @@ export type {
   StreakCat,
   WorkStats,
 } from './leaderboard.js';
+export {
+  type LessonConsumptionReplayV1,
+  type LessonPromotionContractV1,
+  lessonConsumptionReplayV1Schema,
+  lessonPromotionContractV1Schema,
+} from './lesson-learning-closure.js';
 // Limb types (F126 四肢控制面)
 export type {
   ILimbNode,
@@ -520,11 +891,30 @@ export type {
   LimbActionLogEntry,
   LimbAuthLevel,
   LimbCapability,
+  LimbCommandParamSchema,
+  LimbCommandSchema,
+  LimbInvocationContext,
   LimbInvokeResult,
   LimbLease,
   LimbNodeRecord,
   LimbNodeStatus,
 } from './limb.js';
+// F279: Workspace Listen Mode durable document/cache state.
+export type {
+  ListenDocumentIdentity,
+  ListenDocumentState,
+  ListenPlaybackRate,
+  ListenRetention,
+  ListenSentenceState,
+} from './listen-mode.js';
+// F275 Phase B: internal managed-work identity kernel
+export type {
+  ManagedWorkBinding,
+  WorkAdmission,
+  WorkAdmissionProducerKind,
+  WorkAttempt,
+  WorkflowSopAdmissionBundle,
+} from './managed-work.js';
 // Marketplace types (F146 MCP Marketplace Control Plane)
 export type {
   InstallMode,
@@ -532,8 +922,10 @@ export type {
   MarketplaceAdapter,
   MarketplaceArtifactKind,
   MarketplaceEcosystem,
+  MarketplaceSearchPage,
   MarketplaceSearchQuery,
   MarketplaceSearchResult,
+  MarketplaceSourceStatus,
   TrustLevel,
 } from './marketplace.js';
 export {
@@ -560,15 +952,99 @@ export type {
   MeetingContextProvenance,
 } from './meeting-context-block.js';
 export { createMeetingContextBlock } from './meeting-context-block.js';
+export {
+  type MeetingArtifactDescriptor,
+  type MeetingIntake,
+  type MeetingIntakeChoices,
+  type MeetingIntakeExecutionState,
+  type MeetingIntakeHealthState,
+  type MeetingIntakeIngress,
+  type MeetingIntakeJudgmentState,
+  type MeetingIntakeOutput,
+  type MeetingIntakeRepair,
+  type MeetingIntakeRepairAction,
+  type MeetingIntakeSignalOrigin,
+  type MeetingIntakeSourceState,
+  meetingIntakeNeedsAttention,
+} from './meeting-intake.js';
 // Memory types (F3-lite 显式记忆)
 export type {
   MemoryEntry,
   MemoryInput,
 } from './memory.js';
+// Memory Architecture Closure Gate: lane-owned surface declarations + RecallFrame v0.
+export {
+  MEMORY_EVIDENCE_LEVELS,
+  MEMORY_SURFACE_ANSWER_STATES,
+  MEMORY_SURFACE_DISPOSITIONS,
+  type MemoryRecallFrameV0,
+  type MemorySurfaceClosureV1,
+  type MemorySurfaceOwnerV1,
+  memoryRecallFrameV0Schema,
+  memorySurfaceClosureV1Schema,
+  memorySurfaceOwnerV1Schema,
+} from './memory-architecture-closure.js';
+// F287 Phase C: bounded Memory Cue Plane shared contract.
+export {
+  type CatOwnedSeedCueCarrierV1,
+  type CueEnvelopeV1,
+  catOwnedSeedCueCarrierV1Schema,
+  cueEnvelopeV1Schema,
+  type DeliveryDecisionCueCarrierV1,
+  type DeliveryDecisionOpportunityV1,
+  deliveryDecisionCueCarrierV1Schema,
+  deliveryDecisionOpportunityV1Schema,
+  isCueEnvelopeV1,
+  isRecallOpportunityV1,
+  type JudgmentSurfaceEnteredOpportunityV1,
+  judgmentSurfaceEnteredOpportunityV1Schema,
+  MEMORY_CUE_INVALIDATORS,
+  type MemoryCueInvalidator,
+  memoryCueDrillFamilyForResolver,
+  type OwnedSeedAvailableOpportunityV1,
+  ownedSeedAvailableOpportunityV1Schema,
+  type ProfileRevisionAvailableOpportunityV1,
+  profileRevisionAvailableOpportunityV1Schema,
+  RECALL_OPPORTUNITY_CATALOG_VERSION,
+  RECALL_OPPORTUNITY_V1_PAIRS,
+  RECALL_RESOLVER_FAMILIES,
+  type RecallOpportunityV1,
+  type RecallResolverFamily,
+  type RecallScopeV1,
+  type RecentEventAvailableOpportunityV1,
+  recallOpportunityV1Schema,
+  recallScopeV1Schema,
+  recentEventAvailableOpportunityV1Schema,
+  type SubjectSeenOpportunityV1,
+  subjectSeenOpportunityV1Schema,
+} from './memory-cue.js';
+export {
+  ASR_PERSON_MEMORY_REFLEX_ENTRY_V1,
+  type AsrPersonMemoryDynamicSceneEntryV1,
+  type AsrPersonMemoryWriteOpportunityV1,
+  type AsrTranscriptSourceCoordinateV1,
+  asrPersonMemoryDynamicSceneEntryV1Schema,
+  asrPersonMemoryWriteOpportunityV1Schema,
+  asrTranscriptSourceCoordinateV1Schema,
+  type DeliveredWriteOpportunityRecordV1,
+  deliveredWriteOpportunityRecordV1Schema,
+  MAX_WRITE_OPPORTUNITY_GENERATION,
+  projectDeliveredWriteOpportunityRecord,
+  WRITE_OPPORTUNITY_DISPOSITIONS,
+  WRITE_OPPORTUNITY_INVALIDATORS,
+  type WriteOpportunityDispositionV1,
+  type WriteOpportunityPresentationRetryCarrierV1,
+  type WriteOpportunityReentryCarrierV1,
+  writeOpportunityDispositionV1Schema,
+  writeOpportunityGenerationId,
+  writeOpportunityPresentationRetryCarrierV1Schema,
+  writeOpportunityReentryCarrierV1Schema,
+} from './memory-write-opportunity.js';
 // Message types
 export type {
   AgentStreamMessage,
   CodeContent,
+  FileContent,
   ImageContent,
   Message,
   MessageContent,
@@ -630,16 +1106,236 @@ export type {
   ResolverType,
   WorkflowAction,
 } from './pack.js';
-// Plugin Framework types (F202 声明式插件注册)
+export {
+  PAW_FEEL_CONTINUATION_KINDS,
+  PAW_FEEL_ISSUE_RESOLUTIONS,
+  type PawFeelApprovalContinuationV1,
+  type PawFeelContinuationKind,
+  type PawFeelContinuationProjection,
+  type PawFeelDirectRepairAuthorityDecisionV1,
+  type PawFeelDirectRepairBindingV1,
+  type PawFeelDirectRepairOutcomeV1,
+  type PawFeelDirectRepairOwnerAuthorityV1,
+  type PawFeelDirectRepairOwnerRouteV1,
+  type PawFeelIssueCounts,
+  type PawFeelIssueProjection,
+  type PawFeelIssueResolution,
+  type PawFeelResumeConditionV1,
+  type PawFeelResumeSelectorV1,
+  type SourceToolRouteRefV1,
+  type VerifiedPawFeelDirectRepairSourceV1,
+} from './paw-feel-continuation.js';
+// F278: Paw-Feel Disposition Inbox contracts
+export {
+  PAW_FEEL_DISPOSITION_STATES,
+  PAW_FEEL_INBOX_SORTS,
+  PAW_FEEL_NO_ACTION_REASONS,
+  PAW_FEEL_RESPONSIBILITY_STATES,
+  PAW_FEEL_REVIEW_BUNDLE_BASES,
+  type PawFeelCaptureAssessment,
+  type PawFeelCaptureMethod,
+  type PawFeelDenominator,
+  type PawFeelDispositionActor,
+  type PawFeelDispositionEvent,
+  type PawFeelDispositionProjection,
+  type PawFeelDispositionState,
+  type PawFeelEventBase,
+  type PawFeelInboxCounts,
+  type PawFeelInboxItem,
+  type PawFeelInboxPage,
+  type PawFeelInboxSort,
+  type PawFeelNoActionReason,
+  type PawFeelResponsibilityBlocker,
+  type PawFeelResponsibilityCounts,
+  type PawFeelResponsibilityExitKind,
+  type PawFeelResponsibilityProjection,
+  type PawFeelResponsibilityState,
+  type PawFeelReviewBundle,
+  type PawFeelReviewBundleBasis,
+  type PawFeelReviewBundleCounts,
+  type PawFeelSignalId,
+  type PawFeelSignatureAction,
+  type PawFeelSignatureRequest,
+  type PawFeelSourceRef,
+  type PawFeelSourceResolution,
+} from './paw-feel-disposition.js';
+export {
+  isCompletePawFeelDutyConfig,
+  type PawFeelDutyConfig,
+  type PawFeelReconciliationCoverage,
+} from './paw-feel-duty.js';
+// F276 owner-private people and relationship memory contracts
+export {
+  type CandidateClaimDraft,
+  type CandidateClaimDraftId,
+  type CandidateInteractionDraft,
+  type CandidateInteractionProposal,
+  type CandidateRelationshipDraft,
+  type CaptureCandidate,
+  type CaptureCandidateId,
+  type CaptureCandidateState,
+  candidateClaimDraftIdSchema,
+  candidateClaimDraftSchema,
+  candidateInteractionDraftSchema,
+  candidateInteractionProposalSchema,
+  candidateRelationshipDraftSchema,
+  captureCandidateIdSchema,
+  captureCandidateSchema,
+  createTemporalValueSchema,
+  type InteractionEvent,
+  type InteractionEventId,
+  interactionEventIdSchema,
+  interactionEventSchema,
+  interactionSourceEvidenceSchema,
+  type JsonValue,
+  jsonValueSchema,
+  type MaterializableClaimPayload,
+  type MaterializationAuthority,
+  materializableClaimPayloadSchema,
+  materializationAuthoritySchema,
+  PERSON_MEMORY_CANDIDATE_STATES,
+  PERSON_MEMORY_INTERACTION_EVIDENCE_FIELDS,
+  PERSON_MEMORY_LIMITS,
+  type PersonClaimId,
+  type PersonClaimVersion,
+  type PersonId,
+  type PersonIdentity,
+  type PersonIdentityDraft,
+  type PersonMemoryApprovalProjection,
+  type PersonMemoryAssertionBinding,
+  type PersonMemoryAssertionMatrixInput,
+  type PersonMemoryAssertionRole,
+  type PersonMemoryDeletionReceipt,
+  type PersonMemoryInteractionApprovalDetail,
+  type PersonMemoryResolvedSourceBundle,
+  type PersonMemorySourceBundleInput,
+  type PersonMemorySourceInput,
+  type PersonMemorySourceRef,
+  type PersonMemorySuppressionToken,
+  type PersonRelationship,
+  type PersonRelationshipId,
+  personClaimIdSchema,
+  personClaimVersionSchema,
+  personForgetRequestIdSchema,
+  personIdentityDraftSchema,
+  personIdentitySchema,
+  personIdSchema,
+  personMemoryApprovalProjectionSchema,
+  personMemoryAssertionBindingSchema,
+  personMemoryAssertionRoleSchema,
+  personMemoryDeletionReceiptSchema,
+  personMemoryInteractionApprovalDetailSchema,
+  personMemoryInteractionEvidenceFieldSchema,
+  personMemoryResolvedSourceBundleSchema,
+  personMemorySourceBundleInputSchema,
+  personMemorySourceInputSchema,
+  personMemorySourceRefSchema,
+  personMemorySuppressionTokenSchema,
+  personRelationshipIdSchema,
+  personRelationshipSchema,
+  personSuppressionTokenIdSchema,
+  type RelationshipCard,
+  type ResolvedPersonMemoryAssertionBinding,
+  type ResolvedPersonMemorySource,
+  relationshipCardSchema,
+  resolvedPersonMemoryAssertionBindingSchema,
+  resolvedPersonMemorySourceSchema,
+  type TemporalValue,
+  temporalValueSchema,
+  validatePersonMemoryAssertionMatrix,
+  type WorkspaceEntityLink,
+  workspaceEntityLinkSchema,
+} from './person-memory.js';
+export {
+  PERSON_MEMORY_PREFLIGHT_ISSUE_CODES,
+  type PersonMemoryInformedEvidence,
+  type PersonMemoryProposalPreflightBlock,
+  type PersonMemoryProposalPreflightBudget,
+  type PersonMemoryProposalPreflightIssue,
+  personMemoryInformedEvidenceSchema,
+  personMemoryProposalPreflightBlockSchema,
+  personMemoryProposalPreflightBudgetSchema,
+  personMemoryProposalPreflightIssueSchema,
+} from './person-memory-preflight.js';
 export type {
   PluginConfigField,
+  PluginDescription,
   PluginHealthCheck,
+  PluginIconSpec,
   PluginInfo,
+  PluginLocalizedText,
+  PluginManagerActions,
+  PluginManagerArtifactState,
+  PluginManagerAuthState,
+  PluginManagerCapability,
+  PluginManagerCapabilityKind,
+  PluginManagerCatalogProjection,
+  PluginManagerConfigField,
+  PluginManagerConfigFieldKind,
+  PluginManagerConfigOption,
+  PluginManagerConfigState,
+  PluginManagerConfigureRequest,
+  PluginManagerContribution,
+  PluginManagerContributionTool,
+  PluginManagerContributionToolsResponse,
+  PluginManagerDetail,
+  PluginManagerDetailResponse,
+  PluginManagerDiagnostic,
+  PluginManagerDocumentationResponse,
+  PluginManagerInstallRequest,
+  PluginManagerIntentState,
+  PluginManagerListItem,
+  PluginManagerListResponse,
+  PluginManagerLiveState,
+  PluginManagerPackageSource,
+  PluginManagerPublicOperation,
+  PluginManagerSetEnabledRequest,
+  PluginManagerUninstallRequest,
   PluginManifest,
   PluginResourceDef,
   PluginResourceStatus,
   PluginStatus,
 } from './plugin.js';
+// Plugin Framework + terminal Manager types (F202)
+export {
+  PLUGIN_MANAGER_PUBLIC_OPERATIONS,
+  pluginDescriptionVariants,
+  resolvePluginDescription,
+} from './plugin.js';
+export {
+  DEFERRED_PERSON_MEMORY_CLERK_DISPOSITIONS,
+  DEFERRED_PERSON_MEMORY_RECEIPT_STATES,
+  type DeferredPersonMemoryClerkDispositionInput,
+  type DeferredPersonMemoryInput,
+  type DeferredPersonMemoryReceipt,
+  type DeferredPersonMemoryResolvedSource,
+  type DeferredPersonMemorySourceInput,
+  type DeferredWriteOpportunityReceiptV1,
+  deferredPersonMemoryClerkDispositionInputSchema,
+  deferredPersonMemoryInputSchema,
+  deferredPersonMemoryReceiptIdSchema,
+  deferredPersonMemoryReceiptSchema,
+  deferredPersonMemoryResolvedSourceSchema,
+  deferredPersonMemorySourceInputSchema,
+  deferredWriteOpportunityReceiptV1Schema,
+  deferredWriteOpportunitySourceRefV1Schema,
+  type WriteOpportunityLineageV1,
+  type WriteOpportunityRefV1,
+  writeOpportunityLineageV1Schema,
+  writeOpportunityRefV1Schema,
+} from './proactive-memory-deferred-receipt.js';
+// F282 Phase D: opaque opportunity episode and calibrated-abstention contract
+export {
+  PROACTIVE_MEMORY_ABSTENTION_REASON_CODES,
+  type ProactiveMemoryAbstentionInput,
+  type ProactiveMemoryAbstentionReasonCode,
+  type ProactiveMemoryOpportunityEpisode,
+  type ProactiveMemoryOpportunityRef,
+  proactiveMemoryAbstentionInputSchema,
+  proactiveMemoryAbstentionReasonCodeSchema,
+  proactiveMemoryOpportunityEpisodeSchema,
+  proactiveMemoryOpportunityRefSchema,
+} from './proactive-memory-opportunity.js';
 export type {
   CollectionSignalKind,
   ProfileUpdateApproveOverrides,
@@ -648,24 +1344,117 @@ export type {
   ProfileUpdateSignalProvenance,
   ProfileUpdateTargetLayer,
 } from './profile-update.js';
-// Profile update proposal types (F231 Phase C 养熟循环)
+// Profile update proposal types (F231 Phase C 养熟循环 + Phase E corpus)
 export {
   COLLECTION_SIGNAL_KINDS,
   isAllowedCollectionSignal,
+  PROFILE_UPDATE_TARGET_LAYERS,
 } from './profile-update.js';
+export type {
+  ActiveParticipantInput,
+  AssemblerInput,
+  BootcampInput,
+  CallableMentionsData,
+  CatConfigSnapshot,
+  CrossThreadHintInput,
+  DirectMessageInfo,
+  GovernanceTier,
+  HookManifest,
+  HookResolver,
+  HookStage,
+  PingPongInput,
+  PromptPatch,
+  RegisteredHook,
+  ResolveResult,
+  RoutingMode,
+  SafetyTier,
+  SopStageInput,
+  TeammateSnapshot,
+  TraceEvent,
+  TraceEventDisabled,
+  TraceEventFired,
+  TraceEventObserved,
+  TraceEventSkipped,
+  TraceEventSummary,
+  TransparencyTier,
+  WorldContextInput,
+} from './prompt-hook.js';
 // Proposal types (F128 Cat Thread Proposal)
 export type {
+  DeclaredWorkMode,
   ProposalApproveOverrides,
   ProposalStatus,
   ReportingMode,
   ThreadProposal,
 } from './proposal.js';
+export { suggestedReportingModeForWorkMode } from './proposal.js';
+export {
+  isProviderSemanticEvent,
+  normalizeThreadGoalObjective,
+  PROVIDER_SEMANTIC_EVENT_KINDS,
+  type ProviderCapabilitySemanticEvent,
+  type ProviderDiffSemanticEvent,
+  type ProviderGoalSemanticEvent,
+  type ProviderGuardianSemanticEvent,
+  type ProviderPlanSemanticEvent,
+  type ProviderReasoningSemanticEvent,
+  type ProviderReviewSemanticEvent,
+  type ProviderReviewStage,
+  type ProviderSemanticEvent,
+  type ProviderSemanticEventKind,
+  type ProviderSemanticProvenance,
+  type ProviderSubexecutionSemanticEvent,
+  type ProviderSubexecutionStage,
+  type ProviderWarningSemanticEvent,
+} from './provider-semantic-event.js';
+export type {
+  FreshnessCarrier,
+  FreshnessCarrierCapability,
+  FreshnessCarrierDeliverySemantics,
+  FreshnessCarrierProvider,
+  MessageWorkDisposition,
+  QueueAuthorIntent,
+  QueueAuthorIntentFallbackReason,
+  QueueAuthorIntentReceipt,
+  QueueDispatchDispositionEvidenceRef,
+  QueueHandledDisposition,
+  QueueInvocationSettlement,
+  QueueLineageEvidenceRef,
+  QueueManagedHoldContinuationWitness,
+  QueueMessageReceipt,
+  QueueMessageReceiptProjection,
+  QueueReceiptTarget,
+  QueueReceiptTargetState,
+  QueueRecoveryAction,
+  QueueRecoveryRequest,
+  QueueReminderAttempt,
+  QueueReminderAttemptState,
+  QueueReminderMissedReason,
+  QueueSourceResponseConsumptionWitness,
+  QueueTargetAttempt,
+  QueueTargetAttemptState,
+  QueueTargetAttemptTerminalReason,
+  QueueTargetOutcome,
+  QueueTargetOutcomeEvidenceRef,
+  QueueTerminalConsumptionWitness,
+  QueueTerminalSilentConsumptionWitness,
+  QueueTurnExecutionEvidenceRef,
+} from './queue-receipt.js';
+// F264: durable per-target queued-message receipt and manual reminder truth
+export {
+  FRESHNESS_CARRIER_DELIVERY_SEMANTICS,
+  FRESHNESS_CARRIER_PROVIDERS,
+  FRESHNESS_CARRIERS,
+  isQueueDispatchDispositionEvidence,
+} from './queue-receipt.js';
 // Reflux types (F076 Phase 2 — 回流)
 export type {
   CreateRefluxPatternInput,
   RefluxCategory,
   RefluxPattern,
 } from './reflux.js';
+// F299 Phase D: transcript-owned provider request generations.
+export * from './request-generation-envelope.js';
 // Resolution types (F076 Phase 2 — 风险消解)
 export type {
   AnswerResolutionInput,
@@ -688,15 +1477,46 @@ export type {
   RichInteractiveBlock,
   RichMediaGalleryBlock,
   RichMessageExtra,
+  RichPersonMemoryProposalCardBlock,
 } from './rich.js';
-export { isValidRichBlock, normalizeRichBlock } from './rich.js';
+export { isPersonMemoryProposalCardBlock, isValidRichBlock, normalizeRichBlock } from './rich.js';
+// F293 Phase A: durable routing truth and pure advisory projection contracts.
+export * from './routing-context.js';
+// F306 Phase B: provider-neutral mid-run request ↔ human response contract.
+export * from './runtime-interaction.js';
+// F246 Phase I Wave 1: F139 schedule mutation proposal + audit contract
+export type {
+  ScheduleMutation,
+  ScheduleMutationAuditAction,
+  ScheduleMutationAuditEntry,
+  ScheduleMutationDisplayCategory,
+  ScheduleMutationEffectCheckpoint,
+  ScheduleMutationProposal,
+  ScheduleMutationProposalStatus,
+  ScheduleMutationTaskDefinition,
+  ScheduleMutationTrigger,
+} from './schedule-mutation.js';
+export {
+  SCHEDULER_WAIT_PREDICATE_KINDS,
+  type SchedulerAwaitStateV1,
+  type SchedulerWaitBaseline,
+  type SchedulerWaitPredicate,
+  type SchedulerWaitPredicateKind,
+  type SchedulerWaitSubjectRef,
+} from './scheduler-wait.js';
 // Session chain types (F24 Session Chain + Context Health)
 export type {
   ContextHealth,
   ContextHealthConfig,
   ContextManagementHint,
+  HybridProgress,
   SealReason,
   SealResult,
+  SessionCapacityPin,
+  SessionExecutionReason,
+  SessionExecutionStatus,
+  SessionPolicySnapshot,
+  SessionPolicySource,
   SessionRecord,
   SessionStatus,
   SessionStrategy,
@@ -710,6 +1530,12 @@ export type {
   HandoffProposalStatus,
   SessionHandoffProposal,
 } from './session-handoff-proposal.js';
+export type {
+  MeetingIntakeJudgmentField,
+  SignalRouteRecord,
+  SignalRouteState,
+  SignalRuntimeBinding,
+} from './signal-ingress.js';
 // Signals types (F21 Signal Hunter)
 export type {
   SignalArticle,
@@ -743,6 +1569,8 @@ export type {
   SliceType,
   UpdateSliceInput,
 } from './slice.js';
+// Socket.IO room membership convergence contract shared by API and Web.
+export type { RoomJoinAck } from './socket-room.js';
 // SOP definition generated truth source (#748)
 export {
   DEVELOPMENT_SOP_DEFINITION,
@@ -759,6 +1587,33 @@ export {
   type SopDefinition,
   type SopDefinitionId,
 } from './sop-definition.generated.js';
+// Lane-neutral Standing Reflex episode/replay contract and content-free health projection.
+export {
+  compareStandingReflexReplays,
+  projectStandingReflexShadowHealth,
+  STANDING_REFLEX_BEATS,
+  STANDING_REFLEX_EXPLICIT_ABSENCES,
+  STANDING_REFLEX_SHADOW_CATEGORIES,
+  type StandingReflexEpisodeV1,
+  type StandingReflexReplayComparison,
+  type StandingReflexReplayContractV1,
+  type StandingReflexShadowCategory,
+  type StandingReflexShadowEventV1,
+  type StandingReflexShadowHealthProjection,
+  standingReflexEpisodeV1Schema,
+  standingReflexReplayContractV1Schema,
+  standingReflexShadowEventV1Schema,
+} from './standing-reflex-episode.js';
+// F252: Story Annotation types (Phase D — annotations at arbitrary timeline points)
+export type { AnnotationSet, StoryAnnotation } from './story-annotation.js';
+// F252: Story Rendering types (Phase C BFF → Frontend)
+export type {
+  CausalEdgeDTO,
+  FeatureStoryRenderingDTO,
+  SwimlaneDTO,
+  TimelineMilestoneDTO,
+  TrajectoryMarkerDTO,
+} from './story-rendering.js';
 // STT types (F088 Phase 6 — Speech-to-Text)
 export type { ISttProvider, SttTranscribeRequest, SttTranscribeResult } from './stt.js';
 // Study types (F091 Signal Study Mode)
@@ -782,6 +1637,9 @@ export type {
   CreateTaskInput,
   DispatchGateState,
   IssueAutomationState,
+  IssuePendingWake,
+  IssueWaitAutomationState,
+  PrAutomationState,
   ReviewAutomationState,
   SuggestedCrossPostAction,
   SuggestedCrossPostActionSource,
@@ -791,12 +1649,15 @@ export type {
   TaskStatus,
   UpdateTaskInput,
 } from './task.js';
-export { extractFeatureIds, isTrackingKind } from './task.js';
+export { extractFeatureIds, isTrackingKind, TASK_FEATURE_ID_MAX_LENGTH, taskFeatureIdSchema } from './task.js';
 // F193 Phase E: SuggestedCrossPostAction + DispatchGateState re-exported via task.ts
 // (canonical source: cross-thread-affordance.ts; E2/E4 consumers can also import directly)
-export type { CancelReasonValue, PermissionCancelEvent } from './task-outcome.js';
-// Task Outcome types (F192 Phase G)
-export { CANCEL_REASON_OPTIONS } from './task-outcome.js';
+// Taste Proposal types (F221 品味信号捕获)
+export type {
+  TasteDimension,
+  TasteProposal,
+  TasteProposalStatus,
+} from './taste-proposal.js';
 // F232: thread artifacts panel DTO
 export type {
   GlobalArtifactDTO,
@@ -805,6 +1666,42 @@ export type {
   ThreadArtifactsResponse,
   ThreadArtifactType,
 } from './thread-artifact.js';
+// F262: thread-scoped cat effort read/write contract
+export type {
+  ThreadMemberEffortListResponse,
+  ThreadMemberEffortPatch,
+  ThreadMemberEffortRow,
+} from './thread-effort.js';
+// F317: durable semantic receipts and their owner-free callback input.
+export {
+  type RecordThreadProgressInput,
+  recordThreadProgressInputSchema,
+  THREAD_PROGRESS_IMPACT_AXES,
+  THREAD_PROGRESS_KINDS,
+  type ThreadBriefAttentionItem,
+  type ThreadBriefAvailability,
+  type ThreadBriefCollectionV1,
+  type ThreadBriefCurrentExecution,
+  type ThreadBriefPresentationState,
+  type ThreadBriefV1,
+  type ThreadBriefWaitItem,
+  type ThreadProgressImpactAxis,
+  type ThreadProgressKind,
+  type ThreadProgressReceiptSummary,
+  type ThreadProgressReceiptV1,
+  type ThreadProgressSourceRef,
+  type ThreadRuntimeBriefV1,
+  type ThreadRuntimeCurrentExecution,
+  type ThreadRuntimePlanItem,
+  type ThreadRuntimeSessionSummary,
+  threadProgressSourceRefSchema,
+} from './thread-progress.js';
+// F291: thread-scoped Codex requested speed read/write contract
+export type {
+  ThreadMemberSpeedListResponse,
+  ThreadMemberSpeedPatch,
+  ThreadMemberSpeedRow,
+} from './thread-speed.js';
 // TTS types (F34 TTS Provider)
 export type {
   ITtsProvider,
@@ -812,14 +1709,52 @@ export type {
   TtsStreamRequest,
   TtsSynthesizeRequest,
   TtsSynthesizeResult,
+  TtsSynthesizeStreamEvent,
+  TtsSynthesizeStreamOptions,
   VoiceChunkEvent,
   VoiceConfig,
   VoiceStreamEndEvent,
   VoiceStreamEvent,
   VoiceStreamStartEvent,
 } from './tts.js';
+// F177/F254/F264: durable child execution lifecycle and message projection.
+export type {
+  CreateTurnExecutionInput,
+  CreateTurnExecutionOutcome,
+  CreateTurnExecutionResult,
+  InterruptRunningTurnExecutionsInput,
+  TransitionTurnExecutionOutcome,
+  TransitionTurnExecutionResult,
+  TurnExecutionCausalRefs,
+  TurnExecutionKind,
+  TurnExecutionMessageProjection,
+  TurnExecutionRecord,
+  TurnExecutionStatus,
+  TurnExecutionTerminalInput,
+  TurnExecutionTerminalStatus,
+} from './turn-execution.js';
+export * from './unified-attention.js';
 // User preferences types (F166 猫猫排序自定义)
-export type { UserPreferences } from './user-preferences.js';
+export type {
+  MessageDispositionPreferenceSnapshot,
+  MessageDispositionPreferenceSource,
+  MessageDispositionPreferences,
+  ThreadAttentionGroup,
+  ThreadAttentionMemberSort,
+  ThreadAttentionPreferences,
+  UserPreferences,
+} from './user-preferences.js';
+// F280: canonical wait termination event consumed by F281 feedback adapters.
+export {
+  type UserCancelWaitTerminationEventV1,
+  userCancelWaitTerminationEventSchema,
+  type WaitTerminationActor,
+  type WaitTerminationEventV1,
+  type WaitTerminationReason,
+  waitTerminationActorSchema,
+  waitTerminationEventSchema,
+  waitTerminationReasonSchema,
+} from './wait-termination.js';
 // Workflow SOP types (F073 告示牌)
 export type {
   CheckStatus,

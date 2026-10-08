@@ -2,19 +2,39 @@
  * Callback task routes — MCP post_message 回传的任务更新端点
  */
 
-import type { CatId } from '@cat-cafe/shared';
-import { catRegistry, createCatId } from '@cat-cafe/shared';
+import type { CatId, TaskItem } from '@cat-cafe/shared';
+import {
+  catRegistry,
+  createCatId,
+  custodyAdmissionRequestV1Schema,
+  entrustedWorkClosureSpecV1Schema,
+  entrustedWorkTerminalActionV1Schema,
+  entrustedWorkUpdateActionV1Schema,
+  entrustedWorkV1Schema,
+  taskFeatureIdSchema,
+} from '@cat-cafe/shared';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { resolveCatTarget } from '../domains/cats/services/agents/routing/cat-target-resolver.js';
+import type { IMessageStore } from '../domains/cats/services/stores/ports/MessageStore.js';
+import { queryTaskItems } from '../domains/cats/services/stores/ports/TaskQuery.js';
 import type { ITaskStore } from '../domains/cats/services/stores/ports/TaskStore.js';
+import { isEntrustedWorkTerminalActionRequiredError } from '../domains/cats/services/stores/ports/TaskStoreContract.js';
 import type { IThreadStore } from '../domains/cats/services/stores/ports/ThreadStore.js';
+import type { DevelopmentScopeDocuments } from '../domains/growing/DevelopmentScopeResolver.js';
+import {
+  EntrustedWorkLifecycleError,
+  EntrustedWorkLifecycleService,
+} from '../domains/growing/EntrustedWorkLifecycleService.js';
+import { F232PreparedArtifactReader } from '../domains/growing/F232PreparedArtifactReader.js';
 import type { SocketManager } from '../infrastructure/websocket/index.js';
 import { recordAnchorDrillEvent, recordAnchorPreviewEvent } from './anchor-event-log.js';
 import { recordAnchorFullDrill, recordAnchorReturned } from './anchor-telemetry.js';
 import { anchorTaskWhy } from './callback-anchor-helpers.js';
 import { requireCallbackAuth } from './callback-auth-prehandler.js';
-import { deriveCallbackActor, resolveScopedThreadId } from './callback-scope-helpers.js';
+import { registerCallbackDevelopmentWorkRoutes } from './callback-development-work-routes.js';
+import { deriveCallbackActor, getDeletedCallbackThreadGuard, resolveScopedThreadId } from './callback-scope-helpers.js';
+import { admissionSourceContext, assertDirectAdmissionSourceCustody } from './entrusted-work-source-custody.js';
 
 // F193-E1: shared refine — single source for status-dependent dispatch gate validation.
 // dispatched → require both dispatchedThreadId AND dispatchedMessageId (trace IDs).
@@ -93,11 +113,35 @@ export const createTaskSchema = z.object({
   dispatchGate: dispatchGateSchema,
 });
 
+/** @internal Exported for API/MCP parity contract tests. */
+export const admitEntrustedWorkSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200),
+    why: z.string().max(1000).default(''),
+    admission: custodyAdmissionRequestV1Schema,
+    closure: entrustedWorkClosureSpecV1Schema.optional(),
+    time: entrustedWorkV1Schema.shape.time.optional(),
+    artifactRefs: z.array(z.string().trim().min(1).max(1000)).max(64).optional(),
+  })
+  .strict();
+
+/** @internal Exported for API/MCP parity contract tests. */
+export const closeEntrustedWorkSchema = z
+  .object({
+    taskId: z.string().min(1),
+    ...entrustedWorkTerminalActionV1Schema.shape,
+  })
+  .strict();
+
+/** @internal Exported for API/MCP parity contract tests. */
+export const updateEntrustedWorkSchema = entrustedWorkUpdateActionV1Schema;
+
 const listTasksQuerySchema = z.object({
   threadId: z.string().min(1).optional(),
   catId: z.string().min(1).optional(),
   status: z.enum(['todo', 'doing', 'blocked', 'done']).optional(),
   kind: z.enum(['work', 'pr_tracking']).optional(),
+  featureId: taskFeatureIdSchema.optional(),
   // F236 AC-A4: why-drill channel — when taskId is given, that task's full (untruncated) why
   // is returned (one-hop drill from the anchored list), staying within the user's thread scope.
   taskId: z.string().min(1).optional(),
@@ -107,16 +151,30 @@ export function registerCallbackTaskRoutes(
   app: FastifyInstance,
   deps: {
     taskStore: ITaskStore;
+    messageStore: IMessageStore;
     socketManager: SocketManager;
     threadStore?: IThreadStore;
+    developmentDocuments?: DevelopmentScopeDocuments;
   },
 ): void {
-  const { taskStore, socketManager, threadStore } = deps;
+  const { taskStore, messageStore, socketManager, threadStore } = deps;
+  registerCallbackDevelopmentWorkRoutes(app, deps);
+  const entrustedWorkLifecycle = new EntrustedWorkLifecycleService(taskStore, {
+    artifactReader: new F232PreparedArtifactReader({ messages: messageStore }),
+    onChanged: (ownerUserId) =>
+      socketManager.emitToUser(ownerUserId, 'entrusted_work_projection_invalidated', { ownerUserId }),
+  });
 
   app.post('/api/callbacks/update-task', async (request, reply) => {
     const record = requireCallbackAuth(request, reply);
     if (!record) return;
     const actor = deriveCallbackActor(record);
+
+    const deletedThreadGuard = await getDeletedCallbackThreadGuard(threadStore, actor.threadId);
+    if (deletedThreadGuard) {
+      reply.status(deletedThreadGuard.statusCode);
+      return deletedThreadGuard.body;
+    }
 
     const parsed = updateTaskSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -146,7 +204,19 @@ export function registerCallbackTaskRoutes(
     // F193-E1 P1-4: allow patching dispatchGate on existing tasks
     if (dispatchGate) updateData.dispatchGate = dispatchGate;
 
-    const updated = await taskStore.update(taskId, updateData);
+    let updated: TaskItem | null;
+    try {
+      updated = await taskStore.update(taskId, updateData);
+    } catch (error) {
+      if (isEntrustedWorkTerminalActionRequiredError(error)) {
+        reply.status(409);
+        return {
+          error: 'Entrusted work requires an evidence-backed typed closure action',
+          code: error.code,
+        };
+      }
+      throw error;
+    }
     if (!updated) {
       reply.status(500);
       return { error: 'Failed to update task' };
@@ -156,11 +226,143 @@ export function registerCallbackTaskRoutes(
     return { status: 'ok', task: updated };
   });
 
+  app.post('/api/callbacks/admit-entrusted-work', async (request, reply) => {
+    const record = requireCallbackAuth(request, reply);
+    if (!record) return;
+    const actor = deriveCallbackActor(record);
+    const deletedThreadGuard = await getDeletedCallbackThreadGuard(threadStore, actor.threadId);
+    if (deletedThreadGuard) {
+      reply.status(deletedThreadGuard.statusCode);
+      return deletedThreadGuard.body;
+    }
+    const parsed = admitEntrustedWorkSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.status(400);
+      return { error: 'Invalid request body', details: parsed.error.issues };
+    }
+
+    try {
+      const source = await assertDirectAdmissionSourceCustody(messageStore, actor, parsed.data.admission);
+      const admission = await entrustedWorkLifecycle.admitOrResume(
+        {
+          task: {
+            threadId: actor.threadId,
+            title: parsed.data.title,
+            why: parsed.data.why,
+            createdBy: actor.catId,
+            ownerCatId: actor.catId,
+            userId: actor.userId,
+          },
+          admission: parsed.data.admission,
+          closure: parsed.data.closure,
+          time: parsed.data.time,
+          artifactRefs: parsed.data.artifactRefs,
+        },
+        admissionSourceContext(source),
+      );
+      if (admission.result === 'needs_clarification') {
+        return { status: 'needs_clarification', admission };
+      }
+      const taskId = admission.ownerRef.slice('task:item:'.length);
+      const task = await taskStore.get(taskId);
+      if (!task) {
+        reply.status(500);
+        return { error: 'Task admission returned an unreadable owner reference' };
+      }
+      if (admission.result === 'admitted') {
+        socketManager.broadcastToRoom(`thread:${task.threadId}`, 'task_created', task);
+      }
+      return { status: admission.result, admission, task };
+    } catch (error) {
+      return replyEntrustedWorkLifecycleError(reply, error);
+    }
+  });
+
+  app.post('/api/callbacks/close-entrusted-work', async (request, reply) => {
+    const record = requireCallbackAuth(request, reply);
+    if (!record) return;
+    const actor = deriveCallbackActor(record);
+    const deletedThreadGuard = await getDeletedCallbackThreadGuard(threadStore, actor.threadId);
+    if (deletedThreadGuard) {
+      reply.status(deletedThreadGuard.statusCode);
+      return deletedThreadGuard.body;
+    }
+    const parsed = closeEntrustedWorkSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.status(400);
+      return { error: 'Invalid request body', details: parsed.error.issues };
+    }
+    const existing = await taskStore.get(parsed.data.taskId);
+    if (!existing) {
+      reply.status(404);
+      return { error: 'Task not found' };
+    }
+    if (existing.threadId !== actor.threadId) {
+      reply.status(403);
+      return { error: 'Task belongs to a different thread' };
+    }
+    if (existing.ownerCatId !== actor.catId) {
+      reply.status(403);
+      return { error: 'Entrusted work is owned by another cat' };
+    }
+    try {
+      const task = await entrustedWorkLifecycle.close(parsed.data);
+      socketManager.broadcastToRoom(`thread:${task.threadId}`, 'task_updated', task);
+      return { status: 'closed', task };
+    } catch (error) {
+      return replyEntrustedWorkLifecycleError(reply, error);
+    }
+  });
+
+  app.post('/api/callbacks/update-entrusted-work', async (request, reply) => {
+    const record = requireCallbackAuth(request, reply);
+    if (!record) return;
+    const actor = deriveCallbackActor(record);
+    const deletedThreadGuard = await getDeletedCallbackThreadGuard(threadStore, actor.threadId);
+    if (deletedThreadGuard) {
+      reply.status(deletedThreadGuard.statusCode);
+      return deletedThreadGuard.body;
+    }
+    const parsed = updateEntrustedWorkSchema.safeParse(request.body);
+    if (!parsed.success) {
+      reply.status(400);
+      return { error: 'Invalid request body', details: parsed.error.issues };
+    }
+    const existing = await taskStore.get(parsed.data.taskId);
+    if (!existing) {
+      reply.status(404);
+      return { error: 'Task not found' };
+    }
+    if (existing.threadId !== actor.threadId) {
+      reply.status(403);
+      return { error: 'Task belongs to a different thread' };
+    }
+    // An authenticated current same-Task delegate may register Artifact evidence.
+    // The callback scope guard permits only artifactRefs + revision for this capability.
+    if (existing.ownerCatId !== actor.catId && record.collectiveWorkBinding?.taskId !== existing.id) {
+      reply.status(403);
+      return { error: 'Entrusted work is owned by another cat' };
+    }
+    try {
+      const task = await entrustedWorkLifecycle.update(parsed.data);
+      socketManager.broadcastToRoom(`thread:${task.threadId}`, 'task_updated', task);
+      return { status: 'updated', task };
+    } catch (error) {
+      return replyEntrustedWorkLifecycleError(reply, error);
+    }
+  });
+
   // F160: create-task — kind forced to 'work' (KD-4)
   app.post('/api/callbacks/create-task', async (request, reply) => {
     const record = requireCallbackAuth(request, reply);
     if (!record) return;
     const actor = deriveCallbackActor(record);
+
+    const deletedThreadGuard = await getDeletedCallbackThreadGuard(threadStore, actor.threadId);
+    if (deletedThreadGuard) {
+      reply.status(deletedThreadGuard.statusCode);
+      return deletedThreadGuard.body;
+    }
 
     const parsed = createTaskSchema.safeParse(request.body);
     if (!parsed.success) {
@@ -212,7 +414,7 @@ export function registerCallbackTaskRoutes(
       return { error: 'Invalid request query', details: parsed.error.issues };
     }
 
-    const { threadId, catId, status, kind, taskId } = parsed.data;
+    const { threadId, catId, status, kind, taskId, featureId } = parsed.data;
 
     if (catId && !catRegistry.has(catId)) {
       reply.status(400);
@@ -242,18 +444,26 @@ export function registerCallbackTaskRoutes(
       scopedThreadIds = [actor.threadId];
     }
 
-    const perThreadTasks = await Promise.all(scopedThreadIds.map((id) => taskStore.listByThread(id)));
-    let tasks = perThreadTasks.flat();
-    if (catId) tasks = tasks.filter((item) => item.ownerCatId === catId);
-    if (status) tasks = tasks.filter((item) => item.status === status);
-    if (kind) tasks = tasks.filter((item) => item.kind === kind);
-    if (taskId) tasks = tasks.filter((item) => item.id === taskId);
-    tasks.sort((a, b) => b.updatedAt - a.updatedAt || b.createdAt - a.createdAt || b.id.localeCompare(a.id));
+    const result = await queryTaskItems(taskStore, {
+      threadIds: scopedThreadIds,
+      ownerUserId: actor.userId,
+      ...(catId ? { catId } : {}),
+      ...(status ? { status } : {}),
+      ...(kind ? { kind } : {}),
+      ...(taskId ? { taskId } : {}),
+      ...(featureId ? { featureId } : {}),
+    });
+    const tasks = [...result.tasks];
 
     // F236 AC-A4: anchor the why field (head preview + whyLength + whyTruncated + drillDown).
     // A taskId drill returns that task's why in full.
     const isTaskDrill = Boolean(taskId);
-    const payload = { tasks: tasks.map((task) => anchorTaskWhy(task, { full: isTaskDrill })) };
+    const payload = {
+      tasks: tasks.map((task) => anchorTaskWhy(task, { full: isTaskDrill })),
+      totalMatched: result.totalMatched,
+      truncated: result.truncated,
+      ...(result.queryRef ? { queryRef: result.queryRef } : {}),
+    };
     // F236 AC-A1 (R1/砚砚 P1): emit returnedChars for eval-layer payload-shrink accounting.
     const listTasksChars = JSON.stringify(payload).length;
     app.log.info(
@@ -280,17 +490,42 @@ export function registerCallbackTaskRoutes(
         // F236 Track-2: per-event drill record with correlation key for drill↔preview join.
         recordAnchorDrillEvent({ tool: 'list-tasks', itemId: taskId!, fullDrillChars: listTasksChars });
       }
-    } else {
-      recordAnchorReturned({ tool: 'list-tasks', returnedChars: listTasksChars });
-      // F236 Track-2: per-event preview record with correlation keys for drill↔preview open-rate.
-      // Both sides use content-only measurement (cloud R4 P1: JSON metadata skew fix).
       recordAnchorPreviewEvent({
         tool: 'list-tasks',
         itemIds: tasks.map((t) => t.id),
         returnedChars: payload.tasks.reduce((sum, t) => sum + (t.why?.length ?? 0), 0),
         originalChars: tasks.reduce((sum, t) => sum + (t.why?.length ?? 0), 0),
+        modeResolved: 'full',
+        modeSource: 'legacy_equivalent',
+        catId: actor.catId,
+      });
+    } else {
+      recordAnchorReturned({ tool: 'list-tasks', returnedChars: listTasksChars });
+      // F236 Track-2: per-event preview record with correlation keys for drill↔preview open-rate.
+      // Both sides use content-only measurement (cloud R4 P1: JSON metadata skew fix).
+      // list-tasks overview predates the Phase C `responseMode` param — its bounded
+      // summary behavior is the legacy equivalent of anchor mode. Tag it so adoption
+      // eval can distinguish "cat used old mechanism" from "cat explicitly chose anchor".
+      recordAnchorPreviewEvent({
+        tool: 'list-tasks',
+        itemIds: tasks.map((t) => t.id),
+        returnedChars: payload.tasks.reduce((sum, t) => sum + (t.why?.length ?? 0), 0),
+        originalChars: tasks.reduce((sum, t) => sum + (t.why?.length ?? 0), 0),
+        modeResolved: 'anchor',
+        modeSource: 'legacy_equivalent',
+        catId: actor.catId,
       });
     }
     return payload;
   });
+}
+
+function replyEntrustedWorkLifecycleError(
+  reply: { status: (statusCode: number) => unknown },
+  error: unknown,
+): { error: string; code?: string } {
+  if (!(error instanceof EntrustedWorkLifecycleError)) throw error;
+  const statusCode = error.code === 'ENTRUSTED_WORK_NOT_FOUND' ? 404 : 409;
+  reply.status(statusCode);
+  return { error: error.message, code: error.code };
 }

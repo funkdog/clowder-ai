@@ -160,6 +160,24 @@ export function transformAcpEvent(
   }
 
   switch (sessionUpdate) {
+    case 'usage_update': {
+      const used = typeof inner.used === 'number' && Number.isFinite(inner.used) ? inner.used : undefined;
+      const size = typeof inner.size === 'number' && Number.isFinite(inner.size) ? inner.size : undefined;
+      if (used == null && size == null) return withFlush(null);
+      return withFlush({
+        type: 'agent_loop',
+        catId,
+        metadata: {
+          ...metadata,
+          usage: {
+            ...(used != null ? { contextUsedTokens: used, lastTurnInputTokens: used } : {}),
+            ...(size != null ? { contextWindowSize: size } : {}),
+          },
+        },
+        timestamp: now,
+      });
+    }
+
     case 'agent_message_chunk': {
       const text = content?.text ?? '';
       if (state) {
@@ -327,14 +345,20 @@ export function transformAcpEvent(
       ]);
     }
 
-    case 'plan':
+    case 'plan': {
+      // #1203: Empty/whitespace plan text carries no information and the
+      // frontend has no plan formatter — drop it instead of leaking raw
+      // `{"type":"plan","text":""}` JSON into chat. Non-empty plans unchanged.
+      const planText = typeof content?.text === 'string' ? content.text : '';
+      if (!planText.trim()) return withFlush(null);
       return withFlush({
         type: 'system_info',
         catId,
-        content: JSON.stringify({ type: 'plan', text: content?.text ?? '' }),
+        content: JSON.stringify({ type: 'plan', text: planText }),
         metadata,
         timestamp: now,
       });
+    }
 
     case 'user_message_chunk':
       return withFlush(null);

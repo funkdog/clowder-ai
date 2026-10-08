@@ -3,8 +3,8 @@
 #
 # Mirrors desktop/scripts/build-desktop.ps1 for macOS. Outputs two DMGs
 # (arm64 + x64) under dist/:
-#   CatCafe-0.10.1-arm64.dmg
-#   CatCafe-0.10.1-x64.dmg
+#   ClowderAI-0.10.1-arm64.dmg
+#   ClowderAI-0.10.1-x64.dmg
 #
 # Prerequisites on the build machine:
 #   - macOS 13+ (Xcode Command Line Tools: xcode-select --install)
@@ -111,8 +111,8 @@ bold "Step 3/6 — Bundle Node.js portable (arm64 + x64)"
 # matches the bundled runtime. Same rationale as the Windows build.
 BUILD_NODE_VERSION="$(node --version 2>/dev/null || echo '')"
 if [[ -z "$BUILD_NODE_VERSION" ]]; then
-  warn "node not on PATH; defaulting to v22.12.0"
-  BUILD_NODE_VERSION="v22.12.0"
+  warn "node not on PATH; defaulting to v24.16.0"
+  BUILD_NODE_VERSION="v24.16.0"
 fi
 BUILD_NODE_MAJOR="${BUILD_NODE_VERSION#v}"
 BUILD_NODE_MAJOR="${BUILD_NODE_MAJOR%%.*}"
@@ -386,7 +386,7 @@ for arch in "${ARCHS[@]}"; do
     x64) app_dir="${DESKTOP_DIR}/dist/mac" ;;
     *) die "Unsupported macOS arch: ${arch}" ;;
   esac
-  dmg_name="CatCafe-${VERSION}-${arch}.dmg"
+  dmg_name="ClowderAI-${VERSION}-${arch}.dmg"
   dmg_out="${DIST_DIR}/${dmg_name}"
   if [[ ! -d "$app_dir" ]]; then
     die "Expected app bundle directory not found for ${arch}: ${app_dir}"
@@ -458,7 +458,7 @@ done
 echo ""
 echo "  ========================================"
 echo "  Installer(s) ready!"
-for dmg in "${DIST_DIR}"/CatCafe-*-*.dmg; do
+for dmg in "${DIST_DIR}"/ClowderAI-*-*.dmg; do
   [[ -f "$dmg" ]] || continue
   size_mb="$(stat -f "%z" "$dmg" 2>/dev/null | awk '{printf "%.2f", $1/1024/1024}')"
   echo "  $(basename "$dmg")  (${size_mb} MB)"

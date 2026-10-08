@@ -1,10 +1,9 @@
 'use client';
 
-import React, { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
+import { useWorkspaceSurfaceVisibility } from '@/components/workbench/WorkspaceSurfaceVisibility';
 import { useChatStore } from '@/stores/chatStore';
-import { apiFetch } from '@/utils/api-client';
-
-import type { GlobalControlState, RunLedgerRow, ScheduleTask } from './schedule-helpers';
+import { CompactLabel, CriticalText, ExpandableProse } from '../content-overflow';
 import {
   CATEGORY_LABELS,
   CATEGORY_STYLES,
@@ -16,6 +15,7 @@ import {
   outcomeLabel,
   timeAgo,
 } from './schedule-helpers';
+import { useSchedulePanelData } from './useSchedulePanelData';
 
 /* ── Component ───────────────────────────────── */
 
@@ -26,141 +26,26 @@ type ScopeFilter = 'all' | 'current-thread';
  * UX V2: flat list + colored type tags + scope filter + NL CTA
  */
 export function SchedulePanel() {
-  const [tasks, setTasks] = useState<ScheduleTask[]>([]);
-  const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState<ScopeFilter>('all');
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [runHistory, setRunHistory] = useState<RunLedgerRow[]>([]);
-  const [globalControl, setGlobalControl] = useState<GlobalControlState | null>(null);
   const currentThreadId = useChatStore((s) => s.currentThreadId);
-
-  const fetchTasks = useCallback(async () => {
-    try {
-      // #320: When scope is "current-thread", pass threadId to server for unified filtering
-      const params =
-        scope === 'current-thread' && currentThreadId ? `?threadId=${encodeURIComponent(currentThreadId)}` : '';
-      const res = await apiFetch(`/api/schedule/tasks${params}`);
-      if (res.ok) {
-        const json = await res.json();
-        setTasks(json.tasks ?? []);
-      }
-    } catch {
-      // fail-open
-    } finally {
-      setLoading(false);
-    }
-  }, [scope, currentThreadId]);
-
-  const fetchControl = useCallback(async () => {
-    try {
-      const res = await apiFetch('/api/schedule/control');
-      if (res.ok) {
-        const json = await res.json();
-        setGlobalControl(json.global ?? null);
-      }
-    } catch {
-      // fail-open — governance not configured
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchTasks();
-    fetchControl();
-    const timer = setInterval(() => {
-      fetchTasks();
-      fetchControl();
-    }, 30000);
-    return () => clearInterval(timer);
-  }, [fetchTasks, fetchControl]);
-
-  const handleGlobalToggle = useCallback(async () => {
-    if (!globalControl) return;
-    const next = !globalControl.enabled;
-    try {
-      await apiFetch('/api/schedule/control', {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: next, reason: next ? null : 'Paused from panel', updatedBy: 'user' }),
-      });
-      fetchControl();
-    } catch {
-      /* fail-open */
-    }
-  }, [globalControl, fetchControl]);
-
-  // #320: Server-side filtering via ?threadId= — no client-side extractThreadId needed
-  const filteredTasks = tasks;
-
-  const handleToggleExpand = useCallback(
-    async (taskId: string) => {
-      if (expandedId === taskId) {
-        setExpandedId(null);
-        setRunHistory([]);
-        return;
-      }
-      setExpandedId(taskId);
-      try {
-        const params =
-          scope === 'current-thread' && currentThreadId ? `&threadId=${encodeURIComponent(currentThreadId)}` : '';
-        const res = await apiFetch(`/api/schedule/tasks/${encodeURIComponent(taskId)}/runs?limit=5${params}`);
-        if (res.ok) {
-          const json = await res.json();
-          setRunHistory(json.runs ?? []);
-        }
-      } catch {
-        setRunHistory([]);
-      }
-    },
-    [currentThreadId, expandedId, scope],
-  );
-
-  /** AC-H4: toggle pause/resume for any task — routes to correct API by source */
-  const handleToggleTask = useCallback(
-    async (task: ScheduleTask) => {
-      const isActive = task.effectiveEnabled ?? task.enabled;
-      try {
-        if (task.source === 'dynamic' && task.dynamicTaskId) {
-          await apiFetch(`/api/schedule/tasks/${encodeURIComponent(task.dynamicTaskId)}`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: !isActive }),
-          });
-        } else {
-          await apiFetch(`/api/schedule/control/tasks/${encodeURIComponent(task.id)}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: !isActive, updatedBy: 'user' }),
-          });
-        }
-        fetchTasks();
-        fetchControl();
-      } catch {
-        /* fail-open */
-      }
-    },
-    [fetchTasks, fetchControl],
-  );
-
-  const handleDeleteDynamic = useCallback(
-    async (taskId: string) => {
-      try {
-        const res = await apiFetch(`/api/schedule/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
-        if (res.ok) fetchTasks();
-      } catch {
-        /* fail-open */
-      }
-    },
-    [fetchTasks],
-  );
+  const surfaceVisible = useWorkspaceSurfaceVisibility();
+  const {
+    tasks,
+    loading,
+    tasksError,
+    globalControl,
+    expandedId,
+    runHistory,
+    handleGlobalToggle,
+    handleToggleTask,
+    handleDeleteDynamic,
+    handleToggleExpand,
+  } = useSchedulePanelData(scope === 'all' ? undefined : currentThreadId || null, surfaceVisible);
 
   const activeCount = tasks.filter((t) => t.effectiveEnabled ?? t.enabled).length;
   const pausedCount = tasks.length - activeCount;
   // Health: check if ANY task's most recent run failed (not cumulative total)
   const hasAttention = tasks.some((t) => t.lastRun?.outcome === 'RUN_FAILED');
-
-  if (loading) {
-    return <div className="flex-1 flex items-center justify-center text-sm text-cafe-muted">Loading schedule...</div>;
-  }
 
   return (
     <div className="flex flex-col h-full bg-cafe-surface">
@@ -189,7 +74,11 @@ export function SchedulePanel() {
           Current Thread
         </button>
         <span className="ml-auto text-micro text-cafe-muted">
-          {tasks.length} tasks · {activeCount} active{pausedCount > 0 ? ` · ${pausedCount} paused` : ''}
+          {loading
+            ? 'Loading schedule...'
+            : tasksError
+              ? 'Status unverified'
+              : `${tasks.length} tasks · ${activeCount} active${pausedCount > 0 ? ` · ${pausedCount} paused` : ''}`}
         </span>
       </div>
 
@@ -220,7 +109,9 @@ export function SchedulePanel() {
             {globalControl.enabled ? 'Scheduler active' : 'Scheduler paused'}
           </span>
           {!globalControl.enabled && globalControl.reason && (
-            <span className="text-micro text-conn-red-text truncate max-w-[160px]">{globalControl.reason}</span>
+            <div data-testid="schedule-global-reason" className="min-w-0 flex-1">
+              <CriticalText summary="Scheduler paused" details={globalControl.reason} tone="warning" />
+            </div>
           )}
         </div>
       )}
@@ -235,14 +126,20 @@ export function SchedulePanel() {
 
       {/* Task list */}
       <div className="flex-1 overflow-y-auto">
-        {filteredTasks.length === 0 ? (
-          <div className="flex items-center justify-center h-32 text-sm text-cafe-muted">No scheduled tasks</div>
+        {tasksError && <output className="block px-4 py-2 text-sm text-cafe-muted">{tasksError}</output>}
+        {loading ? (
+          <div className="flex items-center justify-center h-32 text-sm text-cafe-muted">Loading schedule...</div>
+        ) : tasks.length === 0 ? (
+          !tasksError && (
+            <div className="flex items-center justify-center h-32 text-sm text-cafe-muted">No scheduled tasks</div>
+          )
         ) : (
           <div className="space-y-0.5">
-            {filteredTasks.map((task) => {
+            {tasks.map((task) => {
               const category = task.display?.category ?? fallbackCategory(task.id);
               const label = task.display?.label ?? humanizeId(task.id);
               const preview = task.subjectPreview ?? task.display?.description ?? null;
+              const subjectKey = task.lastRun?.subject_key ?? null;
               // Status dot: green=healthy, red=last run failed, gray=never run
               const statusDot = !task.lastRun
                 ? 'bg-conn-gray-text'
@@ -255,9 +152,15 @@ export function SchedulePanel() {
                   <div
                     className="px-4 py-3 hover:bg-cafe-surface-elevated/50 transition-colors cursor-pointer"
                     onClick={() => handleToggleExpand(task.id)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleToggleExpand(task.id)}
+                    onKeyDown={(event) => {
+                      if (event.key !== 'Enter' && event.key !== ' ') return;
+                      event.preventDefault();
+                      handleToggleExpand(task.id);
+                    }}
                     role="button"
                     tabIndex={0}
+                    aria-expanded={isExpanded}
+                    aria-controls={`schedule-task-detail-${task.id}`}
                   >
                     <div className="flex items-center gap-2">
                       <span
@@ -286,15 +189,13 @@ export function SchedulePanel() {
                           </span>
                           <span className="text-micro text-cafe-muted">{timeAgo(task.lastRun.started_at)}</span>
                           {task.lastRun.outcome === 'RUN_FAILED' && task.lastRun.error_summary && (
-                            <span
-                              className="text-micro text-conn-red-text truncate max-w-[160px]"
-                              title={task.lastRun.error_summary}
-                            >
-                              {task.lastRun.error_summary}
-                            </span>
-                          )}
-                          {preview && task.lastRun.outcome !== 'RUN_FAILED' && (
-                            <span className="text-micro text-cafe-secondary truncate max-w-[140px]">{preview}</span>
+                            <div data-testid={`schedule-latest-error-${task.id}`} className="min-w-0 flex-1">
+                              <CriticalText
+                                summary="最近运行失败"
+                                details={task.lastRun.error_summary}
+                                tone="critical"
+                              />
+                            </div>
                           )}
                         </>
                       ) : (
@@ -310,9 +211,39 @@ export function SchedulePanel() {
                       )}
                     </div>
                   </div>
+                  {preview &&
+                    task.lastRun?.outcome !== 'RUN_FAILED' &&
+                    (task.subjectPreview ? (
+                      <div
+                        data-testid={`schedule-subject-preview-${task.id}`}
+                        className="ml-[104px] max-w-[320px] pb-2 text-micro leading-4 text-cafe-secondary"
+                      >
+                        {preview}
+                      </div>
+                    ) : (
+                      <ExpandableProse
+                        text={preview}
+                        lines={2}
+                        className="ml-[104px] max-w-[320px] pb-2"
+                        contentClassName="text-micro leading-4 text-cafe-secondary"
+                      />
+                    ))}
                   {/* AC-F4: expandable detail panel with run history */}
                   {isExpanded && (
-                    <div className="px-4 pb-3 ml-[52px] space-y-2">
+                    <div id={`schedule-task-detail-${task.id}`} className="px-4 pb-3 ml-[52px] space-y-2">
+                      {subjectKey && (
+                        <div
+                          data-testid={`schedule-subject-key-${task.id}`}
+                          className="flex min-w-0 items-center gap-2"
+                        >
+                          <span className="shrink-0 text-micro font-medium text-cafe-muted">Canonical subject:</span>
+                          <CompactLabel
+                            label="调度目标"
+                            value={subjectKey}
+                            className="min-w-0 flex-1 text-micro text-cafe-secondary"
+                          />
+                        </div>
+                      )}
                       {/* AC-H4: Controls for all tasks — pause/resume universal, delete for dynamic only */}
                       <div className="flex items-center gap-2">
                         <button
@@ -345,12 +276,14 @@ export function SchedulePanel() {
                       ) : (
                         <div className="space-y-1">
                           {runHistory.map((r, i) => (
-                            <div key={i} className="flex items-center gap-2 text-micro">
+                            <div key={i} className="flex items-start gap-2 text-micro">
                               <span className={outcomeColor(r.outcome)}>{outcomeIcon(r.outcome)}</span>
                               <span className="text-cafe-muted">{timeAgo(r.started_at)}</span>
                               <span className="text-cafe-muted">{r.duration_ms}ms</span>
                               {r.error_summary && (
-                                <span className="text-conn-red-text truncate max-w-[200px]">{r.error_summary}</span>
+                                <div data-testid={`schedule-history-error-${task.id}-${i}`} className="min-w-0 flex-1">
+                                  <CriticalText summary="运行失败详情" details={r.error_summary} tone="critical" />
+                                </div>
                               )}
                             </div>
                           ))}
@@ -366,14 +299,16 @@ export function SchedulePanel() {
       </div>
 
       {/* Footer: health summary (AC-F1) */}
-      <div className="px-4 py-1.5 border-t border-cafe-subtle text-micro text-cafe-muted flex items-center">
-        <span>
-          {tasks.length} tasks · {activeCount} active{pausedCount > 0 ? ` · ${pausedCount} paused` : ''}
-        </span>
-        <span className={`ml-auto font-medium ${hasAttention ? 'text-conn-red-text' : 'text-conn-emerald-text'}`}>
-          {hasAttention ? 'Attention needed' : 'All healthy'}
-        </span>
-      </div>
+      {!loading && !tasksError && (
+        <div className="px-4 py-1.5 border-t border-cafe-subtle text-micro text-cafe-muted flex items-center">
+          <span>
+            {tasks.length} tasks · {activeCount} active{pausedCount > 0 ? ` · ${pausedCount} paused` : ''}
+          </span>
+          <span className={`ml-auto font-medium ${hasAttention ? 'text-conn-red-text' : 'text-conn-emerald-text'}`}>
+            {tasksError ? 'Status unverified' : hasAttention ? 'Attention needed' : 'All healthy'}
+          </span>
+        </div>
+      )}
 
       {/* Conversational CTA (AC-G5: replaces NL input — W1 vision) */}
       <div className="px-4 py-2.5 bg-cafe-surface-elevated border-t border-cafe-subtle">

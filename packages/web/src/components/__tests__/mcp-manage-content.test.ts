@@ -27,6 +27,7 @@ const MOCK_ITEMS = [
     source: 'external' as const,
     enabled: true,
     cats: { opus: true },
+    hasOverride: true,
     description: 'External MCP',
     mcpServer: {
       transport: 'stdio' as const,
@@ -34,6 +35,23 @@ const MOCK_ITEMS = [
       args: ['custom-mcp'],
       env: { API_KEY: '••••••' },
       headers: { Authorization: '••••••' },
+    },
+    layer: 'L1' as const,
+  },
+  {
+    id: 'plugin:video-gen:protocol-server',
+    type: 'mcp' as const,
+    source: 'plugin' as const,
+    pluginId: 'video-gen',
+    enabled: true,
+    cats: {},
+    description: 'Video generation MCP',
+    mcpServer: {
+      transport: 'stdio' as const,
+      command: 'node',
+      args: ['protocol-server.js'],
+      env: { VIDEO_GEN_PROVIDER: '••••••' },
+      envKeys: ['VIDEO_GEN_PROVIDER'],
     },
     layer: 'L1' as const,
   },
@@ -54,6 +72,7 @@ const ITEMS_RESPONSE = {
     items: MOCK_ITEMS,
     catFamilies: [{ id: 'ragdoll', name: 'Ragdoll', catIds: ['opus'] }],
     projectPath: '/test/project',
+    knownProjectPaths: ['/tmp/slow-project', '/tmp/fast-project'],
     skillHealth: null,
   }),
 };
@@ -114,7 +133,7 @@ describe('McpManageContent', () => {
   }
 
   function buttonByText(text: string): HTMLButtonElement {
-    const button = Array.from(container.querySelectorAll('button')).find((candidate) =>
+    const button = Array.from(document.body.querySelectorAll('button')).find((candidate) =>
       candidate.textContent?.includes(text),
     );
     expect(button).toBeTruthy();
@@ -125,6 +144,12 @@ describe('McpManageContent', () => {
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
     setter?.call(input, value);
     input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  async function flushEffects() {
+    await act(async () => {
+      await Promise.resolve();
+    });
   }
 
   it('renders source-style MCP cards without leaking skill sections', async () => {
@@ -146,23 +171,118 @@ describe('McpManageContent', () => {
     expect(container.textContent).toContain('新增 MCP');
   });
 
-  it('requests probed capability data for MCP status and tools', async () => {
+  it('requests capability data without probe (F249: lazy-load tools in modal)', async () => {
     await renderContent();
 
-    expect(mockFetch.mock.calls[0][0]).toBe('/api/capabilities?probe=true');
+    // F249 §8.4: list must NOT probe tools — no probe=true in query.
+    // DriftBanner / useDriftSync may fire their own fetch first, so find by URL not index.
+    const capCall = mockFetch.mock.calls.find(
+      (args: unknown[]) => typeof args[0] === 'string' && (args[0] as string).startsWith('/api/capabilities'),
+    );
+    expect(capCall).toBeTruthy();
+    expect(capCall![0]).toBe('/api/capabilities');
   });
 
-  it('opens managed MCP cards in a read-only modal', async () => {
+  it('opens managed MCP cards in readOnly modal (no save button)', async () => {
     await renderContent();
 
     await act(async () => {
       buttonByText('pencil').click();
     });
 
-    expect(container.querySelector('[data-testid="mcp-config-modal"]')).toBeTruthy();
-    expect(container.textContent).toContain('PENCIL_TOKEN');
-    expect(container.textContent).toContain('draw_frame');
-    expect(container.textContent).not.toContain('保存');
+    expect(document.body.querySelector('[data-testid="mcp-config-modal"]')).toBeTruthy();
+    // Managed MCPs are readOnly — show preview subtitle, no save button
+    expect(document.body.textContent).toContain('只读预览');
+    expect(document.body.textContent).not.toContain('保存');
+    expect(document.body.textContent).toContain('关闭');
+    expect(document.body.textContent).not.toContain('恢复全局配置');
+  });
+
+  it('opens plugin-owned MCP in readOnly modal (managed by plugin)', async () => {
+    await renderContent();
+
+    // Plugin-owned MCP has pluginId — opens in readOnly mode
+    await act(async () => {
+      buttonByText('plugin:video-gen:protocol-server').click();
+    });
+
+    expect(document.body.querySelector('[data-testid="mcp-config-modal"]')).toBeTruthy();
+    // Plugin MCPs are readOnly — show preview subtitle, no save button
+    expect(document.body.textContent).toContain('只读预览');
+    expect(document.body.textContent).not.toContain('保存');
+    expect(document.body.textContent).toContain('关闭');
+    expect(document.body.textContent).not.toContain('恢复全局配置');
+  });
+
+  it('read-only refresh probes persisted config instead of redacted form values', async () => {
+    await renderContent();
+
+    await act(async () => {
+      buttonByText('plugin:video-gen:protocol-server').click();
+    });
+
+    mockFetch.mockClear();
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ tools: [], connectionStatus: 'connected' }),
+    });
+
+    const refresh = document.body.querySelector('button[title="探测工具列表"]') as HTMLButtonElement | null;
+    expect(refresh).toBeTruthy();
+    await act(async () => {
+      refresh?.click();
+    });
+
+    const probeCall = mockFetch.mock.calls.find(
+      (args: unknown[]) =>
+        typeof args[0] === 'string' &&
+        (args[0] as string).includes('/api/mcp/') &&
+        (args[0] as string).includes('/tools'),
+    );
+    expect(probeCall).toBeTruthy();
+    const body = JSON.parse((probeCall?.[1] as { body: string }).body) as Record<string, unknown>;
+    expect(body).toEqual({});
+  });
+
+  it('hides restore-global action for project-scoped plugin MCPs', async () => {
+    await renderContent();
+
+    await act(async () => {
+      buttonByText('项目 MCP').click();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      buttonByText('plugin:video-gen:protocol-server').click();
+    });
+
+    expect(document.body.textContent).toContain('只读预览');
+    expect(document.body.textContent).not.toContain('恢复全局配置');
+  });
+
+  it('shows restore-global action only for an actual external project override', async () => {
+    await renderContent();
+
+    await act(async () => {
+      buttonByText('项目 MCP').click();
+    });
+    await flushEffects();
+
+    await act(async () => {
+      buttonByText('custom-mcp').click();
+    });
+
+    expect(document.body.textContent).toContain('恢复全局配置');
+  });
+
+  it('hides delete button for plugin-managed MCPs (source=plugin)', async () => {
+    await renderContent();
+
+    // Plugin-owned MCP should show the badge but NOT the delete button
+    expect(container.textContent).toContain('由插件 video-gen 管理');
+    const trashButtons = Array.from(container.querySelectorAll('button[title="卸载此 MCP"]'));
+    // Only 'custom-mcp' (external, no pluginId) should have trash button
+    expect(trashButtons.length).toBe(1);
   });
 
   it('omits unchanged redacted env and headers when saving external MCP edits', async () => {
@@ -205,7 +325,7 @@ describe('McpManageContent', () => {
     await act(async () => {
       buttonByText('新增 MCP').click();
     });
-    const inputs = Array.from(container.querySelectorAll('input'));
+    const inputs = Array.from(document.body.querySelectorAll('input'));
     await act(async () => {
       setInputValue(inputs[0] as HTMLInputElement, 'new-mcp');
       setInputValue(inputs[1] as HTMLInputElement, 'npx');
@@ -215,13 +335,13 @@ describe('McpManageContent', () => {
       buttonByText('预览').click();
     });
 
-    expect(container.textContent).toContain('configured owner');
-    expect(container.textContent).not.toContain('DEFAULT_OWNER_USER_ID');
+    expect(document.body.textContent).toContain('configured owner');
+    expect(document.body.textContent).not.toContain('DEFAULT_OWNER_USER_ID');
   });
 
   it('hard-deletes external MCP on uninstall', async () => {
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
+    // useConfirm is globally mocked (test-setup.ts) to resolve true,
+    // replacing the old window.confirm spy.
     await renderContent();
 
     const trashButtons = Array.from(container.querySelectorAll('button[title="卸载此 MCP"]'));
@@ -239,11 +359,61 @@ describe('McpManageContent', () => {
     expect(deleteCalls).toHaveLength(1);
     expect(deleteCalls[0][0]).toContain('/api/capabilities/mcp/custom-mcp?');
     expect(deleteCalls[0][0]).toContain('hard=true');
-
-    confirmSpy.mockRestore();
   });
 
-  it('renders plugin-owned MCP resources as readonly and routes management to plugins', async () => {
+  it('syncs all MCP project scopes without calling unsupported global resolve', async () => {
+    mockFetch.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.startsWith('/api/capabilities')) return ITEMS_RESPONSE;
+      if (url === '/api/drift/check') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { type?: string; projectPath?: string };
+        return {
+          ok: true,
+          json: async () => ({
+            result: {
+              issues: [{ id: 'custom-mcp', issueType: 'missing-in-project', message: 'Needs sync' }],
+              driftHash: `hash:${body.projectPath ?? 'global'}`,
+            },
+          }),
+        };
+      }
+      if (url === '/api/drift/resolve' && init?.method === 'POST') {
+        const body = JSON.parse(String(init.body ?? '{}')) as { type?: string; projectPath?: string };
+        if (body.type === 'mcp' && !body.projectPath) {
+          return {
+            ok: false,
+            status: 400,
+            json: async () => ({ error: 'Required: projectPath for MCP resolve' }),
+          };
+        }
+        return { ok: true, json: async () => ({ ok: true }) };
+      }
+      return ITEMS_RESPONSE;
+    });
+
+    await renderContent();
+    await flushEffects();
+
+    await act(async () => {
+      buttonByText('查看详情').click();
+    });
+
+    mockFetch.mockClear();
+    await act(async () => {
+      buttonByText('同步全部').click();
+    });
+    await flushEffects();
+
+    const syncCalls = mockFetch.mock.calls.filter(
+      (args: unknown[]) => args[0] === '/api/drift/resolve' && (args[1] as { method?: string })?.method === 'POST',
+    );
+    const bodies = syncCalls.map((args) => JSON.parse(String((args[1] as { body?: string }).body ?? '{}')));
+    expect(bodies.every((body) => body.type === 'mcp' && body.action === 'sync')).toBe(true);
+    expect(bodies.some((body) => !body.projectPath)).toBe(false);
+    expect(bodies.map((body) => body.projectPath).sort()).toEqual(['/tmp/fast-project', '/tmp/slow-project']);
+  });
+
+  it('renders plugin-owned MCP with normal controls but no delete button', async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({
@@ -251,7 +421,7 @@ describe('McpManageContent', () => {
           {
             ...MOCK_ITEMS[1],
             id: 'plugin:weixin-mp:mcp',
-            source: 'external',
+            source: 'plugin',
             pluginId: 'weixin-mp',
             description: 'Plugin owned MCP',
           },
@@ -266,24 +436,55 @@ describe('McpManageContent', () => {
 
     const card = container.querySelector('.settings-resource-card');
     expect(card?.textContent).toContain('Plugin owned MCP');
+    // Informational badge still shown
     expect(card?.textContent).toContain('由插件 weixin-mp 管理');
-    expect(card?.querySelector('a[href="/settings?s=plugins"]')).toBeTruthy();
 
+    // Toggle enabled — plugin MCPs are treated like regular MCPs
     const toggle = card?.querySelector('.settings-resource-toggle') as HTMLButtonElement | null;
-    expect(toggle?.disabled).toBe(true);
+    expect(toggle?.disabled).toBe(false);
+    // Delete button hidden (source='plugin' — only source='external' is deletable)
     expect(card?.querySelector('button[title="卸载此 MCP"]')).toBeFalsy();
-    expect(card?.querySelector('button[title="按猫开关"]')).toBeFalsy();
+    // Per-cat toggles available
+    expect(card?.querySelector('button[title="按猫开关"]')).toBeTruthy();
+  });
+
+  it('mount probe uses persisted config (empty body) instead of ad-hoc form values', async () => {
+    // When opening an existing MCP modal, the auto-probe on mount should send
+    // an empty body so the server reads real env from capabilities.json.
+    // Ad-hoc probe body would strip redacted env values (all MCP env is redacted
+    // in API responses), breaking MCPs that conditionally register tools based
+    // on env — e.g. protocol-server for plugin MCPs (F205 -32601 fix).
+    mockFetch.mockResolvedValue(ITEMS_RESPONSE);
+    await renderContent();
 
     mockFetch.mockClear();
-    await act(async () => {
-      toggle?.click();
+    // Mock the probe response separately
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        tools: [{ name: 'test-tool', description: 'A tool' }],
+        connectionStatus: 'connected',
+      }),
     });
 
-    expect(
-      mockFetch.mock.calls.some(
-        (args: unknown[]) => args[0] === '/api/capabilities' && (args[1] as { method?: string })?.method === 'PATCH',
-      ),
-    ).toBe(false);
+    await act(async () => {
+      buttonByText('custom-mcp').click();
+    });
+
+    // Find the probe call — POST /api/mcp/:id/tools
+    const probeCall = mockFetch.mock.calls.find(
+      (args: unknown[]) =>
+        typeof args[0] === 'string' &&
+        (args[0] as string).includes('/api/mcp/') &&
+        (args[0] as string).includes('/tools'),
+    );
+    expect(probeCall).toBeTruthy();
+    const probeBody = JSON.parse((probeCall?.[1] as { body: string }).body) as Record<string, unknown>;
+    // Mount probe must NOT contain command/url/env — empty body tells server
+    // to use persisted config with real (non-redacted) env values.
+    expect(probeBody).not.toHaveProperty('command');
+    expect(probeBody).not.toHaveProperty('url');
+    expect(probeBody).not.toHaveProperty('env');
   });
 
   it('ignores stale project-switch responses when a newer selection resolves first', async () => {
@@ -306,6 +507,7 @@ describe('McpManageContent', () => {
         items: [{ ...MOCK_ITEMS[1], id: 'fast-mcp' }],
         catFamilies: [{ id: 'ragdoll', name: 'Ragdoll', catIds: ['opus'] }],
         projectPath: '/tmp/fast-project',
+        knownProjectPaths: ['/tmp/slow-project', '/tmp/fast-project'],
         skillHealth: null,
       }),
     };
@@ -316,6 +518,9 @@ describe('McpManageContent', () => {
     });
 
     await renderContent();
+    await act(async () => {
+      buttonByText('项目 MCP').click();
+    });
     const selector = container.querySelector('#cap-project-select') as HTMLSelectElement;
     expect(selector).toBeTruthy();
 
@@ -335,6 +540,7 @@ describe('McpManageContent', () => {
         items: [{ ...MOCK_ITEMS[1], id: 'slow-mcp' }],
         catFamilies: [{ id: 'ragdoll', name: 'Ragdoll', catIds: ['opus'] }],
         projectPath: '/tmp/slow-project',
+        knownProjectPaths: ['/tmp/slow-project', '/tmp/fast-project'],
         skillHealth: null,
       });
       await slowJson;

@@ -28,10 +28,14 @@ export interface HandedEventInput {
   at: number;
 }
 
+export function handedEventSourceId(messageId: string, toCatId: string): string {
+  return `route:${messageId}:${toCatId}`;
+}
+
 /** 行首 @ 路由投递 → ball.handed（holder 变更，球继续）。 */
 export function buildHandedEvent(input: HandedEventInput): BallCustodyEvent {
   return {
-    sourceEventId: `route:${input.messageId}:${input.toCatId}`,
+    sourceEventId: handedEventSourceId(input.messageId, input.toCatId),
     subjectKey: `ball:thread:${input.threadId}`,
     kind: 'ball.handed',
     classification: 'state-changing',
@@ -118,17 +122,204 @@ export function buildHoldExpiredEvent(input: HeldEventInput): BallCustodyEvent {
   };
 }
 
+// ─── F167 Phase P: wakeWhen condition met ──────────────────────────────────
+
+export interface WakeConditionMetEventInput {
+  threadId: string;
+  catId: string;
+  /** Exact managed hold task whose condition fired. */
+  taskId: string;
+  /** Command that was run */
+  command: string;
+  /** Exit code (null = killed by timeout/cancel) */
+  exitCode: number | null;
+  /** Whether the command timed out */
+  timedOut: boolean;
+  /** How long the command ran */
+  durationMs: number;
+  /** Unix ms */
+  at: number;
+}
+
+/**
+ * F167 Phase P: managed command completed → ball.wake_condition_met.
+ * Fires when a wakeWhen command finishes (exit, timeout, or cancel).
+ */
+export function buildWakeConditionMetEvent(input: WakeConditionMetEventInput): BallCustodyEvent {
+  return {
+    sourceEventId: `wakecond:${input.taskId}`,
+    subjectKey: `ball:thread:${input.threadId}`,
+    kind: 'ball.wake_condition_met',
+    classification: 'state-changing',
+    payload: {
+      catId: input.catId,
+      taskId: input.taskId,
+      command: input.command,
+      exitCode: input.exitCode,
+      timedOut: input.timedOut,
+      durationMs: input.durationMs,
+    },
+    at: input.at,
+  };
+}
+
+/** The closed set of codes a managed-hold terminal may carry. The type derives from it, so a reader cannot drift. */
+export const MANAGED_HOLD_DISPOSITIONS = ['handled', 'completed'] as const;
+export type ManagedHoldDisposition = (typeof MANAGED_HOLD_DISPOSITIONS)[number];
+
+/**
+ * Why a wake reached a terminal without owning the subject (`retired`):
+ *  - `superseded`: custody moved on (a newer hold, a hand-off away from the wake cat, a operator hand-off);
+ *  - `subject_resolved`: nothing moved, the thread subject itself ended after the wake fired
+ *    (task.done, ball.frozen / degraded / abandoned), so there is no ball left to hold;
+ *  - `ball_not_held`: the wake cat no longer holds the ball for any other reason (void, parked, zombie,
+ *    dead, or another cat holds it). Which one is readable from the projection, not split into reasons.
+ * Terminals written before this field existed carry only `retired: true`; the only way they could be
+ * retired was supersession, so a missing reason on a retired payload reads as `superseded`.
+ */
+export const MANAGED_HOLD_RETIRED_REASONS = ['superseded', 'subject_resolved', 'ball_not_held'] as const;
+export type ManagedHoldRetiredReason = (typeof MANAGED_HOLD_RETIRED_REASONS)[number];
+
+/** Spread-ready `{ retiredReason }`, or nothing when the terminal was not retired. */
+export function retiredReasonField(reason: ManagedHoldRetiredReason | undefined): {
+  retiredReason?: ManagedHoldRetiredReason;
+} {
+  return reason ? { retiredReason: reason } : {};
+}
+
+/** The reason a recorded hold terminal was retired, or `undefined` when it was not retired. */
+export function managedHoldRetiredReason(payload: BallCustodyEvent['payload']): ManagedHoldRetiredReason | undefined {
+  if (payload.retired !== true) return undefined;
+  const reason = payload.retiredReason;
+  return reason === 'subject_resolved' || reason === 'ball_not_held' ? reason : 'superseded';
+}
+
+export interface HoldDispositionEventInput {
+  threadId: string;
+  catId: string;
+  invocationId: string;
+  sourceMessageId: string;
+  taskId: string;
+  disposition: ManagedHoldDisposition;
+  /**
+   * clowder-ai#1366: the exact wake reached a terminal, but it is no longer the
+   * subject's live wake (superseded, or its command carrier already terminal).
+   * The per-wake terminal is still durable so the F167 stop gate can recognize
+   * it; the subject-level projection must NOT advance to `resolved`, otherwise
+   * settling an old wake would silently kill a newer active hold.
+   */
+  retired?: boolean;
+  /** Only meaningful with `retired`; see {@link ManagedHoldRetiredReason}. */
+  retiredReason?: ManagedHoldRetiredReason;
+  at: number;
+}
+
+export function holdDispositionEventSourceId(input: {
+  invocationId: string;
+  sourceMessageId: string;
+  taskId: string;
+}): string {
+  return `hold-disposition:${input.invocationId}:${input.sourceMessageId}:${input.taskId}`;
+}
+
+/** Exact managed wake completion; deliberately distinct from handed_cvo.done_notify. */
+export function buildHoldDispositionEvent(input: HoldDispositionEventInput): BallCustodyEvent {
+  return {
+    sourceEventId: holdDispositionEventSourceId(input),
+    subjectKey: `ball:thread:${input.threadId}`,
+    kind: 'ball.hold_dispositioned',
+    classification: 'state-changing',
+    payload: {
+      catId: input.catId,
+      invocationId: input.invocationId,
+      sourceMessageId: input.sourceMessageId,
+      taskId: input.taskId,
+      disposition: input.disposition,
+      ...(input.retired ? { retired: true } : {}),
+      ...(input.retired && input.retiredReason ? { retiredReason: input.retiredReason } : {}),
+    },
+    at: input.at,
+  };
+}
+
+export const A2A_DISPATCH_DISPOSITIONS = ['handled', 'completed'] as const;
+export type A2ADispatchDisposition = (typeof A2A_DISPATCH_DISPOSITIONS)[number];
+
+/** Who wrote a dispatch terminal: the holder's own completion, or the consumed terminal coordination message. */
+export const DISPATCH_TERMINAL_VIAS = ['direct', 'coordination_terminal'] as const;
+export type DispatchTerminalVia = (typeof DISPATCH_TERMINAL_VIAS)[number];
+
+export interface DispatchDispositionEventInput {
+  threadId: string;
+  catId: string;
+  fromCatId: string;
+  invocationId: string;
+  sourceMessageId: string;
+  disposition: A2ADispatchDisposition;
+  /** The exact child completed after unrelated custody replaced the thread-level holder. */
+  retired?: boolean;
+  /**
+   * Who wrote this terminal: the holder's own completion, or the consumed terminal coordination message. Additive:
+   * events written before it carry none, and a reader reports those as unknown rather than guessing.
+   */
+  via?: DispatchTerminalVia;
+  /** Exact read provenance. The original Live shape remains readable after restart. */
+  adopted?: {
+    adoptedSourceMessageId: string;
+    witnessTimestamp: number;
+    readEvidenceKind: string;
+  } & ({ liveInvocationId: string } | { carrierKind: 'ordinary'; invocationId: string });
+  at: number;
+}
+
+export function dispatchDispositionEventSourceId(input: { invocationId: string; sourceMessageId: string }): string {
+  return `dispatch-disposition:${input.invocationId}:${input.sourceMessageId}`;
+}
+
+/** Exact ordinary A2A completion; caller identity and source are server-derived. */
+export function buildDispatchDispositionEvent(input: DispatchDispositionEventInput): BallCustodyEvent {
+  return {
+    sourceEventId: dispatchDispositionEventSourceId(input),
+    subjectKey: `ball:thread:${input.threadId}`,
+    kind: 'ball.dispatch_dispositioned',
+    classification: 'state-changing',
+    payload: {
+      catId: input.catId,
+      fromCatId: input.fromCatId,
+      invocationId: input.invocationId,
+      sourceMessageId: input.sourceMessageId,
+      disposition: input.disposition,
+      ...(input.retired ? { retired: true } : {}),
+      ...(input.via ? { via: input.via } : {}),
+      ...(input.adopted ? { adopted: input.adopted } : {}),
+    },
+    at: input.at,
+  };
+}
+
 export interface TaskBlockedEventInput {
   taskId: string;
   threadId: string;
   ownerCatId?: string | null;
   blockedSinceAt: number;
+  entrustedWorkRevision?: number;
   resolveMode?: BallResolveMode | null;
+}
+
+/** Typed owner revisions identify transitions; generic Task IDs keep their legacy timestamp shape. */
+function taskStatusEventSourceId(
+  taskId: string,
+  status: 'blocked' | 'unblocked',
+  at: number,
+  entrustedWorkRevision?: number,
+): string {
+  const transitionRef = entrustedWorkRevision === undefined ? at : `entrusted:${entrustedWorkRevision}`;
+  return `task:${taskId}:${status}:${transitionRef}`;
 }
 
 export function buildTaskBlockedEvent(input: TaskBlockedEventInput): BallCustodyEvent {
   return {
-    sourceEventId: `task:${input.taskId}:blocked:${input.blockedSinceAt}`,
+    sourceEventId: taskStatusEventSourceId(input.taskId, 'blocked', input.blockedSinceAt, input.entrustedWorkRevision),
     subjectKey: `ball:task:${input.taskId}`,
     kind: 'task.blocked',
     classification: 'state-changing',
@@ -147,9 +338,9 @@ export interface TaskEventInput {
   at: number;
 }
 
-export function buildTaskUnblockedEvent(input: TaskEventInput): BallCustodyEvent {
+export function buildTaskUnblockedEvent(input: TaskEventInput & { entrustedWorkRevision?: number }): BallCustodyEvent {
   return {
-    sourceEventId: `task:${input.taskId}:unblocked:${input.at}`,
+    sourceEventId: taskStatusEventSourceId(input.taskId, 'unblocked', input.at, input.entrustedWorkRevision),
     subjectKey: `ball:task:${input.taskId}`,
     kind: 'task.unblocked',
     classification: 'state-changing',

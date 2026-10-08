@@ -47,6 +47,36 @@ describe('reminderTemplate', () => {
     assert.equal(arg.extra.scheduler.hiddenTrigger, true);
   });
 
+  it('adds late cron timing to the scheduler trigger prompt', async () => {
+    const deliverMock = mock.fn(async () => 'msg-late');
+    const triggerMock = { trigger: mock.fn() };
+    const spec = reminderTemplate.createSpec('rem-late', {
+      trigger: { type: 'cron', expression: '42 * * * *', timezone: 'UTC' },
+      params: { message: '小本本' },
+      deliveryThreadId: 'th-late',
+    });
+    await spec.run.execute('小本本', 'thread-th-late', {
+      assignedCatId: 'codex',
+      deliver: deliverMock,
+      invokeTrigger: triggerMock,
+      schedule: {
+        triggerKind: 'cron',
+        scheduledAt: '2026-07-07T18:42:00.000Z',
+        firedAt: '2026-07-07T19:13:00.000Z',
+        latenessMs: 31 * 60 * 1000,
+        missedSlots: 0,
+        late: true,
+        misfirePolicy: 'merge_late_one',
+      },
+    });
+
+    const content = deliverMock.mock.calls[0].arguments[0].content;
+    assert.match(content, /本次是 2026-07-07T18:42:00\.000Z 预定任务的补拍/);
+    assert.match(content, /实际 2026-07-07T19:13:00\.000Z 触发/);
+    assert.match(content, /迟到 31 分钟/);
+    assert.match(content, /小本本/);
+  });
+
   it('deliver payload stays cat-agnostic when assignedCatId is null', async () => {
     const deliverMock = mock.fn(async () => 'msg-2');
     const spec = reminderTemplate.createSpec('rem-4', {
@@ -119,6 +149,52 @@ describe('reminderTemplate', () => {
       invokeTrigger: triggerMock,
     });
     assert.equal(triggerMock.trigger.mock.calls[0].arguments[1], 'sonnet');
+  });
+
+  it('preserves private owner authentication provenance when a hold timer wakes its cat', async () => {
+    const deliverMock = mock.fn(async () => 'msg-timer-owner');
+    const triggerMock = { trigger: mock.fn(async () => 'enqueued') };
+    const spec = reminderTemplate.createSpec('hold-ball-timer-owner', {
+      trigger: { type: 'once', fireAt: Date.now() + 60_000 },
+      params: {
+        message: 'resume owner work',
+        targetCatId: 'codex-sol',
+        holdLifecycle: { mode: 'timer', status: 'active' },
+      },
+      deliveryThreadId: 'thread-owner',
+      ownerAuthProvenance: 'strict',
+    });
+
+    await spec.run.execute('resume owner work', 'thread-thread-owner', {
+      assignedCatId: null,
+      deliver: deliverMock,
+      invokeTrigger: triggerMock,
+    });
+
+    assert.deepEqual(triggerMock.trigger.mock.calls[0].arguments[6], {
+      sourceCategory: 'scheduled',
+      ownerAuthProvenance: 'strict',
+    });
+  });
+
+  it('does not grant a private owner provenance carrier to an ordinary reminder', async () => {
+    const triggerMock = { trigger: mock.fn(async () => 'enqueued') };
+    const spec = reminderTemplate.createSpec('reminder-user-visible', {
+      trigger: { type: 'once', fireAt: Date.now() + 60_000 },
+      params: { message: 'ordinary reminder', targetCatId: 'codex-sol' },
+      deliveryThreadId: 'thread-owner',
+      ownerAuthProvenance: 'strict',
+    });
+
+    await spec.run.execute('ordinary reminder', 'thread-thread-owner', {
+      assignedCatId: null,
+      deliver: async () => 'message-ordinary',
+      invokeTrigger: triggerMock,
+    });
+
+    assert.deepEqual(triggerMock.trigger.mock.calls[0].arguments[6], {
+      sourceCategory: 'scheduled',
+    });
   });
 
   it('uses default message when param is empty', async () => {

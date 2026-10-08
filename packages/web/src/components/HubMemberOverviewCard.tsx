@@ -1,6 +1,7 @@
 import type { DragEvent as ReactDragEvent } from 'react';
 import type { CatData } from '@/hooks/useCatData';
 import { CO_CREATOR_COLOR } from '@/lib/color-defaults';
+import { readableInkOn } from '@/lib/readable-ink';
 import { AvatarImageWithFallback } from './AvatarImageWithFallback';
 import type { CatConfig, CoCreatorConfig } from './config-viewer-types';
 import { HubIcon } from './hub-icons';
@@ -96,10 +97,12 @@ function OwnerBadge() {
 function OwnerAvatar({ coCreator }: { coCreator: CoCreatorConfig }) {
   const primary = coCreator.color?.primary ?? CO_CREATOR_COLOR.primary;
   const avatarSrc = safeAvatarSrc(coCreator.avatar);
+  // The initials sit on the identity fill, so the ink is chosen from that fill: a theme surface can be as dark as the fill.
+  const ink = readableInkOn(primary) ?? 'var(--cafe-surface)';
   return (
     <div
       className="flex h-8 w-8 items-center justify-center overflow-hidden text-xs font-bold"
-      style={{ backgroundColor: primary, color: 'var(--cafe-surface)', borderRadius: '9999px' }}
+      style={{ backgroundColor: primary, color: ink, borderRadius: '9999px' }}
     >
       {avatarSrc ? (
         <AvatarImageWithFallback
@@ -115,7 +118,6 @@ function OwnerAvatar({ coCreator }: { coCreator: CoCreatorConfig }) {
 }
 
 export function HubCoCreatorOverviewCard({ coCreator, onEdit }: { coCreator: CoCreatorConfig; onEdit?: () => void }) {
-  const primary = coCreator.color?.primary ?? CO_CREATOR_COLOR.primary;
   return (
     <SettingsRow
       icon={<OwnerAvatar coCreator={coCreator} />}
@@ -123,7 +125,7 @@ export function HubCoCreatorOverviewCard({ coCreator, onEdit }: { coCreator: CoC
       meta={
         <>
           <span>别名: {coCreator.aliases.join(' · ') || '无'} · 只能编辑，不能新增或删除</span>
-          <span className="mt-0.5 block" style={{ color: primary }}>
+          <span className="mt-0.5 block" style={{ color: 'var(--color-cocreator-text)' }}>
             {formatMentionPreview(coCreator.mentionPatterns, 2)}
           </span>
         </>
@@ -199,7 +201,6 @@ function AvailabilityToggle({
 }
 
 function MemberMeta({ cat, configCat }: { cat: CatData; configCat?: CatConfig }) {
-  const sessionChainEnabled = cat.sessionChain !== false;
   return (
     <>
       <span>
@@ -209,19 +210,31 @@ function MemberMeta({ cat, configCat }: { cat: CatData; configCat?: CatConfig })
         {getMetaSummary(cat, configCat)}
         {cat.adapterMode && (
           <SettingsBadge
-            tone={cat.adapterMode === 'acp' ? 'emerald' : 'slate'}
+            tone={cat.adapterMode === 'acp' || cat.codexCarrier?.effective === 'app_server' ? 'emerald' : 'slate'}
             size="xxs"
             className="ml-1.5 inline-block"
           >
-            {cat.adapterMode.toUpperCase()}
+            {/* F254 D2: ACP wins over the Codex carrier (assembly checks getAcpConfig first) */}
+            {cat.adapterMode === 'acp'
+              ? 'ACP'
+              : cat.codexCarrier?.effective === 'app_server'
+                ? 'APP SERVER'
+                : cat.adapterMode.toUpperCase()}
           </SettingsBadge>
         )}
+        {cat.identityProtection ? (
+          <SettingsBadge
+            tone={cat.identityProtection.state === 'healthy' ? 'emerald' : 'amber'}
+            size="xxs"
+            className="ml-1.5 inline-block"
+          >
+            {cat.identityProtection.state === 'healthy' ? '云端身份' : '云端身份异常'}
+          </SettingsBadge>
+        ) : null}
       </span>
       <span className="mt-0.5 flex flex-wrap items-center gap-2">
         <SettingsText tone="purple">{formatMentionPreview(cat.mentionPatterns)}</SettingsText>
-        <SettingsBadge tone={sessionChainEnabled ? 'emerald' : 'slate'}>
-          {sessionChainEnabled ? 'Session Chain 已开启' : 'Session Chain 未开启'}
-        </SettingsBadge>
+        <SettingsBadge tone="emerald">Session Chain 始终可见</SettingsBadge>
       </span>
     </>
   );
@@ -288,7 +301,7 @@ export function HubMemberOverviewCard({
             onToggle={onToggleAvailability}
             busy={togglingAvailability}
           />
-          {onDelete && (
+          {onDelete && !cat.identityProtection && (
             <SettingsResourceIconButton
               tone="danger"
               onClick={(e) => {

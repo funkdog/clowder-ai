@@ -269,9 +269,14 @@ describe('TaskRunnerV2', () => {
     assert.equal(rows[0].outcome, 'RUN_FAILED');
   });
 
-  it('timeout does not cause concurrent reentry — overlap guard holds until execute settles', async () => {
-    let maxActive = 0;
-    let active = 0;
+  it('timeout aborts execute and holds overlap until cancellation cleanup settles', async () => {
+    let executionCount = 0;
+    let postTimeoutExternalIo = 0;
+    let abortObserved = false;
+    let releaseCancellationCleanup;
+    const cancellationCleanup = new Promise((resolve) => {
+      releaseCancellationCleanup = resolve;
+    });
     runner.register({
       id: 'reentry-test',
       profile: 'poller',
@@ -282,11 +287,25 @@ describe('TaskRunnerV2', () => {
       run: {
         overlap: 'skip',
         timeoutMs: 30,
-        execute: async () => {
-          active++;
-          if (active > maxActive) maxActive = active;
-          await new Promise((r) => setTimeout(r, 200));
-          active--;
+        execute: async (_signal, _subjectKey, ctx) => {
+          executionCount++;
+          if (!ctx.signal) {
+            await new Promise((r) => setTimeout(r, 80));
+            postTimeoutExternalIo++;
+            return;
+          }
+          await new Promise((resolve) => {
+            ctx.signal.addEventListener(
+              'abort',
+              () => {
+                abortObserved = true;
+                void cancellationCleanup.then(resolve);
+              },
+              { once: true },
+            );
+          });
+          ctx.signal.throwIfAborted();
+          postTimeoutExternalIo++;
         },
       },
       state: { runLedger: 'sqlite' },
@@ -294,18 +313,200 @@ describe('TaskRunnerV2', () => {
       enabled: () => true,
     });
 
-    // First trigger: will timeout after 30ms but execute runs for 200ms
+    // Timeout should abort the underlying execute, but the task-level overlap
+    // lock and terminal ledger must wait for its cancellation cleanup.
     const p1 = runner.triggerNow('reentry-test');
-    // Wait just past timeout but before execute finishes
-    await new Promise((r) => setTimeout(r, 60));
-    // Second trigger: should be blocked by overlap guard (execute still running)
-    const p2 = runner.triggerNow('reentry-test');
-    await Promise.all([p1, p2]);
+    await new Promise((r) => setTimeout(r, 45));
+    assert.equal(abortObserved, true, 'execute should observe the timeout abort');
+    assert.equal(ledger.query('reentry-test', 10).length, 0, 'timeout must not become terminal before cleanup');
 
-    assert.equal(maxActive, 1, 'should never have >1 concurrent execute for same task');
+    const p2 = runner.triggerNow('reentry-test');
+    await p2;
+    releaseCancellationCleanup();
+    await p1;
+
+    assert.equal(postTimeoutExternalIo, 0, 'aborted execute must not perform external I/O after timeout');
     const rows = ledger.query('reentry-test', 10);
     const skipRows = rows.filter((r) => r.outcome === 'SKIP_OVERLAP');
     assert.equal(skipRows.length, 1, 'second trigger should get SKIP_OVERLAP');
+    assert.equal(rows.filter((r) => r.outcome === 'RUN_FAILED').length, 1);
+
+    await runner.triggerNow('reentry-test');
+    assert.equal(executionCount, 2, 'next tick may run after cancellation cleanup settles');
+  });
+
+  it('records timeout failure when execute resolves gracefully from its abort handler', async () => {
+    runner.register({
+      id: 'graceful-abort-test',
+      profile: 'poller',
+      trigger: { type: 'interval', ms: 999999 },
+      admission: {
+        gate: async () => ({ run: true, workItems: [{ signal: 'go', subjectKey: 'k' }] }),
+      },
+      run: {
+        overlap: 'skip',
+        timeoutMs: 20,
+        execute: async (_signal, _subjectKey, ctx) =>
+          new Promise((resolve) => ctx.signal.addEventListener('abort', resolve, { once: true })),
+      },
+      state: { runLedger: 'sqlite' },
+      outcome: { whenNoSignal: 'drop' },
+      enabled: () => true,
+    });
+
+    await runner.triggerNow('graceful-abort-test');
+    const rows = ledger.query('graceful-abort-test', 10);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].outcome, 'RUN_FAILED');
+    assert.match(rows[0].error_summary, /timed out after 20ms/);
+  });
+
+  it('lets completed side effects return and finishes the trigger bound to a delivered message after timeout', async () => {
+    const { TaskRunnerV2 } = await import('../../dist/infrastructure/scheduler/TaskRunnerV2.js');
+    const completed = [];
+    const settleAfterTimeout = async (value) => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return value;
+    };
+    runner = new TaskRunnerV2({
+      logger: silentLogger,
+      ledger,
+      deliver: async ({ content }) => settleAfterTimeout(`msg:${content}`),
+      invokeTrigger: {
+        trigger: async () => settleAfterTimeout('dispatched'),
+      },
+    });
+    runner.setManagedCommandWakeRecovery(async () => settleAfterTimeout('recovered'));
+    runner.register({
+      id: 'completed-effect-timeout-test',
+      profile: 'poller',
+      trigger: { type: 'interval', ms: 999999 },
+      admission: {
+        gate: async () => ({
+          run: true,
+          workItems: ['deliver', 'trigger', 'wake', 'chain', 'unbound', 'detached'].map((subjectKey) => ({
+            signal: subjectKey,
+            subjectKey,
+          })),
+        }),
+      },
+      run: {
+        overlap: 'skip',
+        timeoutMs: 10,
+        execute: async (_signal, subjectKey, ctx) => {
+          if (subjectKey === 'deliver') {
+            completed.push(await ctx.deliver({ threadId: 'thread-1', content: subjectKey, userId: 'scheduler' }));
+            return;
+          }
+          if (subjectKey === 'trigger') {
+            completed.push(await ctx.invokeTrigger.trigger('thread-1', 'codex', 'user-1', 'wake', 'msg-existing'));
+            return;
+          }
+          if (subjectKey === 'wake') {
+            completed.push(await ctx.managedCommandWakeRecovery('managed-task-1'));
+            return;
+          }
+          if (subjectKey === 'detached') {
+            void ctx.invokeTrigger
+              .trigger('thread-1', 'codex', 'user-1', 'wake', 'msg-existing')
+              .then((outcome) => completed.push(`detached:${outcome}`))
+              .catch(() => {});
+            return;
+          }
+          const messageId = await ctx.deliver({
+            threadId: 'thread-1',
+            content: subjectKey,
+            userId: 'scheduler',
+          });
+          if (subjectKey === 'unbound') {
+            await assert.rejects(
+              () => ctx.invokeTrigger.trigger('thread-1', 'codex', 'user-1', 'wake', 'msg-from-another-item'),
+              /timed out/,
+            );
+            completed.push('unbound-trigger-blocked');
+            return;
+          }
+          const triggerOutcome = await ctx.invokeTrigger.trigger('thread-1', 'codex', 'user-1', 'wake', messageId);
+          completed.push(`${messageId}:${triggerOutcome}`);
+        },
+      },
+      state: { runLedger: 'sqlite' },
+      outcome: { whenNoSignal: 'drop' },
+      enabled: () => true,
+    });
+
+    await runner.triggerNow('completed-effect-timeout-test');
+
+    assert.deepEqual(completed, [
+      'msg:deliver',
+      'dispatched',
+      'recovered',
+      'msg:chain:dispatched',
+      'unbound-trigger-blocked',
+      'detached:dispatched',
+    ]);
+    assert.equal(
+      ledger.query('completed-effect-timeout-test', 10).filter((row) => row.outcome === 'RUN_FAILED').length,
+      6,
+      'timeout remains terminal truth even when the completed effect returns normally',
+    );
+  });
+
+  it('restart after timeout does not leave a zombie execution beside the new runner', async () => {
+    let oldRunnerIo = 0;
+    const oldTask = {
+      id: 'restart-timeout-test',
+      profile: 'poller',
+      trigger: { type: 'interval', ms: 999999 },
+      admission: {
+        gate: async () => ({ run: true, workItems: [{ signal: 'old', subjectKey: 'k' }] }),
+      },
+      run: {
+        overlap: 'skip',
+        timeoutMs: 25,
+        execute: async (_signal, _subjectKey, ctx) => {
+          const timer = setInterval(() => oldRunnerIo++, 5);
+          await new Promise((resolve) => {
+            ctx.signal.addEventListener(
+              'abort',
+              () => {
+                clearInterval(timer);
+                setTimeout(resolve, 10);
+              },
+              { once: true },
+            );
+          });
+          ctx.signal.throwIfAborted();
+        },
+      },
+      state: { runLedger: 'sqlite' },
+      outcome: { whenNoSignal: 'drop' },
+      enabled: () => true,
+    };
+    runner.register(oldTask);
+    await runner.triggerNow(oldTask.id);
+    runner.stop();
+
+    const ioAfterOldRunnerStopped = oldRunnerIo;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(oldRunnerIo, ioAfterOldRunnerStopped, 'cancelled execution must stay stopped across restart');
+
+    const { TaskRunnerV2 } = await import('../../dist/infrastructure/scheduler/TaskRunnerV2.js');
+    runner = new TaskRunnerV2({ logger: silentLogger, ledger });
+    let newRunnerExecutions = 0;
+    runner.register({
+      ...oldTask,
+      run: {
+        ...oldTask.run,
+        timeoutMs: 5_000,
+        execute: async () => {
+          newRunnerExecutions++;
+        },
+      },
+    });
+    await runner.triggerNow(oldTask.id);
+    assert.equal(newRunnerExecutions, 1);
+    assert.equal(oldRunnerIo, ioAfterOldRunnerStopped, 'new runner must not revive old execution work');
   });
 
   it('actor resolver sets assigned_cat_id in ledger when task has actor spec', async () => {
@@ -449,6 +650,170 @@ describe('TaskRunnerV2 — dynamic task first-tick deferral', () => {
 
     assert.equal(executeCount, 1, 'built-in task should fire immediately on start()');
     runner.stop();
+  });
+});
+
+describe('TaskRunnerV2 — cron sleep/wake misfire metadata', () => {
+  let db, ledger, originalDateNow;
+  const noop = () => {};
+  const silentLogger = { info: noop, error: noop };
+
+  beforeEach(async () => {
+    db = new Database(':memory:');
+    const { applyMigrations } = await import('../../dist/domains/memory/schema.js');
+    const { RunLedger } = await import('../../dist/infrastructure/scheduler/RunLedger.js');
+    applyMigrations(db);
+    ledger = new RunLedger(db);
+    originalDateNow = Date.now;
+  });
+
+  afterEach(() => {
+    Date.now = originalDateNow;
+  });
+
+  it('watchdog merges missed cron slots into one late run with timing metadata', async () => {
+    const { TaskRunnerV2 } = await import('../../dist/infrastructure/scheduler/TaskRunnerV2.js');
+    let now = Date.UTC(2026, 6, 7, 12, 0, 30, 0);
+    Date.now = () => now;
+
+    const runner = new TaskRunnerV2({ logger: silentLogger, ledger });
+    const schedules = [];
+    runner.register({
+      id: 'cron-late',
+      profile: 'poller',
+      trigger: { type: 'cron', expression: '* * * * *', timezone: 'UTC' },
+      admission: {
+        gate: async () => ({ run: true, workItems: [{ signal: 'go', subjectKey: 'thread-sleep' }] }),
+      },
+      run: {
+        overlap: 'skip',
+        timeoutMs: 5000,
+        execute: async (_signal, _subjectKey, ctx) => {
+          schedules.push(ctx.schedule);
+        },
+      },
+      state: { runLedger: 'sqlite' },
+      outcome: { whenNoSignal: 'drop' },
+      enabled: () => true,
+    });
+
+    runner.start();
+
+    now = Date.UTC(2026, 6, 7, 12, 3, 10, 0);
+    await runner.checkCronMisfires();
+
+    assert.equal(schedules.length, 1, 'watchdog should fire one merged late run');
+    assert.deepEqual(schedules[0], {
+      triggerKind: 'cron',
+      scheduledAt: '2026-07-07T12:01:00.000Z',
+      firedAt: '2026-07-07T12:03:10.000Z',
+      latenessMs: 130000,
+      missedSlots: 2,
+      late: true,
+      misfirePolicy: 'merge_late_one',
+    });
+
+    const rows = ledger.query('cron-late', 10);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].scheduled_at, '2026-07-07T12:01:00.000Z');
+    assert.equal(rows[0].fired_at, '2026-07-07T12:03:10.000Z');
+    assert.equal(rows[0].lateness_ms, 130000);
+    assert.equal(rows[0].missed_slots, 2);
+    assert.equal(rows[0].trigger_kind, 'cron');
+    assert.equal(rows[0].misfire_policy, 'merge_late_one');
+
+    await runner.checkCronMisfires();
+    assert.equal(schedules.length, 1, 'already-fired slot must not duplicate on repeated watchdog scans');
+    runner.stop();
+  });
+
+  it('does not mark ordinary cron timer jitter as a late catch-up run', async () => {
+    const { TaskRunnerV2 } = await import('../../dist/infrastructure/scheduler/TaskRunnerV2.js');
+    let now = Date.UTC(2026, 6, 7, 12, 0, 30, 0);
+    Date.now = () => now;
+
+    const runner = new TaskRunnerV2({ logger: silentLogger, ledger });
+    const schedules = [];
+    runner.register({
+      id: 'cron-jitter',
+      profile: 'poller',
+      trigger: { type: 'cron', expression: '* * * * *', timezone: 'UTC' },
+      admission: {
+        gate: async () => ({ run: true, workItems: [{ signal: 'go', subjectKey: 'thread-jitter' }] }),
+      },
+      run: {
+        overlap: 'skip',
+        timeoutMs: 5000,
+        execute: async (_signal, _subjectKey, ctx) => {
+          schedules.push(ctx.schedule);
+        },
+      },
+      state: { runLedger: 'sqlite' },
+      outcome: { whenNoSignal: 'drop' },
+      enabled: () => true,
+    });
+
+    runner.start();
+
+    now = Date.UTC(2026, 6, 7, 12, 1, 0, 3);
+    await runner.checkCronMisfires();
+
+    assert.equal(schedules.length, 1);
+    assert.equal(schedules[0].latenessMs, 3);
+    assert.equal(schedules[0].missedSlots, 0);
+    assert.equal(schedules[0].late, false, 'sub-threshold timer jitter must not surface as catch-up copy');
+
+    const rows = ledger.query('cron-jitter', 10);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].lateness_ms, 3, 'raw lateness remains observable in ledger');
+    runner.stop();
+  });
+
+  it('does not re-arm a cron task after stop while its run is in flight', async () => {
+    const { TaskRunnerV2 } = await import('../../dist/infrastructure/scheduler/TaskRunnerV2.js');
+    let now = Date.UTC(2026, 6, 7, 12, 0, 30, 0);
+    Date.now = () => now;
+
+    const runner = new TaskRunnerV2({ logger: silentLogger, ledger });
+    let releaseExecute;
+    let executeStarted;
+    const executeStartedPromise = new Promise((resolve) => {
+      executeStarted = resolve;
+    });
+
+    runner.register({
+      id: 'cron-stop-inflight',
+      profile: 'poller',
+      trigger: { type: 'cron', expression: '* * * * *', timezone: 'UTC' },
+      admission: {
+        gate: async () => ({ run: true, workItems: [{ signal: 'go', subjectKey: 'thread-stop' }] }),
+      },
+      run: {
+        overlap: 'skip',
+        timeoutMs: 5000,
+        execute: async () => {
+          executeStarted();
+          await new Promise((resolve) => {
+            releaseExecute = resolve;
+          });
+        },
+      },
+      state: { runLedger: 'sqlite' },
+      outcome: { whenNoSignal: 'drop' },
+      enabled: () => true,
+    });
+
+    runner.start();
+
+    now = Date.UTC(2026, 6, 7, 12, 1, 0, 0);
+    const misfire = runner.checkCronMisfires();
+    await executeStartedPromise;
+    runner.stop();
+    releaseExecute();
+    await misfire;
+
+    assert.equal(runner.timers.size, 0, 'stop() must remain final even if an in-flight cron run finishes later');
+    assert.equal(runner.cronNextSlots.size, 0, 'stopped cron tasks must not publish a fresh next slot');
   });
 });
 
@@ -1062,6 +1427,62 @@ describe('TaskRunnerV2 — once trigger (#415)', () => {
     runner.stop();
   });
 
+  it('suppresses retired hold-ball once task before stale wake execution', async () => {
+    const { TaskRunnerV2 } = await import('../../dist/infrastructure/scheduler/TaskRunnerV2.js');
+    const runner = new TaskRunnerV2({ logger: silentLogger, ledger, dynamicTaskStore });
+    let executed = false;
+    const fireAt = Date.now() + 50;
+
+    dynamicTaskStore.insert({
+      id: 'hold-ball-retired-race',
+      templateId: 'reminder',
+      trigger: { type: 'once', fireAt },
+      params: {
+        message: 'should not wake',
+        holdLifecycle: {
+          mode: 'timer',
+          status: 'retired_by_event',
+          subjectKey: 'pr:owner/repo#42',
+          expectedSignalKey: 'review_posted',
+          wakeAt: fireAt,
+          createdBy: 'hold-ball:codex',
+          resolvedBy: {
+            sourceKind: 'review_feedback',
+            sourceMessageId: 'msg-review-1',
+            subjectKey: 'pr:owner/repo#42',
+            expectedSignalKey: 'review_posted',
+            at: Date.now(),
+          },
+        },
+      },
+      display: { label: '持球唤醒 (codex)', category: 'system' },
+      deliveryThreadId: 'thread-retired',
+      enabled: false,
+      createdBy: 'hold-ball:codex',
+      createdAt: new Date().toISOString(),
+    });
+
+    runner.registerDynamic(
+      makeOnceTask('hold-ball-retired-race', fireAt, {
+        run: {
+          overlap: 'skip',
+          timeoutMs: 5000,
+          execute: async () => {
+            executed = true;
+          },
+        },
+      }),
+      'hold-ball-retired-race',
+    );
+    runner.start();
+    await new Promise((r) => setTimeout(r, 200));
+
+    assert.equal(executed, false, 'retired hold must not deliver a stale wake');
+    assert.ok(!runner.getRegisteredTasks().includes('hold-ball-retired-race'), 'retired hold should leave runtime');
+    assert.equal(dynamicTaskStore.getById('hold-ball-retired-race').enabled, false, 'tombstone should remain readable');
+    runner.stop();
+  });
+
   it('live-registered once trigger with past fireAt fires immediately (processing delay)', async () => {
     const { TaskRunnerV2 } = await import('../../dist/infrastructure/scheduler/TaskRunnerV2.js');
     const runner = new TaskRunnerV2({ logger: silentLogger, ledger, dynamicTaskStore });
@@ -1150,6 +1571,241 @@ describe('TaskRunnerV2 — once trigger (#415)', () => {
 
     // Execute should never have been called
     assert.ok(!executed, 'past-due once task should NOT execute');
+    runner.stop();
+  });
+
+  it('hydrates a still-valid past-due timer hold and delivers once with original timing', async () => {
+    const [{ TaskRunnerV2 }, { reminderTemplate }] = await Promise.all([
+      import('../../dist/infrastructure/scheduler/TaskRunnerV2.js'),
+      import('../../dist/infrastructure/scheduler/templates/reminder.js'),
+    ]);
+    const deliveries = [];
+    const triggers = [];
+    const runner = new TaskRunnerV2({
+      logger: silentLogger,
+      ledger,
+      dynamicTaskStore,
+      deliver: async (input) => {
+        deliveries.push(input);
+        return 'message-late-hold';
+      },
+      invokeTrigger: {
+        async trigger(...args) {
+          triggers.push(args);
+          return 'enqueued';
+        },
+      },
+    });
+    const now = Date.now();
+    const fireAt = now - 60_000;
+    const slaUntilMs = now + 60_000;
+    const id = 'hold-ball-offline-timer';
+    dynamicTaskStore.insert(
+      {
+        id,
+        templateId: 'reminder',
+        trigger: { type: 'once', fireAt },
+        params: {
+          message: 'resume the exact held work',
+          targetCatId: 'codex-sol',
+          triggerUserId: 'user-1',
+          holdLifecycle: {
+            mode: 'timer',
+            status: 'active',
+            await: {
+              v: 1,
+              generation: 1,
+              subjectRef: `timer:${id}`,
+              ownerFence: { kind: 'containing_task', generation: 1 },
+              baseline: { kind: 'timer', capturedAt: fireAt - 1_000, fireAt },
+              continuation: {
+                when: [{ kind: 'timer_elapsed' }],
+                // biome-ignore lint/suspicious/noThenProperty: F280 continuation contract field.
+                then: 'resume the exact held work',
+              },
+              autoRenew: false,
+              expiresAt: slaUntilMs,
+              createdAt: fireAt - 1_000,
+              provenance: 'explicit_registration',
+            },
+            waitSourceRef: {
+              kind: 'task',
+              value: 'task-1',
+              expectedSignal: 'managed_command_complete',
+              slaUntilMs,
+            },
+            wakeAt: fireAt,
+            createdBy: 'hold-ball:codex-sol',
+          },
+        },
+        display: { label: '持球唤醒 (codex-sol)', category: 'system' },
+        deliveryThreadId: 'thread-hold',
+        enabled: true,
+        createdBy: 'hold-ball:codex-sol',
+        createdAt: new Date(fireAt - 1_000).toISOString(),
+      },
+      'strict',
+    );
+
+    assert.equal(runner.hydrateDynamic(dynamicTaskStore, { get: () => reminderTemplate }), 1);
+    runner.start();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.equal(deliveries.length, 1);
+    assert.equal(deliveries[0].idempotencyKey, `hold-wake:${id}`);
+    assert.match(deliveries[0].content, /补拍/);
+    assert.match(deliveries[0].content, new RegExp(new Date(fireAt).toISOString().slice(0, 16)));
+    assert.equal(triggers.length, 1);
+    const tombstone = dynamicTaskStore.getById(id);
+    assert.ok(tombstone, 'timer hold disposition remains durable');
+    assert.equal(tombstone.enabled, false);
+    assert.equal(tombstone.params.holdLifecycle.status, 'fired');
+    assert.equal(tombstone.params.holdLifecycle.wakeAt, fireAt);
+    assert.ok(tombstone.params.holdLifecycle.latenessMs >= 60_000);
+    runner.stop();
+  });
+
+  it('persists an expired offline timer hold disposition without delivering it', async () => {
+    const [{ TaskRunnerV2 }, { reminderTemplate }] = await Promise.all([
+      import('../../dist/infrastructure/scheduler/TaskRunnerV2.js'),
+      import('../../dist/infrastructure/scheduler/templates/reminder.js'),
+    ]);
+    let delivered = false;
+    const runner = new TaskRunnerV2({
+      logger: silentLogger,
+      ledger,
+      dynamicTaskStore,
+      deliver: async () => {
+        delivered = true;
+        return 'unexpected';
+      },
+    });
+    const fireAt = Date.now() - 120_000;
+    const id = 'hold-ball-expired-offline';
+    dynamicTaskStore.insert(
+      {
+        id,
+        templateId: 'reminder',
+        trigger: { type: 'once', fireAt },
+        params: {
+          message: 'expired hold',
+          holdLifecycle: {
+            mode: 'timer',
+            status: 'active',
+            await: {
+              v: 1,
+              generation: 1,
+              subjectRef: `timer:${id}`,
+              ownerFence: { kind: 'containing_task', generation: 1 },
+              baseline: { kind: 'timer', capturedAt: fireAt - 1_000, fireAt },
+              continuation: {
+                when: [{ kind: 'timer_elapsed' }],
+                // biome-ignore lint/suspicious/noThenProperty: F280 continuation contract field.
+                then: 'do not run',
+              },
+              autoRenew: false,
+              expiresAt: fireAt + 30_000,
+              createdAt: fireAt - 1_000,
+              provenance: 'explicit_registration',
+            },
+            waitSourceRef: {
+              kind: 'task',
+              value: 'task-1',
+              expectedSignal: 'managed_command_complete',
+              slaUntilMs: fireAt + 30_000,
+            },
+            wakeAt: fireAt,
+            createdBy: 'hold-ball:codex-sol',
+          },
+        },
+        display: { label: 'expired hold', category: 'system' },
+        deliveryThreadId: 'thread-hold',
+        enabled: true,
+        createdBy: 'hold-ball:codex-sol',
+        createdAt: new Date(fireAt - 1_000).toISOString(),
+      },
+      'strict',
+    );
+
+    assert.equal(runner.hydrateDynamic(dynamicTaskStore, { get: () => reminderTemplate }), 0);
+    assert.equal(delivered, false);
+    const tombstone = dynamicTaskStore.getById(id);
+    assert.ok(tombstone);
+    assert.equal(tombstone.enabled, false);
+    assert.equal(tombstone.params.holdLifecycle.status, 'retired_expired');
+    runner.stop();
+  });
+
+  it('hydrates a past-due running managed command into its durable fallback path', async () => {
+    const [{ TaskRunnerV2 }, { reminderTemplate }] = await Promise.all([
+      import('../../dist/infrastructure/scheduler/TaskRunnerV2.js'),
+      import('../../dist/infrastructure/scheduler/templates/reminder.js'),
+    ]);
+    const recovered = [];
+    const runner = new TaskRunnerV2({ logger: silentLogger, ledger, dynamicTaskStore });
+    runner.setManagedCommandWakeRecovery(async (taskId) => {
+      recovered.push(taskId);
+      return 'pending';
+    });
+    const pastFireAt = Date.now() - 60_000;
+    dynamicTaskStore.insert({
+      id: 'hold-ball-managed-running',
+      templateId: 'reminder',
+      trigger: { type: 'once', fireAt: pastFireAt },
+      params: {
+        message: 'managed fallback',
+        holdLifecycle: {
+          mode: 'wake_when',
+          status: 'active',
+          managedCommand: { state: 'command_running', command: 'pnpm gate', startedAt: pastFireAt - 1_000 },
+        },
+      },
+      display: { label: 'managed fallback', category: 'system' },
+      deliveryThreadId: 'thread-managed',
+      enabled: true,
+      createdBy: 'hold-ball:codex-sol',
+      createdAt: new Date(pastFireAt - 1_000).toISOString(),
+    });
+
+    assert.equal(runner.hydrateDynamic(dynamicTaskStore, { get: () => reminderTemplate }), 1);
+    runner.start();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    assert.deepEqual(recovered, ['hold-ball-managed-running']);
+    assert.ok(dynamicTaskStore.getById('hold-ball-managed-running'), 'recovery-owned receipt must stay durable');
+    assert.ok(!runner.getRegisteredTasks().includes('hold-ball-managed-running'));
+    runner.stop();
+  });
+
+  it('leaves a past-due dispatch-pending managed receipt exclusively to recovery', async () => {
+    const { TaskRunnerV2 } = await import('../../dist/infrastructure/scheduler/TaskRunnerV2.js');
+    const runner = new TaskRunnerV2({ logger: silentLogger, ledger, dynamicTaskStore });
+    const pastFireAt = Date.now() - 60_000;
+    dynamicTaskStore.insert({
+      id: 'hold-ball-managed-pending',
+      templateId: 'reminder',
+      trigger: { type: 'once', fireAt: pastFireAt },
+      params: {
+        message: 'managed fallback',
+        holdLifecycle: {
+          mode: 'wake_when',
+          status: 'active',
+          managedCommand: { state: 'dispatch_pending', command: 'pnpm gate', startedAt: pastFireAt - 1_000 },
+        },
+      },
+      display: { label: 'managed fallback', category: 'system' },
+      deliveryThreadId: 'thread-managed',
+      enabled: true,
+      createdBy: 'hold-ball:codex-sol',
+      createdAt: new Date(pastFireAt - 1_000).toISOString(),
+    });
+
+    assert.equal(runner.hydrateDynamic(dynamicTaskStore, { get: () => null }), 0);
+    assert.ok(
+      dynamicTaskStore.getById('hold-ball-managed-pending'),
+      'pending receipt must not be missed-window retired',
+    );
+    assert.ok(!runner.getRegisteredTasks().includes('hold-ball-managed-pending'));
     runner.stop();
   });
 
@@ -1264,6 +1920,278 @@ describe('TaskRunnerV2 — once trigger (#415)', () => {
     assert.equal(s.trigger.type, 'once');
     assert.equal(s.trigger.fireAt, fireAt);
     assert.equal(s.source, 'dynamic');
+    runner.stop();
+  });
+});
+
+// ─── F323 Phase A: timer hold offline recovery — production/fault matrix ────
+
+describe('TaskRunnerV2 — timer hold offline recovery (F323)', () => {
+  let db, ledger, dynamicTaskStore;
+  const noop = () => {};
+  const silentLogger = { info: noop, error: noop };
+
+  beforeEach(async () => {
+    db = new Database(':memory:');
+    const { applyMigrations } = await import('../../dist/domains/memory/schema.js');
+    const { RunLedger } = await import('../../dist/infrastructure/scheduler/RunLedger.js');
+    const { DynamicTaskStore } = await import('../../dist/infrastructure/scheduler/DynamicTaskStore.js');
+    applyMigrations(db);
+    ledger = new RunLedger(db);
+    dynamicTaskStore = new DynamicTaskStore(db);
+  });
+
+  const makeTimerHoldDef = ({ id, fireAt, slaUntilMs, lifecycleOverrides = {}, enabled = true }) => ({
+    id,
+    templateId: 'reminder',
+    trigger: { type: 'once', fireAt },
+    params: {
+      message: 'resume the exact held work',
+      targetCatId: 'codex-sol',
+      triggerUserId: 'user-1',
+      holdLifecycle: {
+        mode: 'timer',
+        status: 'active',
+        await: {
+          v: 1,
+          generation: 1,
+          subjectRef: `timer:${id}`,
+          ownerFence: { kind: 'containing_task', generation: 1 },
+          baseline: { kind: 'timer', capturedAt: fireAt - 1_000, fireAt },
+          continuation: {
+            when: [{ kind: 'timer_elapsed' }],
+            // biome-ignore lint/suspicious/noThenProperty: F280 continuation contract field.
+            then: 'resume the exact held work',
+          },
+          autoRenew: false,
+          expiresAt: slaUntilMs,
+          createdAt: fireAt - 1_000,
+          provenance: 'explicit_registration',
+        },
+        waitSourceRef: {
+          kind: 'task',
+          value: 'task-1',
+          expectedSignal: 'managed_command_complete',
+          slaUntilMs,
+        },
+        wakeAt: fireAt,
+        createdBy: 'hold-ball:codex-sol',
+        ...lifecycleOverrides,
+      },
+    },
+    display: { label: '持球唤醒 (codex-sol)', category: 'system' },
+    deliveryThreadId: 'thread-hold',
+    enabled,
+    createdBy: 'hold-ball:codex-sol',
+    createdAt: new Date(fireAt - 1_000).toISOString(),
+  });
+
+  it('retires a timer hold missing owner provenance as retired_invalid with zero delivery', async () => {
+    const [{ TaskRunnerV2 }, { reminderTemplate }] = await Promise.all([
+      import('../../dist/infrastructure/scheduler/TaskRunnerV2.js'),
+      import('../../dist/infrastructure/scheduler/templates/reminder.js'),
+    ]);
+    const deliveries = [];
+    const runner = new TaskRunnerV2({
+      logger: silentLogger,
+      ledger,
+      dynamicTaskStore,
+      deliver: async (input) => {
+        deliveries.push(input);
+        return 'unexpected';
+      },
+    });
+    const now = Date.now();
+    const fireAt = now - 60_000;
+    const id = 'hold-ball-no-provenance';
+    // Insert WITHOUT the strict provenance argument — provenance normalizes to 'unknown'
+    dynamicTaskStore.insert(makeTimerHoldDef({ id, fireAt, slaUntilMs: now + 60_000 }));
+    assert.equal(dynamicTaskStore.getPrivateOwnerAuthProvenance(id), 'unknown');
+
+    assert.equal(runner.hydrateDynamic(dynamicTaskStore, { get: () => reminderTemplate }), 0);
+    runner.start();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.equal(deliveries.length, 0, 'invalid timer hold must never deliver');
+    assert.ok(!runner.getRegisteredTasks().includes(id));
+    const rows = ledger.query(id, 10);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].outcome, 'SKIP_MISSED_WINDOW');
+    const tombstone = dynamicTaskStore.getById(id);
+    assert.ok(tombstone, 'invalid hold disposition must stay durable');
+    assert.equal(tombstone.enabled, false);
+    assert.equal(tombstone.params.holdLifecycle.status, 'retired_invalid');
+    assert.equal(tombstone.params.holdLifecycle.dispositionReason, 'owner_auth_unknown');
+    assert.equal(typeof tombstone.params.holdLifecycle.retiredAt, 'number');
+    runner.stop();
+  });
+
+  it('re-arms a recoverable timer hold after RUN_FAILED and fires exactly once after recovery', async () => {
+    const [{ TaskRunnerV2 }, { reminderTemplate }] = await Promise.all([
+      import('../../dist/infrastructure/scheduler/TaskRunnerV2.js'),
+      import('../../dist/infrastructure/scheduler/templates/reminder.js'),
+    ]);
+    const logMessages = [];
+    const capturingLogger = { info: (msg) => logMessages.push(msg), error: noop };
+    const deliveries = [];
+    const triggers = [];
+    let triggerOutcome = 'full';
+    const runner = new TaskRunnerV2({
+      logger: capturingLogger,
+      ledger,
+      dynamicTaskStore,
+      deliver: async (input) => {
+        deliveries.push(input);
+        return `message-${deliveries.length}`;
+      },
+      invokeTrigger: {
+        async trigger(...args) {
+          triggers.push(args);
+          return triggerOutcome;
+        },
+      },
+    });
+    const now = Date.now();
+    const fireAt = now - 60_000;
+    const slaUntilMs = now + 60_000;
+    const id = 'hold-ball-not-admitted-retry';
+    dynamicTaskStore.insert(makeTimerHoldDef({ id, fireAt, slaUntilMs }), 'strict');
+
+    assert.equal(runner.hydrateDynamic(dynamicTaskStore, { get: () => reminderTemplate }), 1);
+    runner.start();
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    // First fire: wake was not admitted (trigger returned 'full') → RUN_FAILED, not terminal
+    assert.equal(deliveries.length, 1);
+    assert.equal(triggers.length, 1);
+    let rows = ledger.query(id, 10);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].outcome, 'RUN_FAILED');
+    assert.match(rows[0].error_summary, /not admitted/);
+    assert.ok(
+      logMessages.some((m) => m.includes(id) && m.includes('RUN_FAILED') && m.includes('retrying in 30s')),
+      'recoverable failure should re-arm with the ~30s retry timer',
+    );
+    assert.ok(runner.timers.has(id), 'retry timer should be armed');
+    assert.ok(runner.getRegisteredTasks().includes(id), 'failed hold must stay registered, not retired');
+    const current = dynamicTaskStore.getById(id);
+    assert.equal(current.enabled, true, 'failed hold must not be tombstoned yet');
+    assert.equal(current.params.holdLifecycle.status, 'active');
+
+    // Recovery: wake admitted now → re-arm to fire immediately → single durable fired disposition
+    triggerOutcome = 'enqueued';
+    runner.rescheduleOnce(id, Date.now());
+    await new Promise((resolve) => setTimeout(resolve, 120));
+
+    assert.equal(triggers.length, 2);
+    assert.equal(deliveries.length, 2, 're-fire re-delivers through the same idempotent wake message');
+    assert.ok(deliveries.every((input) => input.idempotencyKey === `hold-wake:${id}`));
+    rows = ledger.query(id, 10);
+    assert.equal(rows[0].outcome, 'RUN_DELIVERED');
+    const tombstone = dynamicTaskStore.getById(id);
+    assert.ok(tombstone, 'timer hold disposition remains durable');
+    assert.equal(tombstone.enabled, false);
+    assert.equal(tombstone.params.holdLifecycle.status, 'fired');
+    assert.equal(tombstone.params.holdLifecycle.wakeAt, fireAt);
+    assert.equal(tombstone.params.holdLifecycle.scheduledAt, fireAt);
+    assert.ok(tombstone.params.holdLifecycle.latenessMs >= 60_000);
+    assert.ok(tombstone.params.holdLifecycle.firedAt >= fireAt);
+    assert.ok(!runner.getRegisteredTasks().includes(id), 'fired hold must leave the runtime');
+    runner.stop();
+  });
+
+  it('does not replay a consumed fired tombstone on hydrate', async () => {
+    const [{ TaskRunnerV2 }, { reminderTemplate }] = await Promise.all([
+      import('../../dist/infrastructure/scheduler/TaskRunnerV2.js'),
+      import('../../dist/infrastructure/scheduler/templates/reminder.js'),
+    ]);
+    const deliveries = [];
+    const runner = new TaskRunnerV2({
+      logger: silentLogger,
+      ledger,
+      dynamicTaskStore,
+      deliver: async (input) => {
+        deliveries.push(input);
+        return 'unexpected';
+      },
+    });
+    const now = Date.now();
+    const fireAt = now - 120_000;
+    const id = 'hold-ball-consumed-fired';
+    dynamicTaskStore.insert(
+      makeTimerHoldDef({
+        id,
+        fireAt,
+        slaUntilMs: now - 60_000,
+        enabled: false,
+        lifecycleOverrides: {
+          status: 'fired',
+          firedAt: now - 60_000,
+          scheduledAt: fireAt,
+          latenessMs: 60_000,
+        },
+      }),
+      'strict',
+    );
+
+    assert.equal(runner.hydrateDynamic(dynamicTaskStore, { get: () => reminderTemplate }), 0);
+    runner.start();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.equal(deliveries.length, 0, 'consumed hold must not deliver again');
+    assert.ok(!runner.getRegisteredTasks().includes(id));
+    assert.equal(ledger.query(id, 10).length, 0, 'consumed tombstone must not produce new ledger rows');
+    const tombstone = dynamicTaskStore.getById(id);
+    assert.ok(tombstone, 'fired tombstone must stay readable, not resurrected or deleted');
+    assert.equal(tombstone.enabled, false);
+    assert.equal(tombstone.params.holdLifecycle.status, 'fired');
+    assert.equal(tombstone.params.holdLifecycle.scheduledAt, fireAt);
+    assert.equal(tombstone.params.holdLifecycle.latenessMs, 60_000);
+    runner.stop();
+  });
+
+  it('cleans up a still-enabled hold retired_by_replacement while offline without delivery', async () => {
+    const [{ TaskRunnerV2 }, { reminderTemplate }] = await Promise.all([
+      import('../../dist/infrastructure/scheduler/TaskRunnerV2.js'),
+      import('../../dist/infrastructure/scheduler/templates/reminder.js'),
+    ]);
+    const deliveries = [];
+    const runner = new TaskRunnerV2({
+      logger: silentLogger,
+      ledger,
+      dynamicTaskStore,
+      deliver: async (input) => {
+        deliveries.push(input);
+        return 'unexpected';
+      },
+    });
+    const now = Date.now();
+    const fireAt = now - 60_000;
+    const id = 'hold-ball-replaced-offline';
+    dynamicTaskStore.insert(
+      makeTimerHoldDef({
+        id,
+        fireAt,
+        slaUntilMs: now + 60_000,
+        lifecycleOverrides: { status: 'retired_by_replacement' },
+      }),
+      'strict',
+    );
+
+    assert.equal(runner.hydrateDynamic(dynamicTaskStore, { get: () => reminderTemplate }), 0);
+    runner.start();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    assert.equal(deliveries.length, 0, 'replaced hold must not deliver');
+    assert.ok(!runner.getRegisteredTasks().includes(id));
+    const rows = ledger.query(id, 10);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].outcome, 'SKIP_MISSED_WINDOW');
+    assert.equal(
+      dynamicTaskStore.getById(id),
+      null,
+      'inactive hold should settle into the cleanup disposition (removed from store)',
+    );
     runner.stop();
   });
 });

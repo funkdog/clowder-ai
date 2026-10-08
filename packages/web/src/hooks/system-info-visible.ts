@@ -5,67 +5,246 @@ export interface VisibleSystemInfoResult {
   variant: VisibleSystemInfoVariant;
 }
 
-const INTERNAL_SYSTEM_INFO_TELEMETRY_TYPES = new Set([
-  'mcp_server_status',
-  'resume_failure_stats',
-  'strategy_allow_compress',
-  'tool_activity',
-  'turn_duration', // F230 P2: PTY carrier terminal event — silently consumed, never shown as bubble
-  'silent_completion', // Internal diagnostic — cat completed without text; noise for users
-  'context_briefing', // F148: Internal routing context for cats, not user-facing
-]);
+type ResolveCatName = (catId: string) => string;
 
-export function isInternalSystemInfoTelemetry(parsed: Record<string, unknown>): boolean {
-  return typeof parsed?.type === 'string' && INTERNAL_SYSTEM_INFO_TELEMETRY_TYPES.has(parsed.type);
+const identityCatName: ResolveCatName = (catId) => catId;
+
+/**
+ * Structured `system_info` is a protocol envelope, not display copy. Unknown envelopes
+ * must therefore fail closed: a producer adding a new internal event cannot make its
+ * JSON user-visible merely because this client has no projector yet. Plain-text
+ * `system_info` remains on the legacy visible-notice path.
+ */
+export function isSystemInfoProtocolPayload(parsed: unknown): parsed is Record<string, unknown> {
+  return (
+    typeof parsed === 'object' &&
+    parsed !== null &&
+    !Array.isArray(parsed) &&
+    typeof (parsed as Record<string, unknown>).type === 'string'
+  );
 }
 
-function formatPingpongTerminated(parsed: Record<string, unknown>): VisibleSystemInfoResult {
+function formatPingpongTerminated(
+  parsed: Record<string, unknown>,
+  resolveCatName: ResolveCatName,
+): VisibleSystemInfoResult {
   const fromCatId = typeof parsed.fromCatId === 'string' ? parsed.fromCatId : 'unknown';
   const targetCatId = typeof parsed.targetCatId === 'string' ? parsed.targetCatId : 'unknown';
   const pairCount = typeof parsed.pairCount === 'number' ? parsed.pairCount : undefined;
   const rounds = pairCount ? ` ${pairCount} 轮` : '';
   return {
-    content: `🏓 ${fromCatId} ↔ ${targetCatId} 已连续互相 @${rounds}，链路已熔断。`,
+    content: `🏓 ${resolveCatName(fromCatId)} ↔ ${resolveCatName(targetCatId)} 已连续互相 @${rounds}，链路已熔断。`,
     variant: 'info',
   };
 }
 
-function formatRoleRejected(parsed: Record<string, unknown>): VisibleSystemInfoResult {
+/**
+ * F086/F216: "your N line-start @ were scheduled SERIALLY, here is the real order".
+ * Without this branch formatVisibleSystemInfo returns null and the UI prints the raw JSON payload —
+ * a notice nobody can read is not a notice (砚砚 R1 P1).
+ */
+function formatMultiTargetSerialized(
+  parsed: Record<string, unknown>,
+  resolveCatName: ResolveCatName,
+): VisibleSystemInfoResult {
+  const message = typeof parsed.message === 'string' ? parsed.message : '';
+  if (message) return { content: `🔀 ${message}`, variant: 'info' };
+  const order = Array.isArray(parsed.order) ? parsed.order.filter((c): c is string => typeof c === 'string') : [];
+  const legs = order.map((catId, i) => `第 ${i + 1} 棒 ${resolveCatName(catId)}`).join(' → ');
+  return {
+    content: `🔀 本回合 ${order.length} 个行首 @ 目标已按串行调度：${legs}。需要并行请用 cat_cafe_multi_mention(mode="parallel")。`,
+    variant: 'info',
+  };
+}
+
+function formatRoleRejected(parsed: Record<string, unknown>, resolveCatName: ResolveCatName): VisibleSystemInfoResult {
   const reason = typeof parsed.reason === 'string' ? parsed.reason : '';
   const targetCatId = typeof parsed.targetCatId === 'string' ? parsed.targetCatId : 'unknown';
   const action = typeof parsed.action === 'string' ? parsed.action : '当前';
   return {
-    content: reason || `⛔ @${targetCatId} 不接受 ${action} 任务。`,
+    content: reason || `⛔ ${resolveCatName(targetCatId)} 不接受 ${action} 任务。`,
     variant: 'info',
   };
 }
 
-export function formatVisibleSystemInfo(parsed: Record<string, unknown>): VisibleSystemInfoResult | null {
-  if (parsed?.type === 'a2a_followup_available') {
-    const mentions = parsed.mentions as Array<{ catId: string; mentionedBy: string }>;
-    return {
-      content: mentions.map((m) => `${m.mentionedBy} @了 ${m.catId}`).join('、'),
-      variant: 'a2a_followup',
-    };
-  }
+const ROUTING_REASON_COPY: Readonly<Record<string, string>> = {
+  routing_context_unavailable: '路由上下文暂时无法完整读取',
+  routing_target_not_in_catalog: '目标不在当前成员目录中',
+  routing_signal_expired: '上次限制已到期，尚待实际调用确认恢复',
+  quota_exhausted: '近期遇到额度限制',
+  authentication_rejected: '近期认证未通过',
+  provider_unreachable: '近期无法连接服务',
+  provider_timeout: '近期调用超时',
+};
 
-  if (parsed?.type === 'warning') {
-    const warningText = typeof parsed.message === 'string' ? parsed.message : '';
+function routingReasonCopy(reason: unknown): string {
+  if (typeof reason !== 'object' || reason === null) return '';
+  const record = reason as Record<string, unknown>;
+  const code = typeof record.code === 'string' ? record.code : '';
+  const stableCopy = ROUTING_REASON_COPY[code];
+  if (stableCopy) return stableCopy;
+  return typeof record.summary === 'string' ? (ROUTING_REASON_COPY[record.summary] ?? record.summary) : '';
+}
+
+function formatRoutingPreflight(
+  parsed: Record<string, unknown>,
+  resolveCatName: ResolveCatName,
+): VisibleSystemInfoResult | null {
+  if (parsed.type !== 'routing_preflight') return null;
+  const target =
+    typeof parsed.target === 'object' && parsed.target !== null
+      ? (parsed.target as Record<string, unknown>)
+      : undefined;
+  if (!target) return null;
+  const targetCatId = typeof target?.targetCatId === 'string' ? target.targetCatId : undefined;
+  const disposition = target?.disposition;
+  if (!targetCatId || disposition === 'allowed') return null;
+  if (disposition !== 'warned' && disposition !== 'rejected') return null;
+  const reasons = Array.isArray(target.reasons) ? target.reasons.map(routingReasonCopy).filter(Boolean) : [];
+  const reasonCopy = reasons.length > 0 ? [...new Set(reasons)].slice(0, 2).join('；') : '近期供给状态需要留意';
+  const retryAt =
+    typeof target.automaticRetryAt === 'number' && Number.isFinite(target.automaticRetryAt)
+      ? target.automaticRetryAt
+      : undefined;
+  const actionCopy =
+    disposition === 'rejected'
+      ? `本次未执行。${retryAt !== undefined ? `自动调用可在 ${new Date(retryAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 后重新尝试。` : ''}`
+      : target.ownerAttempt === true
+        ? '这次仍会按你的选择尝试。'
+        : '本次仍按原目标尝试。';
+  return {
+    content: `${resolveCatName(targetCatId)}：${reasonCopy}。${actionCopy}`,
+    variant: 'info',
+  };
+}
+
+function formatA2AFollowupAvailable(
+  parsed: Record<string, unknown>,
+  resolveCatName: ResolveCatName,
+): VisibleSystemInfoResult | null {
+  if (parsed?.type !== 'a2a_followup_available') return null;
+
+  const mentions = parsed.mentions as Array<{ catId: string; mentionedBy: string }>;
+  return {
+    content: mentions.map((m) => `${resolveCatName(m.mentionedBy)} @了 ${resolveCatName(m.catId)}`).join('、'),
+    variant: 'a2a_followup',
+  };
+}
+
+function formatWarning(parsed: Record<string, unknown>): VisibleSystemInfoResult | null {
+  if (parsed?.type !== 'warning') return null;
+
+  const warningText = typeof parsed.message === 'string' ? parsed.message : '';
+  return {
+    content: warningText ? `⚠️ ${warningText}` : '⚠️ Warning',
+    variant: 'info',
+  };
+}
+
+function formatCloudBridgeStatus(parsed: Record<string, unknown>): VisibleSystemInfoResult | null {
+  if (parsed?.type !== 'cloud_bridge_status') return null;
+  const message = typeof parsed.message === 'string' ? parsed.message : '';
+  if (!message) return null;
+  return { content: message, variant: 'info' };
+}
+
+export function formatSessionSealRequested(
+  parsed: Record<string, unknown>,
+  resolveCatName: ResolveCatName = identityCatName,
+): VisibleSystemInfoResult | null {
+  if (parsed?.type !== 'session_seal_requested') return null;
+
+  const catId = typeof parsed.catId === 'string' ? parsed.catId : 'unknown';
+  const sessionSeq = typeof parsed.sessionSeq === 'number' ? parsed.sessionSeq : '?';
+  const continuityDiagnostics =
+    typeof parsed.continuityDiagnostics === 'object' && parsed.continuityDiagnostics !== null
+      ? (parsed.continuityDiagnostics as Record<string, unknown>)
+      : undefined;
+  if (continuityDiagnostics?.source === 'runtime_replacement') {
     return {
-      content: warningText ? `⚠️ ${warningText}` : '⚠️ Warning',
+      content: `${resolveCatName(catId)} 的会话 #${sessionSeq} 已自动接力；新会话已在本轮继续运行`,
       variant: 'info',
     };
   }
+  const healthSnapshot =
+    typeof parsed.healthSnapshot === 'object' && parsed.healthSnapshot !== null
+      ? (parsed.healthSnapshot as Record<string, unknown>)
+      : undefined;
+  const fillRatio = healthSnapshot?.fillRatio;
+  const pct = typeof fillRatio === 'number' ? Math.round(fillRatio * 100) : '?';
 
-  if (parsed?.type === 'a2a_pingpong_terminated') {
-    return formatPingpongTerminated(parsed);
-  }
+  return {
+    content: `${resolveCatName(catId)} 的会话 #${sessionSeq} 已封存（上下文 ${pct}%），下次调用将自动创建新会话`,
+    variant: 'info',
+  };
+}
 
-  if (parsed?.type === 'a2a_role_rejected') {
-    return formatRoleRejected(parsed);
-  }
+export function formatGovernanceBlocked(parsed: Record<string, unknown>): VisibleSystemInfoResult | null {
+  if (parsed?.type !== 'governance_blocked') return null;
 
-  return null;
+  const projectPath = typeof parsed.projectPath === 'string' ? parsed.projectPath : '';
+  const reasonKind = typeof parsed.reasonKind === 'string' ? parsed.reasonKind : 'needs_bootstrap';
+
+  return {
+    content: `项目 ${projectPath} ${reasonKind === 'needs_bootstrap' ? '尚未初始化治理' : '治理状态异常'}`,
+    variant: 'info',
+  };
+}
+
+function formatModeSwitchProposal(
+  parsed: Record<string, unknown>,
+  resolveCatName: ResolveCatName,
+): VisibleSystemInfoResult | null {
+  if (parsed?.type !== 'mode_switch_proposal') return null;
+
+  const by = typeof parsed.proposedBy === 'string' ? parsed.proposedBy : '猫猫';
+  return {
+    content: `${resolveCatName(by)} 提议切换到 ${parsed.proposedMode} 模式。`,
+    variant: 'info',
+  };
+}
+
+function formatInvocationPreempted(parsed: Record<string, unknown>): VisibleSystemInfoResult | null {
+  if (parsed?.type !== 'invocation_preempted') return null;
+
+  return {
+    content: 'This response was superseded by a newer request.',
+    variant: 'info',
+  };
+}
+
+function formatSilentCompletion(
+  parsed: Record<string, unknown>,
+  resolveCatName: ResolveCatName,
+  fallbackCatId?: string,
+): VisibleSystemInfoResult | null {
+  if (parsed?.type !== 'silent_completion') return null;
+
+  const detail = typeof parsed.detail === 'string' ? parsed.detail : '';
+  const catId = typeof parsed.catId === 'string' ? parsed.catId : (fallbackCatId ?? 'Cat');
+  return {
+    content: detail || `${resolveCatName(catId)} completed without a text response.`,
+    variant: 'info',
+  };
+}
+
+export function formatVisibleSystemInfo(
+  parsed: Record<string, unknown>,
+  resolveCatName: ResolveCatName = identityCatName,
+  fallbackCatId?: string,
+): VisibleSystemInfoResult | null {
+  return (
+    formatA2AFollowupAvailable(parsed, resolveCatName) ??
+    formatCloudBridgeStatus(parsed) ??
+    formatWarning(parsed) ??
+    (parsed?.type === 'a2a_pingpong_terminated' ? formatPingpongTerminated(parsed, resolveCatName) : null) ??
+    (parsed?.type === 'a2a_multi_target_serialized' ? formatMultiTargetSerialized(parsed, resolveCatName) : null) ??
+    (parsed?.type === 'a2a_role_rejected' ? formatRoleRejected(parsed, resolveCatName) : null) ??
+    formatRoutingPreflight(parsed, resolveCatName) ??
+    formatModeSwitchProposal(parsed, resolveCatName) ??
+    formatInvocationPreempted(parsed) ??
+    formatSilentCompletion(parsed, resolveCatName, fallbackCatId)
+  );
 }
 
 /**

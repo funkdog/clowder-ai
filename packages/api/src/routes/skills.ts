@@ -15,7 +15,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { readCapabilitiesConfig } from '../config/capabilities/capability-orchestrator.js';
 import { readMountRules } from '../config/mount/mount-rules-store.js';
 import { parseManifestSkillMeta, resolveSkillMcpStatuses, type SkillMcpDependency } from '../skills/skill-meta.js';
-import { validateProjectPath } from '../utils/project-path.js';
+import { redirectRuntimeProjectPath, resolvePersistentProjectPath } from '../utils/persistent-project-path.js';
 import { resolveUserId } from '../utils/request-identity.js';
 import {
   buildMountPointDirCandidates,
@@ -45,12 +45,13 @@ interface SkillEntry {
   category: string;
   trigger: string;
   description?: string;
-  source: 'cat-cafe' | 'external';
+  source: 'cat-cafe' | 'external' | 'plugin';
   globalEnabled: boolean;
   mountPaths: string[];
   mounts: SkillMount;
   mountHealth: SkillMountHealth;
   requiresMcp?: SkillMcpDependency[];
+  pluginId?: string;
 }
 
 interface MountIssue {
@@ -95,11 +96,7 @@ async function loadDisabledCatCafeSkillNames(projectRoot: string): Promise<Set<s
   return new Set(
     config?.capabilities
       .filter(
-        (cap) =>
-          cap.type === 'skill' &&
-          cap.source === 'cat-cafe' &&
-          !cap.pluginId &&
-          (cap.globalEnabled ?? cap.enabled) === false,
+        (cap) => cap.type === 'skill' && cap.source === 'cat-cafe' && (cap.globalEnabled ?? cap.enabled) === false,
       )
       .map((cap) => cap.id) ?? [],
   );
@@ -110,7 +107,7 @@ function collectCatCafeSkillPolicy(
 ): Map<string, CatCafeSkillPolicyInfo> {
   const lookup = new Map<string, CatCafeSkillPolicyInfo>();
   for (const cap of config?.capabilities ?? []) {
-    if (cap.type !== 'skill' || cap.source !== 'cat-cafe' || cap.pluginId) continue;
+    if (cap.type !== 'skill' || cap.source !== 'cat-cafe') continue;
     lookup.set(cap.id, {
       source: 'cat-cafe',
       enabled: cap.globalEnabled ?? cap.enabled,
@@ -123,6 +120,14 @@ function collectCatCafeSkillPolicy(
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: GET /api/skills builds full skill inventory
 export const skillsRoutes: FastifyPluginAsync<SkillsRouteOptions> = async (app, opts) => {
   const CAT_CAFE_SKILLS_SRC = opts.skillsSourceDir ?? resolveSkillsSourceDir();
+  const sourceRepoRoot = dirname(CAT_CAFE_SKILLS_SRC);
+  const [defaultProjectRoot, mainProjectRoot] = await Promise.all([
+    redirectRuntimeProjectPath(sourceRepoRoot),
+    redirectRuntimeProjectPath(opts.mainProjectRoot ?? (await resolveMainRepoPath())),
+  ]);
+  if (!defaultProjectRoot || !mainProjectRoot) {
+    throw new Error('Unable to resolve persistent project roots for skills');
+  }
 
   app.get('/api/skills', async (request, reply) => {
     const userId = resolveUserId(request);
@@ -131,11 +136,11 @@ export const skillsRoutes: FastifyPluginAsync<SkillsRouteOptions> = async (app, 
       return { error: 'Identity required (session cookie or X-Cat-Cafe-User header)' };
     }
     const skillsSrc = CAT_CAFE_SKILLS_SRC;
-    const repoRoot = dirname(skillsSrc);
+    const repoRoot = defaultProjectRoot;
     const query = request.query as { projectPath?: string };
     let projectRoot = repoRoot;
     if (query.projectPath) {
-      const validated = await validateProjectPath(query.projectPath);
+      const validated = await resolvePersistentProjectPath(query.projectPath);
       if (!validated) {
         reply.status(400);
         return { error: 'Invalid project path: must be an existing directory under allowed roots' };
@@ -143,7 +148,7 @@ export const skillsRoutes: FastifyPluginAsync<SkillsRouteOptions> = async (app, 
       projectRoot = validated;
     }
     const home = homedir();
-    const mainRepo = opts.mainProjectRoot ?? (await resolveMainRepoPath());
+    const mainRepo = mainProjectRoot;
     const mountRules = await readMountRules(projectRoot, mainRepo);
     const enabledMountPoints = STANDARD_MOUNT_POINT_IDS.filter((id) => mountRules.mountPoints[id].enabled);
     const mountPointDirCandidates = buildMountPointDirCandidates(projectRoot, home, mountRules);
@@ -264,12 +269,69 @@ export const skillsRoutes: FastifyPluginAsync<SkillsRouteOptions> = async (app, 
     }
     const skills = ordered.map((n) => mountLookup.get(n)!).filter(Boolean);
 
+    // Plugin-provided skills: discover from capabilities.json entries with pluginId + skillsSource.
+    // Collected into a separate array and sorted by (pluginId, name) for deterministic order
+    // across projects — Promise.all completion order is non-deterministic (#F228 ordering fix).
+    const pluginCaps = (skillsCapConfig?.capabilities ?? []).filter(
+      (c) => c.type === 'skill' && c.pluginId && c.skillsSource && !sourceSet.has(c.id),
+    );
+    const pluginSkills: SkillEntry[] = await Promise.all(
+      pluginCaps.map(async (cap): Promise<SkillEntry | null> => {
+        const skillsSource = cap.skillsSource;
+        if (!skillsSource) return null;
+        // F228: resolve skillsSource against the project that owns the capability entry.
+        // skillsSource is stored as relative(projectDir, sourceDir) in that project's
+        // capabilities.json, so it must be resolved against projectRoot.  For the main
+        // project projectRoot === repoRoot, so there's no behavioral change for
+        // instance-level plugins.
+        const src = resolve(projectRoot, skillsSource);
+        const [claude, codex, gemini, kimi] = await Promise.all([
+          isSkillMountedAtPoint(mountPointDirCandidates.claude, src, cap.id, mainSkillsSrc),
+          isSkillMountedAtPoint(mountPointDirCandidates.codex, src, cap.id, mainSkillsSrc),
+          isSkillMountedAtPoint(mountPointDirCandidates.gemini, src, cap.id, mainSkillsSrc),
+          isSkillMountedAtPoint(mountPointDirCandidates.kimi, src, cap.id, mainSkillsSrc),
+        ]);
+        const mounts: SkillMount = { claude, codex, gemini, kimi };
+        // F228: mountPaths-first — mountPaths is the sole truth for active state
+        const declaredMountPaths = Array.isArray(cap.mountPaths) ? new Set(cap.mountPaths) : null;
+        const pluginDisabled = declaredMountPaths !== null ? declaredMountPaths.size === 0 : false;
+        const requiredMountPoints = pluginDisabled
+          ? []
+          : declaredMountPaths
+            ? enabledMountPoints.filter((id) => declaredMountPaths.has(id))
+            : enabledMountPoints;
+        const mountedCount = requiredMountPoints.filter((id) => mounts[id]).length;
+        const allIds = [...enabledMountPoints, ...customMountTargets.map((t) => t.id)];
+        return {
+          name: cap.id,
+          category: '插件',
+          trigger: '',
+          source: 'cat-cafe',
+          globalEnabled: declaredMountPaths !== null ? declaredMountPaths.size > 0 : (cap.globalEnabled ?? cap.enabled),
+          mountPaths: cap.mountPaths ?? [],
+          pluginId: cap.pluginId,
+          mounts,
+          mountHealth: {
+            enabledMountPoints: allIds,
+            mountedCount,
+            requiredCount: requiredMountPoints.length,
+            allMounted: mountedCount === requiredMountPoints.length,
+          },
+        };
+      }),
+    ).then((results) =>
+      results
+        .filter((r): r is SkillEntry => r !== null)
+        .sort((a, b) => (a.pluginId ?? '').localeCompare(b.pluginId ?? '') || a.name.localeCompare(b.name)),
+    );
+    skills.push(...pluginSkills);
+
     // Registration consistency check
     const capConfig = await readCapabilitiesConfig(projectRoot);
     const sourceNames = new Set(sourceSkills);
     const capSkillNames = new Set(
       capConfig?.capabilities
-        .filter((c) => c.type === 'skill' && c.source === 'cat-cafe' && !c.pluginId)
+        .filter((c) => c.type === 'skill' && c.source === 'cat-cafe' && !c.skillsSource)
         .map((c) => c.id) ?? [],
     );
     const unregistered = sourceSkills.filter((n) => !capSkillNames.has(n));

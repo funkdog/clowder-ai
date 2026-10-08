@@ -39,6 +39,14 @@ function memLog() {
       events.push(e);
       return { appended: true, sequence: events.length - 1 };
     },
+    appendFenced: async (e, expectedSequence) => {
+      if (seen.has(e.sourceEventId)) return { outcome: 'duplicate' };
+      const actualSequence = events.filter((event) => event.subjectKey === e.subjectKey).length;
+      if (actualSequence !== expectedSequence) return { outcome: 'conflict', actualSequence };
+      seen.add(e.sourceEventId);
+      events.push(e);
+      return { outcome: 'appended', sequence: expectedSequence };
+    },
     read: async (sk) => events.filter((e) => e.subjectKey === sk),
     listSubjects: async () => [...new Set(events.map((e) => e.subjectKey))],
   };
@@ -139,6 +147,25 @@ describe('ball-custody-events — PR3 source builders', () => {
     assert.strictEqual(buildTaskDoneEvent({ taskId: 'task1', at: 4000 }).sourceEventId, 'task:task1:done');
   });
 
+  it('entrusted status IDs are stable per owner revision and distinct from legacy timestamps', () => {
+    for (const build of [
+      (revision, at) =>
+        buildTaskBlockedEvent({
+          taskId: 'task1',
+          threadId: 'thr1',
+          blockedSinceAt: at,
+          entrustedWorkRevision: revision,
+        }),
+      (revision, at) => buildTaskUnblockedEvent({ taskId: 'task1', at, entrustedWorkRevision: revision }),
+    ]) {
+      const first = build(2, 1000);
+      assert.equal(build(2, 2000).sourceEventId, first.sourceEventId);
+      assert.notEqual(build(3, 1000).sourceEventId, first.sourceEventId);
+      assert.notEqual(build(undefined, 2).sourceEventId, first.sourceEventId);
+      assert.equal(first.at, 1000);
+    }
+  });
+
   it('构造 invocation lifecycle events（lastScanAt 保留在 died payload）', () => {
     const started = buildInvocationStartedEvent({ invocationId: 'inv1', threadId: 'thr1', catId: 'codex', at: 1000 });
     assert.strictEqual(started.sourceEventId, 'inv:inv1:started');
@@ -221,6 +248,17 @@ describe('BallCustodyIngest.record — append + appended:true guard → apply', 
     const p = await store.get('ball:thread:thr1');
     assert.strictEqual(p.state, 'active');
     assert.strictEqual(p.holder, 'codex');
+  });
+
+  it('recordFenced does not append or project after an intervening event', async () => {
+    const { ingest, store } = setup();
+    await ingest.record(buildHandedEvent({ toCatId: 'opus', threadId: 'thr1', messageId: 'm1', at: 1 }));
+    const result = await ingest.recordFenced(
+      buildHandedEvent({ fromCatId: 'opus', toCatId: 'codex', threadId: 'thr1', messageId: 'm2', at: 2 }),
+      0,
+    );
+    assert.deepStrictEqual(result, { outcome: 'conflict', actualSequence: 1 });
+    assert.strictEqual((await store.get('ball:thread:thr1')).holder, 'opus');
   });
 });
 

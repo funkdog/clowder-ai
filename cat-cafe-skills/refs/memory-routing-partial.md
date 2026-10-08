@@ -7,17 +7,19 @@
 
 ## 入口决策表
 
+已有可直接读取的文件路径、消息坐标或 URI 时，使用对应 reader；只有定位来源或补充缺口时才选检索入口。F 号 / ADR 号等实体标识用于定位或看关系，不等同于已经拿到可读原文。
+
 按场景选记忆入口（F188 KD-9 单 PR 策略）：
 
 | 场景 | 入口 | 何时用 |
 |------|------|--------|
-| **精确 anchor / 看关系** | `cat_cafe_graph_resolve(query, depth?, relations?)` | 已知 `F186` / `ADR-019` 等 anchor 看周边引用；或模糊词→候选列表 |
-| **零先验 / 扫一眼最近** | `cat_cafe_list_recent(scope, since, limit?)` | 不知道找什么、"我记得最近讨论过 X" / 压缩后回顾 |
+| **实体定位 / 看关系** | `cat_cafe_graph_resolve(query, depth?, relations?)` | 只有 `F186` / `ADR-019` 等标识需定位原文，或要看周边关系 |
+| **零先验 / 扫一眼最近** | `cat_cafe_list_recent(scope, since, limit?)` | 没有可用来源或概念关键词，需按时间找线索 |
 | **语义 / 模糊找** | `cat_cafe_search_evidence(query, mode?, scope?)` | 有概念/关键词需要语义召回；跨语言搜索 |
 
-⚠️ Session hook 已更新为三入口提示（F200）。**按场景选入口**——精确 anchor 走 graph 比 search 命中率高得多；零先验扫一眼用 recent 比反复盲搜 query 高效。
+Session hook 与此表保持同一口径。压缩恢复优先读取交接来源和本轮增量，再补缺口；不因发生压缩就把三个入口全跑一遍。
 
-## Cat Café 7-tool memory family（cross-reference）
+## Clowder AI 7-tool memory family（cross-reference）
 
 每个工具的 MCP description 都互相 cross-reference 这 7 个：
 

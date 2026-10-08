@@ -26,6 +26,8 @@ export interface AgentHookStatusResponse {
 
 interface UseAgentHookHealthOptions {
   enabled?: boolean;
+  /** When set, skill/MCP health targets the given project instead of the API server's cwd. */
+  projectPath?: string;
 }
 
 interface UseAgentHookHealthResult {
@@ -33,14 +35,24 @@ interface UseAgentHookHealthResult {
   loading: boolean;
   syncing: boolean;
   synced: boolean;
+  syncAttempted: boolean;
   error: string | null;
   refresh: () => Promise<void>;
   sync: () => Promise<void>;
 }
 
 let cachedHealth: AgentHookStatusResponse | null = null;
+let cachedProjectPath: string | undefined;
 let hasCachedHealth = false;
+let inFlightProjectPath: string | undefined;
 let inFlightStatus: Promise<AgentHookStatusResponse> | null = null;
+
+function cacheStatus(status: AgentHookStatusResponse, projectPath?: string): AgentHookStatusResponse {
+  cachedHealth = status;
+  cachedProjectPath = projectPath;
+  hasCachedHealth = true;
+  return status;
+}
 
 function isAgentHookStatusResponse(value: unknown): value is AgentHookStatusResponse {
   return (
@@ -51,22 +63,25 @@ function isAgentHookStatusResponse(value: unknown): value is AgentHookStatusResp
   );
 }
 
-async function readAgentHookStatus(): Promise<AgentHookStatusResponse> {
-  if (hasCachedHealth && cachedHealth) return cachedHealth;
-  if (inFlightStatus) return inFlightStatus;
+async function readAgentHookStatus(projectPath?: string): Promise<AgentHookStatusResponse> {
+  if (hasCachedHealth && cachedHealth && cachedProjectPath === projectPath) return cachedHealth;
+  if (inFlightStatus && inFlightProjectPath === projectPath) return inFlightStatus;
 
-  inFlightStatus = apiFetch('/api/agent-hooks/status')
+  const url = projectPath
+    ? `/api/agent-hooks/status?projectPath=${encodeURIComponent(projectPath)}`
+    : '/api/agent-hooks/status';
+
+  inFlightProjectPath = projectPath;
+  inFlightStatus = apiFetch(url)
     .then(async (res) => {
-      if (!res.ok) throw new Error(`agent hook status failed (${res.status})`);
+      if (!res.ok) {
+        throw new Error(`agent hook status failed (${res.status})`);
+      }
       const status = await res.json();
       if (!isAgentHookStatusResponse(status)) throw new Error('agent hook status response is invalid');
       return status;
     })
-    .then((status) => {
-      cachedHealth = status;
-      hasCachedHealth = true;
-      return status;
-    })
+    .then((status) => cacheStatus(status, projectPath))
     .finally(() => {
       inFlightStatus = null;
     });
@@ -74,14 +89,18 @@ async function readAgentHookStatus(): Promise<AgentHookStatusResponse> {
   return inFlightStatus;
 }
 
-async function postAgentHookSync(): Promise<AgentHookStatusResponse> {
-  const res = await apiFetch('/api/agent-hooks/sync', { method: 'POST' });
-  if (!res.ok) throw new Error(`agent hook sync failed (${res.status})`);
+async function postAgentHookSync(projectPath?: string): Promise<AgentHookStatusResponse> {
+  const res = await apiFetch('/api/agent-hooks/sync', {
+    method: 'POST',
+    headers: projectPath ? { 'Content-Type': 'application/json' } : undefined,
+    body: projectPath ? JSON.stringify({ projectPath }) : undefined,
+  });
+  if (!res.ok) {
+    throw new Error(`agent hook sync failed (${res.status})`);
+  }
   const status = await res.json();
   if (!isAgentHookStatusResponse(status)) throw new Error('agent hook sync response is invalid');
-  cachedHealth = status;
-  hasCachedHealth = true;
-  return status;
+  return cacheStatus(status, projectPath);
 }
 
 function errorMessage(error: unknown): string {
@@ -94,11 +113,17 @@ export function resetAgentHookHealthCacheForTests() {
   inFlightStatus = null;
 }
 
-export function useAgentHookHealth({ enabled = true }: UseAgentHookHealthOptions = {}): UseAgentHookHealthResult {
-  const [health, setHealth] = useState<AgentHookStatusResponse | null>(() => (hasCachedHealth ? cachedHealth : null));
+export function useAgentHookHealth({
+  enabled = true,
+  projectPath,
+}: UseAgentHookHealthOptions = {}): UseAgentHookHealthResult {
+  const [health, setHealth] = useState<AgentHookStatusResponse | null>(() =>
+    hasCachedHealth && cachedProjectPath === projectPath ? cachedHealth : null,
+  );
   const [loading, setLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [synced, setSynced] = useState(false);
+  const [syncAttempted, setSyncAttempted] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const applyStatus = useCallback(async (readStatus: () => Promise<AgentHookStatusResponse>) => {
@@ -115,33 +140,38 @@ export function useAgentHookHealth({ enabled = true }: UseAgentHookHealthOptions
   const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setSyncAttempted(false);
     cachedHealth = null;
     hasCachedHealth = false;
-    await applyStatus(readAgentHookStatus);
+    await applyStatus(() => readAgentHookStatus(projectPath));
     setLoading(false);
-  }, [applyStatus]);
+  }, [applyStatus, projectPath]);
 
   const sync = useCallback(async () => {
     setSyncing(true);
     setSynced(false);
+    setSyncAttempted(false);
     setError(null);
-    const status = await applyStatus(postAgentHookSync);
+    const status = await applyStatus(() => postAgentHookSync(projectPath));
+    setSyncAttempted(status !== null);
     setSynced(status?.status === 'configured');
     setSyncing(false);
-  }, [applyStatus]);
+  }, [applyStatus, projectPath]);
 
   useEffect(() => {
     if (!enabled) return;
     let cancelled = false;
 
-    if (hasCachedHealth) {
+    if (hasCachedHealth && cachedProjectPath === projectPath) {
       setHealth(cachedHealth);
       return;
     }
 
     setLoading(true);
     setError(null);
-    readAgentHookStatus()
+    setHealth(null);
+    setSyncAttempted(false);
+    readAgentHookStatus(projectPath)
       .then(
         (status) => {
           if (!cancelled) setHealth(status);
@@ -157,7 +187,7 @@ export function useAgentHookHealth({ enabled = true }: UseAgentHookHealthOptions
     return () => {
       cancelled = true;
     };
-  }, [enabled]);
+  }, [enabled, projectPath]);
 
-  return { health, loading, syncing, synced, error, refresh, sync };
+  return { health, loading, syncing, synced, syncAttempted, error, refresh, sync };
 }

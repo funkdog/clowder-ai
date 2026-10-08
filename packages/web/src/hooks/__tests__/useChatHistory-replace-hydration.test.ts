@@ -1,6 +1,7 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ThreadChatHistoryAdmissionProvider } from '@/components/thread-chat/ThreadChatRuntimeProvider';
 import type { ChatMessage, ThreadState } from '@/stores/chat-types';
 import { useChatStore } from '@/stores/chatStore';
 import { apiFetch } from '@/utils/api-client';
@@ -10,19 +11,23 @@ vi.mock('@/utils/api-client', () => ({
   apiFetch: vi.fn(),
 }));
 
-function HookHost({ threadId }: { threadId: string }) {
+function HookProbe({ threadId }: { threadId: string }) {
   useChatHistory(threadId);
   return null;
 }
 
-function makeThreadBState(cachedAssistantTs: number, overrides?: Partial<ReturnType<typeof buildThreadBState>>) {
+function HookHost({ threadId }: { threadId: string }) {
+  return React.createElement(ThreadChatHistoryAdmissionProvider, null, React.createElement(HookProbe, { threadId }));
+}
+
+function makeThreadBState(cachedAssistantTs: number, overrides?: Partial<ThreadState>): ThreadState {
   return {
     ...buildThreadBState(cachedAssistantTs),
     ...overrides,
   };
 }
 
-function buildThreadBState(cachedAssistantTs: number) {
+function buildThreadBState(cachedAssistantTs: number): ThreadState {
   return {
     messages: [
       {
@@ -161,6 +166,219 @@ describe('useChatHistory replace hydration', () => {
     };
   }
 
+  it('rehydrates the saved companion identity instead of replacing it with current selection', async () => {
+    const history = installDeferredHistoryResponse();
+    mountReplaceHydrationThread(makeThreadBState(Date.now() - 1000));
+    await history.waitUntilPending();
+    const identity = {
+      v: 1,
+      name: '猫猫球',
+      partner: { catId: 'fable-5', displayName: '宪宪', skin: 'xianxian-codex' },
+      live: { catId: 'codex6-sol', displayName: '砚砚', transport: 'gpt_live_v3', verifiedModel: null },
+      deep: { catId: 'fable-5', displayName: '宪宪', verifiedModel: null },
+    };
+    await history.resolve({
+      messages: [
+        {
+          id: 'saved-live',
+          type: 'assistant',
+          catId: 'codex6-sol',
+          content: '那天的回答',
+          timestamp: Date.now(),
+          extra: { liveCompanion: { modality: 'voice', identity } },
+        },
+      ],
+      tasks: [],
+      hasMore: false,
+    });
+    expect(
+      useChatStore.getState().messages.find((message) => message.id === 'saved-live')?.extra?.liveCompanion?.identity,
+    ).toEqual(identity);
+  });
+
+  it('hydrates semantic messages through the shared projector without exposing stored raw copy', async () => {
+    const history = installDeferredHistoryResponse();
+    const cachedAssistantTs = Date.now() - 1000;
+    mountReplaceHydrationThread(makeThreadBState(cachedAssistantTs));
+    await history.waitUntilPending();
+
+    await history.resolve({
+      messages: [
+        {
+          id: 'semantic-history-1',
+          type: 'system',
+          catId: 'system',
+          content: '{"method":"raw/provider/warning"}',
+          timestamp: 1_788_000_000_000,
+          extra: {
+            semanticEvent: {
+              v: 1,
+              id: 'semantic-history-event-1',
+              kind: 'warning',
+              occurredAt: 1_788_000_000_000,
+              category: 'safety',
+              severity: 'warning',
+              message: '受保护操作已拒绝。',
+              provenance: { provider: 'codex', carrier: 'app_server' },
+            },
+          },
+        },
+      ],
+      hasMore: false,
+    });
+
+    const hydrated = useChatStore.getState().messages.find((message) => message.id === 'semantic-history-1');
+    expect(hydrated?.type).toBe('system');
+    expect(hydrated?.content).toBe('警告：受保护操作已拒绝。');
+    expect(JSON.stringify(hydrated)).not.toContain('raw/provider');
+  });
+
+  it('hydrates a modification source from persisted history when no live metadata copy exists', async () => {
+    const history = installDeferredHistoryResponse();
+    const metadata = {
+      v: 1,
+      requestId: 'f309-modification-' + 'a'.repeat(64),
+      requestFingerprint: 'sha256:' + 'b'.repeat(64),
+      contentTitle: '晨光封面',
+      targetCatId: 'codex-astra',
+      targetName: '小星星',
+      executionThreadTitle: '封面共创',
+      completionRule: 'file-writeback-applied',
+    };
+    mountReplaceHydrationThread(makeThreadBState(Date.now() - 1000));
+    await history.waitUntilPending();
+    await history.resolve({
+      messages: [
+        {
+          id: 'modification-source',
+          catId: null,
+          content: '移除画面标志',
+          timestamp: Date.now(),
+          extra: { contentModificationRequestV1: metadata },
+        },
+      ],
+      hasMore: false,
+    });
+    expect(
+      useChatStore.getState().messages.find((item) => item.id === 'modification-source')?.extra
+        ?.contentModificationRequestV1,
+    ).toEqual(metadata);
+  });
+
+  it('preserves the source-owned custody offer when a stale hydration copy omits message extra', async () => {
+    const history = installDeferredHistoryResponse();
+    const timestamp = Date.now() - 1_000;
+    const sourceMessageRevision = `sha256:${'a'.repeat(64)}`;
+    mountReplaceHydrationThread(
+      makeThreadBState(timestamp, {
+        messages: [
+          {
+            id: 'custody-source-1',
+            type: 'user',
+            content: '下周把演示稿整理好',
+            timestamp,
+            extra: {
+              custodyOfferV1: {
+                offerId: 'custody-offer:custody-source-1',
+                sourceMessageRevision,
+                policyVersion: 'custody-recognition-v1',
+                reasonCode: 'future_deliverable',
+                disposition: 'pending',
+              },
+            },
+          },
+        ],
+      }),
+    );
+    await history.waitUntilPending();
+
+    await history.resolve({
+      messages: [
+        {
+          id: 'custody-source-1',
+          type: 'user',
+          content: '下周把演示稿整理好',
+          timestamp,
+        },
+      ],
+      hasMore: false,
+    });
+
+    expect(useChatStore.getState().messages[0]?.extra?.custodyOfferV1).toEqual(
+      expect.objectContaining({
+        offerId: 'custody-offer:custody-source-1',
+        sourceMessageRevision,
+        disposition: 'pending',
+      }),
+    );
+  });
+
+  it('suppresses entity and invalid semantic records instead of hydrating empty timeline bubbles', async () => {
+    const history = installDeferredHistoryResponse();
+    mountReplaceHydrationThread(makeThreadBState(Date.now() - 1000));
+    await history.waitUntilPending();
+
+    await history.resolve({
+      messages: [
+        {
+          id: 'semantic-entity-goal',
+          type: 'system',
+          catId: 'system',
+          content: 'raw goal copy',
+          timestamp: 100,
+          extra: {
+            semanticEvent: {
+              v: 1,
+              id: 'goal-history-1',
+              kind: 'goal',
+              occurredAt: 100,
+              state: 'updated',
+              revision: 1,
+              objective: 'Ship',
+              source: 'codex_app_server',
+              observedAt: 100,
+            },
+          },
+        },
+        {
+          id: 'semantic-workspace-plan',
+          type: 'system',
+          catId: 'system',
+          content: 'raw plan copy',
+          timestamp: 101,
+          extra: {
+            semanticEvent: {
+              v: 1,
+              id: 'plan-history-1',
+              kind: 'plan',
+              occurredAt: 101,
+              stage: 'updated',
+              text: 'Locate the contract, then fix it.',
+            },
+          },
+        },
+        {
+          id: 'semantic-invalid-wire',
+          type: 'system',
+          catId: 'system',
+          content: '{"method":"provider/raw"}',
+          timestamp: 102,
+          extra: { semanticEvent: { method: 'provider/raw' } },
+        },
+      ],
+      hasMore: false,
+    });
+
+    const ids = useChatStore.getState().messages.map((message) => message.id);
+    expect(ids).not.toContain('semantic-entity-goal');
+    expect(ids).toContain('semantic-workspace-plan');
+    expect(useChatStore.getState().messages.find((message) => message.id === 'semantic-workspace-plan')).toMatchObject({
+      type: 'system',
+      content: 'Locate the contract, then fix it.',
+    });
+    expect(ids).not.toContain('semantic-invalid-wire');
+  });
+
   it('preserves a newer live bubble that arrived after thread switch', async () => {
     const history = installDeferredHistoryResponse();
     const cachedAssistantTs = Date.now() - 1000;
@@ -190,6 +408,44 @@ describe('useChatHistory replace hydration', () => {
     });
 
     expect(useChatStore.getState().messages.map((m) => m.id)).toEqual(['b1', 'live-1']);
+  });
+
+  it('preserves server timeline order when a published seed is delivered later', async () => {
+    const history = installDeferredHistoryResponse();
+    const seedPublishedAt = Date.now() - 4_000;
+    const replyPublishedAt = seedPublishedAt + 1_000;
+    mountReplaceHydrationThread(makeThreadBState(seedPublishedAt));
+
+    await history.waitUntilPending();
+    history.expectPending();
+
+    await history.resolve({
+      messages: [
+        {
+          id: 'b1',
+          catId: 'codex-sol',
+          content: 'source-cat seed',
+          timestamp: seedPublishedAt,
+          deliveredAt: seedPublishedAt + 3_000,
+          timelineOrderAt: seedPublishedAt,
+        },
+        {
+          id: 'reply-1',
+          catId: 'opus',
+          content: 'reply after seed',
+          timestamp: replyPublishedAt,
+        },
+      ],
+      hasMore: false,
+    });
+
+    expect(useChatStore.getState().messages.map((message) => message.id)).toEqual(['b1', 'reply-1']);
+    expect(useChatStore.getState().messages[0]).toEqual(
+      expect.objectContaining({
+        deliveredAt: seedPublishedAt + 3_000,
+        timelineOrderAt: seedPublishedAt,
+      }),
+    );
   });
 
   it('keeps a richer local stream bubble instead of a stale draft duplicate', async () => {

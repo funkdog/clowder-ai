@@ -4,7 +4,7 @@
  * Mirrors callback-tools.test.js setup (globalThis.fetch mock + closed-loopback
  * env defense-in-depth). The handler is a thin transport adapter over
  * POST /api/callbacks/propose-profile-update — these tests pin the request
- * contract (body fields, headers-only creds, idempotency key, optional-field
+ * contract (body fields, headers-only creds, idempotency key, exact-origin
  * forwarding) and the stale_ignored surfacing, NOT the server-side state machine
  * (that lives in the api package tests).
  */
@@ -61,6 +61,7 @@ describe('cat_cafe_propose_profile_update MCP tool', () => {
       afterContent: 'co-creator偏好先给结论再展开。',
       rationale: '更新沟通偏好',
       signalKind: 'cvo-instructed',
+      sourceMessageId: 'msg-source-1',
     });
 
     assert.equal(result.isError, undefined);
@@ -69,6 +70,7 @@ describe('cat_cafe_propose_profile_update MCP tool', () => {
     assert.equal(body.afterContent, 'co-creator偏好先给结论再展开。');
     assert.equal(body.rationale, '更新沟通偏好');
     assert.equal(body.signalKind, 'cvo-instructed');
+    assert.equal(body.sourceMessageId, 'msg-source-1');
   });
 
   test('sends creds via headers only, never dual-written to body (F174 AC-F2)', async () => {
@@ -84,6 +86,7 @@ describe('cat_cafe_propose_profile_update MCP tool', () => {
       afterContent: 'x',
       rationale: 'y',
       signalKind: 'cat-declared',
+      sourceMessageId: 'msg-source-2',
     });
 
     const body = JSON.parse(capturedOptions.body);
@@ -102,7 +105,12 @@ describe('cat_cafe_propose_profile_update MCP tool', () => {
       return { ok: true, json: async () => ({ proposalId: 'p1', status: 'pending' }) };
     };
 
-    await handleProposeProfileUpdate({ afterContent: 'x', rationale: 'y', signalKind: 'cat-declared' });
+    await handleProposeProfileUpdate({
+      afterContent: 'x',
+      rationale: 'y',
+      signalKind: 'cat-declared',
+      sourceMessageId: 'msg-source-3',
+    });
 
     const body = JSON.parse(capturedOptions.body);
     assert.equal(typeof body.clientRequestId, 'string');
@@ -122,6 +130,7 @@ describe('cat_cafe_propose_profile_update MCP tool', () => {
       afterContent: 'x',
       rationale: 'y',
       signalKind: 'cat-declared',
+      sourceMessageId: 'msg-source-4',
       clientRequestId: 'req-abc-123',
     });
 
@@ -149,7 +158,7 @@ describe('cat_cafe_propose_profile_update MCP tool', () => {
     assert.equal(body.sourceMessageId, 'msg-42');
   });
 
-  test('omits sourceMessageId from body when not supplied', async () => {
+  test('omits sourceMessageId so callback auth can derive the exact origin', async () => {
     const { handleProposeProfileUpdate } = await import('../dist/tools/callback-tools.js');
 
     let capturedOptions;
@@ -158,10 +167,19 @@ describe('cat_cafe_propose_profile_update MCP tool', () => {
       return { ok: true, json: async () => ({ proposalId: 'p1', status: 'pending' }) };
     };
 
-    await handleProposeProfileUpdate({ afterContent: 'x', rationale: 'y', signalKind: 'cat-declared' });
+    await handleProposeProfileUpdate({
+      afterContent: 'x',
+      rationale: 'y',
+      signalKind: 'cat-declared',
+    });
 
     const body = JSON.parse(capturedOptions.body);
-    assert.ok(!('sourceMessageId' in body), 'sourceMessageId must be absent, not null/undefined');
+    assert.equal(body.sourceMessageId, undefined);
+  });
+
+  test('schema allows a profile update without sourceMessageId', async () => {
+    const { proposeProfileUpdateInputSchema } = await import('../dist/tools/callback-tools.js');
+    assert.equal(proposeProfileUpdateInputSchema.sourceMessageId.safeParse(undefined).success, true);
   });
 
   test('surfaces stale_ignored as an error result', async () => {
@@ -173,6 +191,7 @@ describe('cat_cafe_propose_profile_update MCP tool', () => {
       afterContent: 'x',
       rationale: 'y',
       signalKind: 'cat-declared',
+      sourceMessageId: 'msg-source-5',
     });
 
     assert.equal(result.isError, true);
@@ -191,6 +210,7 @@ describe('cat_cafe_propose_profile_update MCP tool', () => {
       afterContent: 'x',
       rationale: 'y',
       signalKind: 'cat-declared',
+      sourceMessageId: 'msg-source-6',
     });
 
     assert.equal(result.isError, undefined);
@@ -205,7 +225,71 @@ describe('cat_cafe_propose_profile_update MCP tool', () => {
     assert.ok(tool, 'cat_cafe_propose_profile_update must be registered in callbackTools');
     assert.ok(tool.inputSchema, 'tool must expose an inputSchema');
     assert.equal(typeof tool.handler, 'function', 'tool must wire a handler');
-    // INV-6 guard: AC-C1 schema must not expose a capsule target (per-cat primer only).
-    assert.ok(!('targetLayer' in tool.inputSchema), 'AC-C1 must not expose targetLayer (capsule is C2)');
+  });
+
+  // ──── Phase E: corpus targetLayer ────
+
+  test('schema exposes optional targetLayer (Phase E: AC-E1)', async () => {
+    const { proposeProfileUpdateInputSchema } = await import('../dist/tools/callback-tools.js');
+    assert.ok('targetLayer' in proposeProfileUpdateInputSchema, 'Phase E must expose targetLayer');
+    assert.equal(
+      proposeProfileUpdateInputSchema.targetLayer.safeParse(undefined).success,
+      true,
+      'targetLayer is optional',
+    );
+    assert.equal(proposeProfileUpdateInputSchema.targetLayer.safeParse('primer').success, true);
+    assert.equal(proposeProfileUpdateInputSchema.targetLayer.safeParse('corpus').success, true);
+    assert.equal(
+      proposeProfileUpdateInputSchema.targetLayer.safeParse('capsule').success,
+      false,
+      'capsule still rejected',
+    );
+  });
+
+  test('forwards targetLayer in request body when supplied', async () => {
+    const { handleProposeProfileUpdate } = await import('../dist/tools/callback-tools.js');
+
+    let capturedOptions;
+    globalThis.fetch = async (_url, options) => {
+      capturedOptions = options;
+      return { ok: true, json: async () => ({ proposalId: 'p1', status: 'pending' }) };
+    };
+
+    await handleProposeProfileUpdate({
+      afterContent: 'co-creator生日是 1 月 1 日。',
+      rationale: '记录 owner-wide 个人事实',
+      signalKind: 'cvo-instructed',
+      targetLayer: 'corpus',
+    });
+
+    const body = JSON.parse(capturedOptions.body);
+    assert.equal(body.targetLayer, 'corpus');
+  });
+
+  test('omits targetLayer from body when not supplied (primer default)', async () => {
+    const { handleProposeProfileUpdate } = await import('../dist/tools/callback-tools.js');
+
+    let capturedOptions;
+    globalThis.fetch = async (_url, options) => {
+      capturedOptions = options;
+      return { ok: true, json: async () => ({ proposalId: 'p1', status: 'pending' }) };
+    };
+
+    await handleProposeProfileUpdate({
+      afterContent: 'x',
+      rationale: 'y',
+      signalKind: 'cat-declared',
+    });
+
+    const body = JSON.parse(capturedOptions.body);
+    assert.equal(body.targetLayer, undefined, 'primer default: no targetLayer in body');
+  });
+
+  test('description mentions corpus and does not claim capsule cannot be targeted', async () => {
+    const { callbackTools } = await import('../dist/tools/callback-tools.js');
+    const tool = callbackTools.find((t) => t.name === 'cat_cafe_propose_profile_update');
+    assert.ok(tool);
+    assert.match(tool.description, /corpus/i, 'description must mention corpus');
+    assert.doesNotMatch(tool.description, /cannot target.*shared capsule/i, 'Phase E removes capsule-only limitation');
   });
 });

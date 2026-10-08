@@ -16,10 +16,11 @@
  * version — no pinned binary required (2.1.170 pin removed).
  */
 import type { CatId } from '@cat-cafe/shared';
-import type { AgentMessage, AgentService, AgentServiceOptions } from '../../types.js';
+import type { AgentMessage, AgentService, AgentServiceOptions, ToolExecutionPolicy } from '../../types.js';
 import { ClaudeAgentService } from './ClaudeAgentService.js';
 import { ClaudeBgCarrierService } from './ClaudeBgCarrierService.js';
 import { ClaudeInteractivePtyCarrierService } from './ClaudeInteractivePtyCarrierService.js';
+import { ClaudeSdkAgentService } from './ClaudeSdkAgentService.js';
 import {
   CarrierHealthStore,
   type CarrierTier,
@@ -31,6 +32,7 @@ export const CARRIER_ENV_KEY = 'CAT_CAFE_CLAUDE_CARRIER';
 export const CARRIER_BG_DAEMON = 'bg_daemon';
 /** F230: opt-in value for interactive PTY carrier */
 export const CARRIER_INTERACTIVE_PTY = 'interactive_pty';
+export const CARRIER_AGENT_SDK = 'agent_sdk';
 export const CARRIER_PRINT_SDK = 'print_sdk';
 export const CARRIER_API_KEY = 'api_key';
 
@@ -76,6 +78,8 @@ export function _resetHealthStoreForTest(): void {
  */
 export function createCarrierByTier(tier: CarrierTier | string, catId: CatId): AgentService {
   switch (tier) {
+    case CARRIER_AGENT_SDK:
+      return new ClaudeSdkAgentService({ catId });
     case CARRIER_BG_DAEMON:
       return new ClaudeBgCarrierService({ catId });
     case CARRIER_INTERACTIVE_PTY:
@@ -119,6 +123,8 @@ export function createClaudeAgentServiceForCanary(
   catId: CatId,
   env: Record<string, string | undefined> = process.env,
 ): AgentService {
+  // Explicit opt-in bypasses replaying fallbacks: an SDK query may already have tool effects.
+  if (env[CARRIER_ENV_KEY]?.trim() === CARRIER_AGENT_SDK) return new ClaudeSdkAgentService({ catId });
   const store = getCarrierHealthStore();
   const targetTier = resolveTargetTier(env);
   const activeTier = selectFirstHealthyTier(targetTier, store) as CarrierTier;
@@ -177,12 +183,38 @@ export class FallbackCarrierWrapper implements AgentService {
     return this.carrier.injectsL0Natively?.() ?? false;
   }
 
-  usesChainKeyResume(): boolean {
-    return this.carrier.usesChainKeyResume?.() ?? false;
+  supportsToolExecutionPolicy(policy: ToolExecutionPolicy): boolean {
+    return this.carrier.supportsToolExecutionPolicy?.(policy) ?? false;
   }
 
-  needsServerRoutingGuard(): boolean {
-    return this.carrier.needsServerRoutingGuard?.() ?? false;
+  freshnessCarrierCapability(): import('../../types.js').AgentFreshnessCarrierCapability {
+    return (
+      this.carrier.freshnessCarrierCapability?.() ?? {
+        provider: 'anthropic',
+        carrier: 'other',
+        deliverySemantics: 'unsupported',
+      }
+    );
+  }
+
+  contextCapability(): import('../../types.js').AgentContextCapability {
+    return (
+      this.carrier.contextCapability?.() ?? {
+        provider: 'anthropic',
+        carrier: this.activeTier,
+        reportsRuntimeWindow: false,
+        authoritativeUsage: false,
+        usageTelemetry: 'unavailable',
+        nativeWindowControl: false,
+        nativeCompressionControl: false,
+        observesCompression: false,
+        reason: 'active Claude carrier did not declare context telemetry',
+      }
+    );
+  }
+
+  usesChainKeyResume(): boolean {
+    return this.carrier.usesChainKeyResume?.() ?? false;
   }
 
   // ─── Invoke with fallback ───
@@ -270,8 +302,16 @@ export class FallbackCarrierWrapper implements AgentService {
       // Cloud P1 fix: monitor yielded errors (not just thrown) — carriers can surface
       // quota/structural failures as error messages instead of throwing.
       const fallbackCarrier = this._carrierFactory(fallbackTier, this.catId);
+      const fallbackOptions = options?.beforeProviderLaunch
+        ? {
+            ...options,
+            beforeProviderLaunch: (request: import('../../types.js').PreparedProviderRequestV1) =>
+              options.beforeProviderLaunch?.({ ...request, boundaryReason: 'provider_fallback' }) ??
+              Promise.reject(new Error('provider_launch_recorder_unavailable')),
+          }
+        : options;
       try {
-        for await (const fbMsg of fallbackCarrier.invoke(prompt, options)) {
+        for await (const fbMsg of fallbackCarrier.invoke(prompt, fallbackOptions)) {
           if (fbMsg.type === 'error' && typeof fbMsg.error === 'string') {
             const fbCls = classifyCarrierFailure(fbMsg.error);
             if (fbCls !== 'transient') {

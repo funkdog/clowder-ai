@@ -5,6 +5,8 @@
  */
 
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
@@ -13,6 +15,7 @@ import Fastify from 'fastify';
 describe('Thread API', () => {
   let app;
   let threadStore;
+  let conciergeThreadService;
   let tmpRoots = [];
   let originalWorkspaceRoot;
   let originalRuntimeRoot;
@@ -23,11 +26,13 @@ describe('Thread API', () => {
     tmpRoots = [];
 
     const { ThreadStore } = await import('../dist/domains/cats/services/stores/ports/ThreadStore.js');
+    const { ConciergeThreadService } = await import('../dist/domains/concierge/ConciergeThreadService.js');
     const { threadsRoutes } = await import('../dist/routes/threads.js');
 
     threadStore = new ThreadStore();
+    conciergeThreadService = new ConciergeThreadService({ threadStore });
     app = Fastify();
-    await app.register(threadsRoutes, { threadStore });
+    await app.register(threadsRoutes, { threadStore, conciergeThreadService });
     await app.ready();
   });
 
@@ -58,6 +63,22 @@ describe('Thread API', () => {
     assert.equal(body.title, 'My Chat');
     assert.equal(body.createdBy, 'alice');
     assert.deepEqual(body.participants, []);
+  });
+
+  it('POST /api/threads atomically persists the preferred cat and pin for a new meeting destination', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads',
+      payload: { userId: 'alice', title: 'Meeting destination', preferredCats: ['codex-sol'], pinned: true },
+    });
+
+    assert.equal(res.statusCode, 201);
+    const body = JSON.parse(res.body);
+    assert.deepEqual(body.preferredCats, ['codex-sol']);
+    assert.equal(body.pinned, true);
+    const stored = await threadStore.get(body.id);
+    assert.deepEqual(stored.preferredCats, ['codex-sol']);
+    assert.equal(stored.pinned, true);
   });
 
   it('POST /api/threads keeps omitted projectPath as default', async () => {
@@ -108,6 +129,41 @@ describe('Thread API', () => {
     assert.equal(res.statusCode, 500);
     const body = JSON.parse(res.body);
     assert.match(body.error, /Bootcamp workspace root/);
+  });
+
+  it('POST /api/threads migrates an explicit runtime path to the persistent workspace', async () => {
+    const runtimeRoot = await createTempWorkspace();
+    const workspaceRoot = await createTempWorkspace();
+    for (const root of [runtimeRoot, workspaceRoot]) {
+      mkdirSync(join(root, 'cat-cafe-skills'), { recursive: true });
+      writeFileSync(join(root, 'cat-cafe-skills', 'manifest.yaml'), 'skills: []\n');
+      execFileSync('git', ['init', '-b', 'main'], { cwd: root, stdio: 'ignore' });
+      execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: root, stdio: 'ignore' });
+      execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: root, stdio: 'ignore' });
+      execFileSync('git', ['add', '.'], { cwd: root, stdio: 'ignore' });
+      execFileSync('git', ['commit', '-m', 'baseline'], { cwd: root, stdio: 'ignore' });
+    }
+    process.env.CAT_CAFE_RUNTIME_ROOT = runtimeRoot;
+    process.env.CAT_CAFE_WORKSPACE_ROOT = workspaceRoot;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/threads',
+      payload: { userId: 'alice', title: 'Persistent workspace', projectPath: runtimeRoot },
+    });
+
+    assert.equal(res.statusCode, 201, res.body);
+    const targetRoot = JSON.parse(res.body).projectPath;
+    assert.equal(targetRoot, workspaceRoot);
+
+    // Simulate a page-triggered agent/governance write to a tracked file. The exact
+    // runtime restart predicate (`git status --short -uno`) must remain clean.
+    writeFileSync(join(targetRoot, 'cat-cafe-skills', 'manifest.yaml'), 'skills:\n  - generated\n');
+    assert.equal(execFileSync('git', ['status', '--short', '-uno'], { cwd: runtimeRoot, encoding: 'utf8' }).trim(), '');
+    assert.match(
+      execFileSync('git', ['status', '--short', '-uno'], { cwd: workspaceRoot, encoding: 'utf8' }),
+      /cat-cafe-skills\/manifest\.yaml/,
+    );
   });
 
   it('POST /api/threads with pinned=true creates a pinned thread', async () => {
@@ -252,6 +308,100 @@ describe('Thread API', () => {
     assert.ok(titles.includes('Thread A'));
     assert.ok(titles.includes('Thread B'));
     assert.ok(!titles.includes('Thread C'));
+  });
+
+  it('GET /api/threads?view=sidebar omits threadMemory without changing the default thread contract', async () => {
+    const thread = threadStore.create('alice', 'Sidebar summary', '/projects/cat-cafe');
+    threadStore.updateThreadMemory(thread.id, {
+      version: 1,
+      updatedAt: Date.now(),
+      sessionsIncorporated: 3,
+      summary: 'A deliberately large memory payload that belongs in thread detail, not the sidebar list.',
+      decisions: ['Keep detailed memory out of list projections.'],
+      openQuestions: [],
+    });
+    threadStore.updatePin(thread.id, true);
+
+    const [defaultRes, sidebarRes] = await Promise.all([
+      app.inject({
+        method: 'GET',
+        url: '/api/threads',
+        headers: { 'x-cat-cafe-user': 'alice' },
+      }),
+      app.inject({
+        method: 'GET',
+        url: '/api/threads?view=sidebar',
+        headers: { 'x-cat-cafe-user': 'alice' },
+      }),
+    ]);
+
+    assert.equal(defaultRes.statusCode, 200);
+    assert.equal(sidebarRes.statusCode, 200);
+    const defaultThread = JSON.parse(defaultRes.body).threads.find((candidate) => candidate.id === thread.id);
+    const sidebarThread = JSON.parse(sidebarRes.body).threads.find((candidate) => candidate.id === thread.id);
+    assert.equal(defaultThread.threadMemory.summary.startsWith('A deliberately large'), true);
+    assert.equal('threadMemory' in sidebarThread, false);
+    assert.equal(sidebarThread.title, 'Sidebar summary');
+    assert.equal(sidebarThread.projectPath, '/projects/cat-cafe');
+    assert.equal(sidebarThread.pinned, true);
+  });
+
+  it('GET /api/threads migrates legacy runtime paths before exposing project selectors', async () => {
+    const runtimeRoot = await createTempWorkspace();
+    const workspaceRoot = await createTempWorkspace();
+    process.env.CAT_CAFE_RUNTIME_ROOT = runtimeRoot;
+    process.env.CAT_CAFE_WORKSPACE_ROOT = workspaceRoot;
+    const legacyThread = threadStore.create('alice', 'Legacy runtime thread', runtimeRoot);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/threads',
+      headers: { 'x-cat-cafe-user': 'alice' },
+    });
+
+    assert.equal(res.statusCode, 200);
+    const listed = JSON.parse(res.body).threads.find((thread) => thread.id === legacyThread.id);
+    assert.equal(listed.projectPath, workspaceRoot);
+    assert.equal((await threadStore.get(legacyThread.id)).projectPath, workspaceRoot);
+  });
+
+  it('GET /api/threads migrates a legacy runtime thread on the first filtered request', async () => {
+    const runtimeRoot = await createTempWorkspace();
+    const workspaceRoot = await createTempWorkspace();
+    process.env.CAT_CAFE_RUNTIME_ROOT = runtimeRoot;
+    process.env.CAT_CAFE_WORKSPACE_ROOT = workspaceRoot;
+    const legacyThread = threadStore.create('alice', 'Filtered legacy runtime thread', runtimeRoot);
+
+    const filteredRes = await app.inject({
+      method: 'GET',
+      url: `/api/threads?projectPath=${encodeURIComponent(runtimeRoot)}`,
+      headers: { 'x-cat-cafe-user': 'alice' },
+    });
+
+    assert.equal(filteredRes.statusCode, 200);
+    const filteredIds = JSON.parse(filteredRes.body).threads.map((thread) => thread.id);
+    assert.ok(filteredIds.includes(legacyThread.id));
+    assert.equal((await threadStore.get(legacyThread.id)).projectPath, workspaceRoot);
+  });
+
+  it('GET /api/threads resets a stale runtime descendant to the safe default project', async () => {
+    const runtimeRoot = await createTempWorkspace();
+    const workspaceRoot = await createTempWorkspace();
+    process.env.CAT_CAFE_RUNTIME_ROOT = runtimeRoot;
+    process.env.CAT_CAFE_WORKSPACE_ROOT = workspaceRoot;
+    const staleRuntimePath = join(runtimeRoot, 'deleted-project');
+    const legacyThread = threadStore.create('alice', 'Stale runtime thread', staleRuntimePath);
+
+    const res = await app.inject({
+      method: 'GET',
+      url: '/api/threads',
+      headers: { 'x-cat-cafe-user': 'alice' },
+    });
+
+    assert.equal(res.statusCode, 200);
+    const listed = JSON.parse(res.body).threads.find((thread) => thread.id === legacyThread.id);
+    assert.equal(listed.projectPath, 'default');
+    assert.equal((await threadStore.get(legacyThread.id)).projectPath, 'default');
   });
 
   it('GET /api/threads trusts localhost origin fallback and lists default-user threads', async () => {
@@ -467,6 +617,91 @@ describe('Thread API', () => {
     assert.equal(body.title, 'Details Test');
   });
 
+  it('the owner can find the one canonical concierge carrier by title or ID and open its exact detail', async () => {
+    const threadId = await conciergeThreadService.getOrCreate('alice');
+    await threadStore.updateTitle(threadId, '砚砚喵Live F317 - 猫猫球线程');
+    const orphan = threadStore.create('alice', 'old concierge orphan');
+    threadStore.updateThreadKind(orphan.id, 'concierge');
+
+    for (const url of ['/api/threads?view=sidebar', '/api/threads?q=砚砚喵Live', `/api/threads?q=${threadId}`]) {
+      const res = await app.inject({ method: 'GET', url, headers: { 'x-cat-cafe-user': 'alice' } });
+      assert.equal(res.statusCode, 200);
+      const ids = JSON.parse(res.body).threads.map((thread) => thread.id);
+      assert.ok(ids.includes(threadId), `canonical carrier missing from ${url}`);
+      assert.ok(!ids.includes(orphan.id), `orphan must not become another entry in ${url}`);
+    }
+
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/threads/${threadId}`,
+      headers: { 'x-cat-cafe-user': 'alice' },
+    });
+    assert.equal(detail.statusCode, 200);
+    assert.equal(JSON.parse(detail.body).title, '砚砚喵Live F317 - 猫猫球线程');
+    assert.equal(JSON.parse(detail.body).threadKind, 'concierge');
+  });
+
+  it('another owner cannot discover or rename the canonical concierge carrier', async () => {
+    const threadId = await conciergeThreadService.getOrCreate('alice');
+    for (const url of ['/api/threads?view=sidebar', `/api/threads?q=${threadId}`]) {
+      const res = await app.inject({ method: 'GET', url, headers: { 'x-cat-cafe-user': 'bob' } });
+      assert.ok(!JSON.parse(res.body).threads.some((thread) => thread.id === threadId));
+    }
+    const detail = await app.inject({
+      method: 'GET',
+      url: `/api/threads/${threadId}`,
+      headers: { 'x-cat-cafe-user': 'bob' },
+    });
+    assert.equal(detail.statusCode, 404);
+    const rename = await app.inject({
+      method: 'PATCH',
+      url: `/api/threads/${threadId}`,
+      headers: { 'x-cat-cafe-user': 'bob' },
+      payload: { title: 'stolen title' },
+    });
+    assert.equal(rename.statusCode, 404);
+  });
+
+  it('shows the stored legacy concierge carrier to its key owner without exposing it to others', async () => {
+    const threadId = await conciergeThreadService.getOrCreate('alice');
+    const thread = await threadStore.get(threadId);
+    thread.createdBy = 'concierge-system';
+    thread.title = null;
+    const ownerList = await app.inject({
+      method: 'GET',
+      url: '/api/threads?view=sidebar',
+      headers: { 'x-cat-cafe-user': 'alice' },
+    });
+    const canonical = JSON.parse(ownerList.body).threads.find((entry) => entry.id === threadId);
+    assert.equal(canonical?.title, '猫猫球 · 伴随对话');
+    const ownerDetail = await app.inject({
+      method: 'GET',
+      url: `/api/threads/${threadId}`,
+      headers: { 'x-cat-cafe-user': 'alice' },
+    });
+    assert.equal(ownerDetail.statusCode, 200);
+    const foreignDetail = await app.inject({
+      method: 'GET',
+      url: `/api/threads/${threadId}`,
+      headers: { 'x-cat-cafe-user': 'bob' },
+    });
+    assert.equal(foreignDetail.statusCode, 404);
+  });
+
+  it('GET /api/threads/:id migrates and persists a legacy runtime projectPath', async () => {
+    const runtimeRoot = await createTempWorkspace();
+    const workspaceRoot = await createTempWorkspace();
+    process.env.CAT_CAFE_RUNTIME_ROOT = runtimeRoot;
+    process.env.CAT_CAFE_WORKSPACE_ROOT = workspaceRoot;
+    const legacyThread = threadStore.create('alice', 'Legacy runtime details', runtimeRoot);
+
+    const res = await app.inject({ method: 'GET', url: `/api/threads/${legacyThread.id}` });
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).projectPath, workspaceRoot);
+    assert.equal((await threadStore.get(legacyThread.id)).projectPath, workspaceRoot);
+  });
+
   // [F155 Phase B] guideState removed from Thread — redaction test no longer applicable
 
   it('GET /api/threads/:id returns 404 for nonexistent', async () => {
@@ -488,6 +723,21 @@ describe('Thread API', () => {
     assert.equal(res.statusCode, 200);
     const body = JSON.parse(res.body);
     assert.equal(body.title, 'New Title');
+  });
+
+  it('PATCH /api/threads/:id persists the explicitly selected cat for retry delivery', async () => {
+    const thread = threadStore.create('default-user', 'Meeting destination without a cat');
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/threads/${thread.id}`,
+      payload: { preferredCats: ['codex-sol'] },
+    });
+
+    assert.equal(res.statusCode, 200);
+    const body = JSON.parse(res.body);
+    assert.deepEqual(body.preferredCats, ['codex-sol']);
+    assert.deepEqual((await threadStore.get(thread.id)).preferredCats, ['codex-sol']);
   });
 
   it('PATCH /api/threads/:id marks renamed threads dirty for evidence search', async () => {
@@ -805,6 +1055,20 @@ describe('Thread API', () => {
     assert.equal(JSON.parse(fetched.body).preferredWorkspaceMode, 'community');
   });
 
+  it('PATCH /api/threads/:id persists the distinct F310 product Schedule destination', async () => {
+    const thread = threadStore.create('alice', 'Entrusted work Schedule');
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/threads/${thread.id}`,
+      payload: { preferredWorkspaceMode: 'product-schedule' },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).preferredWorkspaceMode, 'product-schedule');
+
+    const fetched = await app.inject({ method: 'GET', url: `/api/threads/${thread.id}` });
+    assert.equal(JSON.parse(fetched.body).preferredWorkspaceMode, 'product-schedule');
+  });
+
   it('PATCH /api/threads/:id rejects invalid preferredWorkspaceMode', async () => {
     const thread = threadStore.create('alice', 'Bad Mode Thread');
 
@@ -843,6 +1107,20 @@ describe('Thread API', () => {
     });
     assert.equal(res.statusCode, 200);
     assert.equal(JSON.parse(res.body).preferredWorkspaceMode, 'approval');
+  });
+
+  it('PATCH /api/threads/:id accepts preferredWorkspaceMode: eval (F248 Phase D)', async () => {
+    const thread = threadStore.create('alice', 'F248 Eval Thread');
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/threads/${thread.id}`,
+      payload: { preferredWorkspaceMode: 'eval' },
+    });
+    assert.equal(res.statusCode, 200);
+    assert.equal(JSON.parse(res.body).preferredWorkspaceMode, 'eval');
+
+    const fetched = await app.inject({ method: 'GET', url: `/api/threads/${thread.id}` });
+    assert.equal(JSON.parse(fetched.body).preferredWorkspaceMode, 'eval');
   });
 });
 
@@ -1200,6 +1478,39 @@ describe('F095 Phase D: Soft delete + trash bin', () => {
     const titles = body.threads.map((t) => t.title);
     assert.ok(titles.includes('Trashed 1'));
     assert.ok(titles.includes('Trashed 2'));
+  });
+
+  it('GET /api/threads?deleted=true migrates and persists legacy runtime projectPaths', async () => {
+    const runtimeDir = await mkdtemp(join(process.cwd(), '.tmp-deleted-runtime-'));
+    const workspaceDir = await mkdtemp(join(process.cwd(), '.tmp-deleted-workspace-'));
+    const runtimeRoot = await realpath(runtimeDir);
+    const workspaceRoot = await realpath(workspaceDir);
+    const savedRuntimeRoot = process.env.CAT_CAFE_RUNTIME_ROOT;
+    const savedWorkspaceRoot = process.env.CAT_CAFE_WORKSPACE_ROOT;
+    process.env.CAT_CAFE_RUNTIME_ROOT = runtimeRoot;
+    process.env.CAT_CAFE_WORKSPACE_ROOT = workspaceRoot;
+    try {
+      const legacyThread = threadStore.create('alice', 'Legacy runtime trash', runtimeRoot);
+      threadStore.softDelete(legacyThread.id);
+
+      const res = await app.inject({
+        method: 'GET',
+        url: '/api/threads?deleted=true',
+        headers: { 'x-cat-cafe-user': 'alice' },
+      });
+
+      assert.equal(res.statusCode, 200);
+      const listed = JSON.parse(res.body).threads.find((thread) => thread.id === legacyThread.id);
+      assert.equal(listed.projectPath, workspaceRoot);
+      assert.equal((await threadStore.get(legacyThread.id)).projectPath, workspaceRoot);
+    } finally {
+      if (savedRuntimeRoot === undefined) delete process.env.CAT_CAFE_RUNTIME_ROOT;
+      else process.env.CAT_CAFE_RUNTIME_ROOT = savedRuntimeRoot;
+      if (savedWorkspaceRoot === undefined) delete process.env.CAT_CAFE_WORKSPACE_ROOT;
+      else process.env.CAT_CAFE_WORKSPACE_ROOT = savedWorkspaceRoot;
+      await rm(runtimeRoot, { recursive: true, force: true });
+      await rm(workspaceRoot, { recursive: true, force: true });
+    }
   });
 
   it('GET /api/threads?deleted=true excludes soft-deleted concierge thread by default (R17 P2)', async () => {
