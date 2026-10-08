@@ -1,5 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
 import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readSync, realpathSync } from 'node:fs';
+import { createServer } from 'node:net';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -11,6 +12,10 @@ export interface ServiceLifecycleManifest {
     install?: string;
     start?: string;
     uninstall?: string;
+    /** Additional Python scripts this service may launch at runtime.
+     *  Used for multi-backend services where the start script dispatches
+     *  to different API scripts based on the selected model (#863). */
+    additionalRuntimeScripts?: string[];
   };
 }
 
@@ -75,23 +80,37 @@ export function shouldDetachServiceRunner(platform: NodeJS.Platform = process.pl
   return platform !== 'win32';
 }
 
-function resolveServiceRuntimeScriptPaths(
+/** Primary runtime scripts auto-derived from the start script name.
+ *  Does NOT include additionalRuntimeScripts (legacy/auxiliary). */
+function resolvePrimaryRuntimeScriptPaths(
   manifest: ServiceLifecycleManifest,
   platform: NodeJS.Platform = process.platform,
 ): string[] {
   const startScript = manifest.scripts?.start;
   if (!startScript) return [];
-
   const resolvedStartScript = resolveServiceScriptPath(startScript, platform);
-  const runtimeScripts: string[] = [];
+  const scripts: string[] = [];
   const serverMatch = basename(resolvedStartScript).match(/^(.+)-server\.(?:sh|ps1)$/i);
   if (serverMatch) {
-    runtimeScripts.push(resolve(dirname(resolvedStartScript), `${serverMatch[1]}-api.py`));
+    scripts.push(resolve(dirname(resolvedStartScript), `${serverMatch[1]}-api.py`));
   }
   if (manifest.id === 'audio-capture') {
-    runtimeScripts.push(resolve(REPO_ROOT, 'scripts/meeting-copilot/audio-service.py'));
+    scripts.push(resolve(REPO_ROOT, 'scripts/meeting-copilot/audio-service.py'));
   }
-  return runtimeScripts.filter((scriptPath) => isPathInside(REPO_ROOT, scriptPath));
+  return scripts.filter((sp) => isPathInside(REPO_ROOT, sp));
+}
+
+/** All runtime scripts: primary + additionalRuntimeScripts from manifest.
+ *  Used by isServiceProcessCommand for kill/cleanup. */
+function resolveServiceRuntimeScriptPaths(
+  manifest: ServiceLifecycleManifest,
+  platform: NodeJS.Platform = process.platform,
+): string[] {
+  const scripts = [...resolvePrimaryRuntimeScriptPaths(manifest, platform)];
+  for (const extra of manifest.scripts?.additionalRuntimeScripts ?? []) {
+    scripts.push(resolveServiceScriptPath(extra, platform));
+  }
+  return scripts.filter((sp) => isPathInside(REPO_ROOT, sp));
 }
 
 export function isValidModelId(model: string): boolean {
@@ -124,10 +143,23 @@ export function resolveServiceScriptPath(script: string, platform: NodeJS.Platfo
   return resolved;
 }
 
-export function isServiceProcessCommand(
+/** Skip `env FOO=bar ...` prefix in a tokenised command line. */
+function skipEnvPrefix(tokens: string[]): number {
+  let idx = 0;
+  if (basename(tokens[idx] ?? '') === 'env') {
+    idx += 1;
+    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[idx] ?? '')) idx += 1;
+  }
+  return idx;
+}
+
+/** Shared command-matching: checks if `command` runs the start script
+ *  directly or one of the given `runtimeScripts` via a Python executable. */
+function matchCommandAgainstScripts(
   command: string,
   manifest: ServiceLifecycleManifest,
-  platform: NodeJS.Platform = process.platform,
+  runtimeScripts: string[],
+  platform: NodeJS.Platform,
 ): boolean {
   const startScript = manifest.scripts?.start;
   if (!startScript) return false;
@@ -140,33 +172,45 @@ export function isServiceProcessCommand(
   const tokens = Array.from(normalizedCommand.matchAll(/"([^"]*)"|'([^']*)'|(\S+)/g), (match) => {
     return match[1] ?? match[2] ?? match[3] ?? '';
   });
-  let commandIndex = 0;
-  if (basename(tokens[commandIndex] ?? '') === 'env') {
-    commandIndex += 1;
-    while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[commandIndex] ?? '')) commandIndex += 1;
-  }
-  const isScriptToken = (token: string | undefined): boolean => {
-    if (!token) return false;
-    return token === resolvedScript;
-  };
+  const commandIndex = skipEnvPrefix(tokens);
   const executable = tokens[commandIndex];
-  if (isScriptToken(executable)) return true;
+  if (executable === resolvedScript) return true;
   if (['bash', 'sh', 'zsh'].includes(basename(executable ?? ''))) {
-    return isScriptToken(tokens[commandIndex + 1]);
+    return tokens[commandIndex + 1] === resolvedScript;
   }
   if (['powershell.exe', 'powershell', 'pwsh.exe', 'pwsh'].includes(basename(executable ?? ''))) {
     const fileFlagIndex = tokens.findIndex((token, index) => index > commandIndex && token.toLowerCase() === '-file');
-    return fileFlagIndex >= 0 && isScriptToken(tokens[fileFlagIndex + 1]);
+    return fileFlagIndex >= 0 && tokens[fileFlagIndex + 1] === resolvedScript;
   }
-  const runtimeScripts = resolveServiceRuntimeScriptPaths(manifest, platform).map((scriptPath) =>
-    normalizePath(scriptPath),
-  );
+  const normalizedRuntimeScripts = runtimeScripts.map((sp) => normalizePath(sp));
   const executableName = basename(executable ?? '').toLowerCase();
   const isPythonExecutable = /^python(?:\d+(?:\.\d+)*)?(?:\.exe)?$/.test(executableName);
-  if (isPythonExecutable && runtimeScripts.includes(tokens[commandIndex + 1] ?? '')) {
+  if (isPythonExecutable && normalizedRuntimeScripts.includes(tokens[commandIndex + 1] ?? '')) {
     return true;
   }
   return false;
+}
+
+/** Matches a process command against ANY script this service owns (start +
+ *  primary runtime + additionalRuntimeScripts). Used for cleanup/kill. */
+export function isServiceProcessCommand(
+  command: string,
+  manifest: ServiceLifecycleManifest,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return matchCommandAgainstScripts(command, manifest, resolveServiceRuntimeScriptPaths(manifest, platform), platform);
+}
+
+/** Matches a process command against only the PRIMARY scripts (start script
+ *  + auto-derived runtime), excluding additionalRuntimeScripts (legacy).
+ *  Used for readiness: legacy processes must not satisfy the "already-running"
+ *  path — they should be terminated and replaced (#863). */
+export function isPrimaryServiceProcess(
+  command: string,
+  manifest: ServiceLifecycleManifest,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return matchCommandAgainstScripts(command, manifest, resolvePrimaryRuntimeScriptPaths(manifest, platform), platform);
 }
 
 function parsePidLines(stdout: string): number[] {
@@ -346,6 +390,52 @@ export async function findPidsByPort(port: number, options: ProbeOptions = {}): 
   });
 }
 
+/**
+ * Probe whether a port is actually bindable by attempting a real bind().
+ *
+ * lsof -sTCP:LISTEN sees only LISTEN-state sockets. After a process is killed,
+ * the socket leaves LISTEN immediately but the port can remain kernel-bound in
+ * TIME_WAIT / CLOSE_WAIT / FIN_WAIT. This probe catches that gap by attempting
+ * an actual server bind — the only authoritative test of port availability.
+ *
+ * @returns `{bindable: true}` if bind succeeds, `{bindable: false, error}` otherwise.
+ */
+export async function probePortBindability(
+  port: number,
+  host = '0.0.0.0',
+): Promise<{ bindable: true } | { bindable: false; error: string }> {
+  return new Promise((resolve) => {
+    const server = createServer();
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      resolve({ bindable: false, error: err.code ?? err.message });
+    });
+    server.listen(port, host, () => {
+      server.close(() => resolve({ bindable: true }));
+    });
+  });
+}
+
+/**
+ * Poll until a port becomes actually bindable (not just lsof-clear).
+ * Used after process termination to guard against TIME_WAIT/CLOSE_WAIT.
+ */
+export async function waitForPortBindable(
+  port: number,
+  options: { timeoutMs?: number; intervalMs?: number; host?: string } = {},
+): Promise<{ ok: true } | { ok: false; reason: 'bind-timeout'; lastError: string }> {
+  const timeoutMs = Math.max(500, options.timeoutMs ?? 5_000);
+  const intervalMs = Math.max(50, options.intervalMs ?? 500);
+  const host = options.host ?? '0.0.0.0';
+  const deadline = Date.now() + timeoutMs;
+
+  for (;;) {
+    const probe = await probePortBindability(port, host);
+    if (probe.bindable) return { ok: true };
+    if (Date.now() >= deadline) return { ok: false, reason: 'bind-timeout', lastError: probe.error };
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 export async function listProcesses(options: ProbeOptions = {}): Promise<ProcessSnapshot[]> {
   const platform = options.platform ?? process.platform;
   const execFileImpl = options.execFile ?? (execFile as ExecFileLike);
@@ -372,11 +462,15 @@ function resolveLogDir(): string {
   return process.env.LOG_DIR ?? resolve(REPO_ROOT, 'data/logs/api');
 }
 
+function resolveServiceLogPath(serviceId: string): string {
+  const logDir = resolveLogDir();
+  mkdirSync(logDir, { recursive: true });
+  return resolve(logDir, `${serviceId}.log`);
+}
+
 export function appendServiceLog(serviceId: string, chunk: string): void {
   try {
-    const logDir = resolveLogDir();
-    mkdirSync(logDir, { recursive: true });
-    appendFileSync(resolve(logDir, `${serviceId}.log`), chunk);
+    appendFileSync(resolveServiceLogPath(serviceId), chunk);
   } catch {
     // best-effort logging only
   }
@@ -403,6 +497,25 @@ export function readServiceLogTail(serviceId: string, lines = 100): string[] {
   }
 }
 
+function readServiceLogSince(logPath: string, offset: number): string {
+  try {
+    const fd = openSync(logPath, 'r');
+    try {
+      const stat = fstatSync(fd);
+      const available = Math.max(0, stat.size - offset);
+      const readSize = Math.min(available, MAX_CAPTURED_OUTPUT);
+      if (readSize === 0) return '';
+      const buffer = Buffer.alloc(readSize);
+      readSync(fd, buffer, 0, readSize, stat.size - readSize);
+      return buffer.toString('utf8');
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return '';
+  }
+}
+
 export async function runServiceScript(input: ServiceLifecycleRunInput): Promise<ServiceLifecycleRunResult> {
   const command =
     process.platform === 'win32' && input.scriptPath.toLowerCase().endsWith('.ps1') ? 'powershell.exe' : 'bash';
@@ -417,31 +530,45 @@ export async function runServiceScript(input: ServiceLifecycleRunInput): Promise
 
   if (input.detached) {
     return new Promise((resolveRun, rejectRun) => {
-      let output = '';
       let resolvedEarly = false;
       let resolveSettlement: (result: ServiceLifecycleSettledRunResult) => void = () => {};
       const settlement = new Promise<ServiceLifecycleSettledRunResult>((resolve) => {
         resolveSettlement = resolve;
       });
-      const appendOutput = (chunk: Buffer) => {
-        const text = chunk.toString();
-        output += text;
-        if (output.length > MAX_CAPTURED_OUTPUT) output = output.slice(-MAX_CAPTURED_OUTPUT);
-        appendServiceLog(input.serviceId, text);
-      };
-      const child = spawn(command, args, {
-        detached: shouldDetachServiceRunner(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: input.env,
-        windowsHide: true,
-      });
+      let logFd: number;
+      let logPath: string;
+      let outputOffset = 0;
+      try {
+        logPath = resolveServiceLogPath(input.serviceId);
+        logFd = openSync(logPath, 'a');
+        outputOffset = fstatSync(logFd).size;
+      } catch (error) {
+        rejectRun(error);
+        return;
+      }
+      const capturedOutput = () => readServiceLogSince(logPath, outputOffset);
+      let child: ReturnType<typeof spawn>;
+      try {
+        child = spawn(command, args, {
+          detached: shouldDetachServiceRunner(),
+          // The child owns durable file descriptors directly. A long-lived
+          // sidecar never inherits an API-process pipe that disappears on
+          // restart, so logging survives controller death without PipeGuard.
+          stdio: ['ignore', logFd, logFd],
+          env: input.env,
+          windowsHide: true,
+        });
+      } catch (error) {
+        closeSync(logFd);
+        rejectRun(error);
+        return;
+      }
+      closeSync(logFd);
       appendServiceLog(input.serviceId, `[${input.action}] runner pid=${child.pid ?? 'unknown'}\n`);
-      child.stdout?.on('data', appendOutput);
-      child.stderr?.on('data', appendOutput);
       child.on('error', (error) => {
         if (resolvedEarly) {
           appendServiceLog(input.serviceId, `[${input.action}] runner error: ${error.message}\n`);
-          resolveSettlement({ code: null, output, pid: child.pid, runnerError: true });
+          resolveSettlement({ code: null, output: capturedOutput(), pid: child.pid, runnerError: true });
           return;
         }
         appendServiceLog(input.serviceId, `[${input.action}] runner spawn failed: ${error.message}\n`);
@@ -450,16 +577,7 @@ export async function runServiceScript(input: ServiceLifecycleRunInput): Promise
       const earlyExitTimer = setTimeout(() => {
         resolvedEarly = true;
         child.unref();
-        // Both pipe streams must also be unref'd. Without this, the
-        // parent Node process is held alive by the still-ref'd pipe
-        // handles until the detached child exits — which would block
-        // API server restart/shutdown on long-lived sidecars (砚砚 P1).
-        // Tests that need to `await settlement` should keep the event
-        // loop alive themselves with a test-scoped ref'd timer; do not
-        // bake that into production runner behavior.
-        (child.stdout as { unref?: () => void } | null)?.unref?.();
-        (child.stderr as { unref?: () => void } | null)?.unref?.();
-        resolveRun({ code: null, pid: child.pid, output, settlement });
+        resolveRun({ code: null, pid: child.pid, output: capturedOutput(), settlement });
       }, 2000);
       child.on('close', (code, signal) => {
         clearTimeout(earlyExitTimer);
@@ -468,7 +586,7 @@ export async function runServiceScript(input: ServiceLifecycleRunInput): Promise
         if (resolvedEarly && (code !== 0 || signal)) {
           appendServiceLog(input.serviceId, `[${input.action}] process exited with ${status}\n`);
         }
-        const result = { code, output, pid: child.pid };
+        const result = { code, output: capturedOutput(), pid: child.pid };
         resolveSettlement(result);
         if (!resolvedEarly) {
           resolvedEarly = true;

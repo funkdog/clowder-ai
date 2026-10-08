@@ -1,4 +1,4 @@
-; Cat Cafe — Inno Setup Installer Script
+; Clowder AI — Inno Setup Installer Script
 ; Builds an offline Windows .exe installer that bundles source + deps + Electron shell.
 ;
 ; Prerequisites: Inno Setup 6.x (https://jrsoftware.org/isinfo.php)
@@ -14,29 +14,30 @@
 ;   5. Runs user-level Agent CLI hook sync under the invoking user profile
 ;   6. Creates desktop shortcut to the Electron app
 
-#define MyAppName      "Cat Cafe"
+#define MyAppName      "Clowder AI"
 ; MyAppVersion can be overridden by iscc /DMyAppVersion=X.Y.Z (CI release pipeline).
 ; Default kept for local manual builds.
 #ifndef MyAppVersion
   #define MyAppVersion "0.10.1"
 #endif
-#define MyAppPublisher "Cat Cafe"
-#define MyAppURL       "https://github.com/zts212653/cat-cafe"
-#define MyAppExeName   "Cat Cafe.exe"
+#define MyAppPublisher "Clowder AI"
+#define MyAppURL       "https://github.com/zts212653/clowder-ai"
+#define MyAppExeName   "Clowder AI.exe"
+#define MyAppUserModelID "ai.clowderai.desktop"
 
 [Setup]
 AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
-; Show just "Cat Cafe" in Add/Remove Programs, not "Cat Cafe 版本 X.Y.Z".
+; Show just "Clowder AI" in Add/Remove Programs, not "Clowder AI 版本 X.Y.Z".
 ; The version is still available in the detail pane via AppVersion.
 AppVerName={#MyAppName}
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
-DefaultDirName={autopf}\CatCafe
+DefaultDirName={autopf}\ClowderAI
 DefaultGroupName={#MyAppName}
 OutputDir=..\..\dist
-OutputBaseFilename=CatCafe-Setup-{#MyAppVersion}
+OutputBaseFilename=ClowderAI-Setup-{#MyAppVersion}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -108,7 +109,8 @@ Source: "..\..\guides\*";                          DestDir: "{app}\guides"; \
   Flags: recursesubdirs createallsubdirs
 ; Plugin manifests/resources — loaded by PluginRegistry for pluginized schedules.
 ; Missing → GitHub schedule plugin and migrated pollers are unavailable.
-Source: "..\..\plugins\*";                         DestDir: "{app}\plugins"; \
+; Source: F204 moved plugins from root plugins/ into packages/api/src/plugins/.
+Source: "..\..\packages\api\src\plugins\*";        DestDir: "{app}\plugins"; \
   Flags: recursesubdirs createallsubdirs
 ; (Node.js runtime is shipped as node.tar.gz in bulk archives above)
 ; Desktop scripts (post-install config generation)
@@ -118,17 +120,21 @@ Source: "..\scripts\sync-agent-hooks-offline.mjs"; DestDir: "{app}\scripts"
 ; User-level Agent CLI hook truth source used by F180 health/sync.
 Source: "..\..\.claude\hooks\user-level\*";      DestDir: "{app}\.claude\hooks\user-level"; \
   Flags: recursesubdirs createallsubdirs
+; #1542: canonical Node compaction carrier packaged for spawn-time --settings injection.
+Source: "..\..\.claude\hooks\f24-compaction.mjs"; DestDir: "{app}\.claude\hooks"
 ; (Electron app is shipped as electron.tar.gz in bulk archives above)
 ; Desktop assets (icon used by uninstaller entry)
 Source: "..\assets\*";                           DestDir: "{app}\desktop\assets"; \
   Flags: recursesubdirs createallsubdirs
-; Portable Redis for Windows
+; Portable Redis for Windows — fail-closed: any publishable installer MUST
+; include Redis. The build script retries download 3× and verifies
+; redis-server.exe; Inno Setup will abort here if bundled/redis/ is empty.
 Source: "..\..\bundled\redis\*";                 DestDir: "{app}\.cat-cafe\redis\windows"; \
   Flags: recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{group}\{#MyAppName}";        Filename: "{app}\desktop-dist\{#MyAppExeName}"
-Name: "{autodesktop}\{#MyAppName}";  Filename: "{app}\desktop-dist\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}";        Filename: "{app}\desktop-dist\{#MyAppExeName}"; AppUserModelID: "{#MyAppUserModelID}"
+Name: "{autodesktop}\{#MyAppName}";  Filename: "{app}\desktop-dist\{#MyAppExeName}"; AppUserModelID: "{#MyAppUserModelID}"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 
 [Run]
@@ -179,7 +185,7 @@ Filename: "reg.exe"; \
 ; `npm install -g` fails on clean machines. Users install CLIs separately.
 Filename: "powershell.exe"; \
   Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\scripts\post-install-offline.ps1"" -AppDir ""{app}"""; \
-  StatusMsg: "Configuring Cat Cafe..."; \
+  StatusMsg: "Configuring Clowder AI..."; \
   Flags: runhidden waituntilterminated
 ; User-level Agent CLI hook sync writes to ~/.claude and ~/.codex, so it must
 ; run as the invoking user rather than the elevated installer account.
@@ -189,19 +195,36 @@ Filename: "powershell.exe"; \
   StatusMsg: "Configuring Agent CLI hooks..."; \
   Flags: runhidden waituntilterminated runasoriginaluser
 
-; Generate desktop-config.json
+; Generate desktop-config.json with release metadata (clowder-ai#1107 intake)
 Filename: "powershell.exe"; \
-  Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\generate-desktop-config.ps1' -AppDir '{app}'"""; \
+  Parameters: "-ExecutionPolicy Bypass -Command ""& '{app}\scripts\generate-desktop-config.ps1' -AppDir '{app}' -Version '{#MyAppVersion}' -InstallType 'installer'"""; \
   StatusMsg: "Generating desktop configuration..."; \
   Flags: runhidden waituntilterminated
 
-; Offer to launch after install
+; Offer to launch after interactive install
 Filename: "{app}\desktop-dist\{#MyAppExeName}"; \
   Description: "Launch {#MyAppName}"; Flags: postinstall nowait skipifsilent
+; F273: Auto-restart after silent upgrade (in-app updater uses /SILENT).
+; runasoriginaluser is critical — without it, the app + Redis + API all run
+; as elevated admin, which breaks user-data paths and is a security concern.
+Filename: "{app}\desktop-dist\{#MyAppExeName}"; \
+  Flags: nowait runasoriginaluser; Check: WizardSilent
+
+; ── F273: Clean previous version's tar-extracted dirs before upgrade ───
+; These are NOT tracked by Inno's file registry (created by tar.exe in [Run]).
+; Without this, old module files / deleted packages persist across upgrades —
+; an extremely hard-to-debug class of staleness bugs.
+; The junction must be removed first (rmdir only deletes the link, not target).
+; Recovery: if install fails after delete, rerunning the installer restores everything.
+[InstallDelete]
+Type: filesandordirs; Name: "{app}\scripts\node_modules"
+Type: filesandordirs; Name: "{app}\packages"
+Type: filesandordirs; Name: "{app}\desktop-dist"
+Type: filesandordirs; Name: "{app}\node"
 
 [UninstallRun]
 Filename: "powershell.exe"; \
-  Parameters: "-ExecutionPolicy Bypass -Command ""Stop-Process -Name 'Cat Cafe' -Force -ErrorAction SilentlyContinue"""; \
+  Parameters: "-ExecutionPolicy Bypass -Command ""Stop-Process -Name 'Clowder AI' -Force -ErrorAction SilentlyContinue"""; \
   Flags: runhidden
 
 [UninstallDelete]
@@ -213,3 +236,50 @@ Type: filesandordirs; Name: "{app}\node"
 Type: filesandordirs; Name: "{app}\bundled"
 ; scripts/node_modules junction created by mklink /J in [Run]
 Type: filesandordirs; Name: "{app}\scripts\node_modules"
+
+; ── F273: Defensive process cleanup before upgrade ────────────────────
+; The in-app updater calls quitApp() → stopAll() before spawning the installer.
+; For a manually launched Setup.exe, request the same coordinated shutdown
+; through Electron's single-instance channel, then retain a bounded fallback
+; for orphaned processes that still hold file locks in {app}\.
+; PrepareToInstall kills ONLY processes whose executable path is under {app} —
+; no risk of killing the user's own node/redis instances running elsewhere.
+[Code]
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ExitCode: Integer;
+  Cmd, AppDir: String;
+begin
+  Result := '';
+  NeedsRestart := False;
+  // Escape {app} path for PowerShell single-quoted strings and ensure
+  // trailing backslash for directory boundary (prevents killing processes
+  // in sibling dirs like "ClowderAI-Beta" when app is "ClowderAI").
+  AppDir := ExpandConstant('{app}');
+  if Copy(AppDir, Length(AppDir), 1) <> '\' then
+    AppDir := AppDir + '\';
+  StringChange(AppDir, '''', '''''');
+  // Phase 1: ask the non-elevated app to enter quitApp() → stopAll().
+  // WM_CLOSE is not sufficient because the tray close handler hides the window.
+  ExecAsOriginalUser(
+    ExpandConstant('{app}\desktop-dist\{#MyAppExeName}'),
+    '--quit-for-update', '', SW_HIDE, ewNoWait, ExitCode);
+  // Wait only while install-directory processes remain, up to 15 seconds.
+  Cmd := '$deadline=(Get-Date).AddSeconds(15); while ((Get-Date) -lt $deadline) { ' +
+         '$running=@(Get-Process -ErrorAction SilentlyContinue | Where-Object { ' +
+         '$_.Path -and $_.Path.StartsWith(''' + AppDir + ''') }); ' +
+         'if ($running.Count -eq 0) { exit 0 }; Start-Sleep -Milliseconds 250 }; exit 1';
+  Exec('powershell.exe',
+       '-NoProfile -ExecutionPolicy Bypass -Command "' + Cmd + '"',
+       '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  // Phase 2: force-clean only after coordinated shutdown exceeded its bound.
+  if ExitCode <> 0 then
+  begin
+    Cmd := 'Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith(''' +
+           AppDir +
+           ''') } | Stop-Process -Force -ErrorAction SilentlyContinue';
+    Exec('powershell.exe',
+         '-NoProfile -ExecutionPolicy Bypass -Command "' + Cmd + '"',
+         '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  end;
+end;

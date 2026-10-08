@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import os from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import {
@@ -10,7 +20,10 @@ import {
   uninstallPlugin,
 } from '../dist/infrastructure/connectors/plugins/plugin-installer.js';
 
-const TEST_ROOT = '/tmp/cat-cafe-plugin-installer-test';
+// Full gates intentionally run non-browser suites from multiple worktrees in
+// parallel. A fixed /tmp root lets another process's beforeEach/afterEach
+// cleanup delete this process's archive while tar is still reading it.
+const TEST_ROOT = mkdtempSync(join(os.tmpdir(), 'cat-cafe-plugin-installer-test-'));
 const BUILTIN_IDS = new Set(['feishu', 'dingtalk', 'telegram', 'weixin', 'wecom-bot', 'wecom-agent', 'xiaoyi']);
 
 /** Convert connector id to valid env var prefix (replace hyphens with underscores). */
@@ -292,13 +305,11 @@ done
     );
     chmodSync(fakeTar, 0o755);
 
-    const originalPath = process.env.PATH;
-    process.env.PATH = `${fakeBin}:${originalPath ?? ''}`;
     try {
-      const first = installPlugin(TEST_ROOT, archiveA, BUILTIN_IDS);
+      const first = installPlugin(TEST_ROOT, archiveA, BUILTIN_IDS, { tarBin: fakeTar });
       await waitForFile(join(controlDir, 'race-a-started'));
 
-      const second = installPlugin(TEST_ROOT, archiveB, BUILTIN_IDS);
+      const second = installPlugin(TEST_ROOT, archiveB, BUILTIN_IDS, { tarBin: fakeTar });
       await waitForFile(join(controlDir, 'race-b-started'));
 
       writeFileSync(join(controlDir, 'race-a-release'), '');
@@ -313,7 +324,6 @@ done
     } finally {
       writeFileSync(join(controlDir, 'race-a-release'), '');
       writeFileSync(join(controlDir, 'race-b-release'), '');
-      process.env.PATH = originalPath;
     }
   });
 });
@@ -323,7 +333,7 @@ describe('uninstallPlugin', { concurrency: false }, () => {
     const archive = createTestPlugin('to-remove');
     await installPlugin(TEST_ROOT, archive, BUILTIN_IDS);
 
-    const result = uninstallPlugin(TEST_ROOT, 'to-remove');
+    const result = await uninstallPlugin(TEST_ROOT, 'to-remove');
     assert.equal(result.action, 'uninstalled');
     assert.equal(result.configPreserved, true);
     assert.ok(!existsSync(join(resolvePluginsDir(TEST_ROOT), 'to-remove')));
@@ -337,7 +347,7 @@ describe('uninstallPlugin', { concurrency: false }, () => {
     mkdirSync(join(cacheRoot, 'abc123'), { recursive: true });
     writeFileSync(join(cacheRoot, 'abc123', 'index.js'), 'export default {};');
 
-    const result = uninstallPlugin(TEST_ROOT, 'remove-cache');
+    const result = await uninstallPlugin(TEST_ROOT, 'remove-cache');
     assert.equal(result.action, 'uninstalled');
     assert.ok(!existsSync(cacheRoot), 'module cache subtree must be removed with the plugin');
   });
@@ -350,7 +360,7 @@ describe('uninstallPlugin', { concurrency: false }, () => {
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'keep-config.json'), '{"KEY":"val"}');
 
-    uninstallPlugin(TEST_ROOT, 'keep-config');
+    await uninstallPlugin(TEST_ROOT, 'keep-config');
     assert.ok(existsSync(join(configDir, 'keep-config.json')), 'config preserved after uninstall');
   });
 
@@ -362,19 +372,19 @@ describe('uninstallPlugin', { concurrency: false }, () => {
     mkdirSync(configDir, { recursive: true });
     writeFileSync(join(configDir, 'clear-config.json'), '{"KEY":"val"}');
 
-    uninstallPlugin(TEST_ROOT, 'clear-config', { clearConfig: true });
+    await uninstallPlugin(TEST_ROOT, 'clear-config', { clearConfig: true });
     assert.ok(!existsSync(join(configDir, 'clear-config.json')), 'config cleared');
   });
 
-  it('returns error for non-existent plugin', () => {
-    const result = uninstallPlugin(TEST_ROOT, 'nonexistent');
+  it('returns error for non-existent plugin', async () => {
+    const result = await uninstallPlugin(TEST_ROOT, 'nonexistent');
     assert.equal(result.code, 'INVALID_ARCHIVE');
   });
 
-  it('rejects path-traversal IDs (uninstall)', () => {
+  it('rejects path-traversal IDs (uninstall)', async () => {
     const traversalIds = ['../../etc', '../passwd', 'a/b', '.hidden'];
     for (const id of traversalIds) {
-      const result = uninstallPlugin(TEST_ROOT, id);
+      const result = await uninstallPlugin(TEST_ROOT, id);
       assert.equal(result.code, 'INVALID_ARCHIVE', `Expected rejection for ID '${id}'`);
       assert.ok(result.message.includes('Invalid connector ID'), `Expected ID validation message for '${id}'`);
     }

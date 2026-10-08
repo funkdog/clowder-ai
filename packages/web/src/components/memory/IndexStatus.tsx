@@ -29,8 +29,10 @@ interface RawStatusResponse {
   passages_count?: number;
   passage_vectors_count?: number;
   passage_vectors_supported?: boolean;
+  passage_warmup_active?: boolean;
   edges_count?: number;
   last_rebuild_at?: string | null;
+  last_document_updated_at?: string | null;
   embedding_model?: string | null;
   reason?: string;
   // F188 Phase K extension
@@ -47,8 +49,10 @@ export interface IndexStatusData {
   passagesCount: number;
   passageVectorsCount: number;
   passageVectorsSupported: boolean;
+  passageWarmupActive: boolean;
   edgesCount: number;
   lastRebuildAt: string | null;
+  lastDocumentUpdatedAt: string | null;
   embeddingModel: string | null;
   reason?: string;
   // F188 Phase K — default `'ok'` + `[]` when API omits them (older backend).
@@ -69,8 +73,10 @@ export function parseIndexStatus(raw: RawStatusResponse): IndexStatusData {
     passagesCount: raw.passages_count ?? 0,
     passageVectorsCount: raw.passage_vectors_count ?? 0,
     passageVectorsSupported: raw.passage_vectors_supported ?? false,
+    passageWarmupActive: raw.passage_warmup_active ?? false,
     edgesCount: raw.edges_count ?? 0,
     lastRebuildAt: raw.last_rebuild_at ?? null,
+    lastDocumentUpdatedAt: raw.last_document_updated_at ?? null,
     embeddingModel: raw.embedding_model ?? null,
     reason: raw.reason,
     functionalStatus: raw.functionalStatus ?? 'ok',
@@ -146,10 +152,10 @@ export function DegradedBanner({
  */
 export const WARNING_ACTION_TARGETS: Record<ConfigWarningCode, string> = {
   docs_root_suspicious: 'evidence-config-vars',
-  embedding_disabled: 'evidence-feature-flags',
+  embedding_disabled: 'embedding-service-controls',
   vectors_empty: 'rebuild-controls',
-  graph_empty: 'evidence-config-vars',
-  vec_table_missing: 'evidence-config-vars',
+  graph_empty: 'rebuild-controls',
+  vec_table_missing: 'embedding-service-controls',
 };
 
 /**
@@ -240,11 +246,12 @@ function StatusRow({ label, value }: { label: string; value: string | number }) 
   );
 }
 
-export function IndexStatus() {
+export function IndexStatus({ refreshToken = 0 }: { refreshToken?: number }) {
   const [status, setStatus] = useState<IndexStatusData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [envVars, setEnvVars] = useState<EnvVar[]>([]);
   const [updatingKey, setUpdatingKey] = useState<string | null>(null);
+  const [warmupTriggering, setWarmupTriggering] = useState(false);
 
   const evidenceVars = useMemo(() => filterEvidenceVars(envVars), [envVars]);
   const configVars = useMemo(() => getConfigVars(envVars), [envVars]);
@@ -293,7 +300,7 @@ export function IndexStatus() {
 
   useEffect(() => {
     fetchAll();
-  }, [fetchAll]);
+  }, [fetchAll, refreshToken]);
 
   // AC-K4 P1-1 (砚砚 review 2026-06-19): when a degraded-banner action button
   // is clicked, scroll the relevant config section into view and pulse a focus
@@ -307,6 +314,25 @@ export function IndexStatus() {
     el.classList.add('ring-2', 'ring-conn-amber-text');
     setTimeout(() => el.classList.remove('ring-2', 'ring-conn-amber-text'), 1500);
   }, []);
+
+  const [warmupError, setWarmupError] = useState<string | null>(null);
+
+  const triggerWarmup = useCallback(async () => {
+    setWarmupTriggering(true);
+    setWarmupError(null);
+    try {
+      const res = await apiFetch('/api/evidence/warmup', { method: 'POST' });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+        setWarmupError((body as { error?: string }).error ?? `HTTP ${res.status}`);
+      }
+      await fetchAll();
+    } catch {
+      setWarmupError('网络错误');
+    } finally {
+      setWarmupTriggering(false);
+    }
+  }, [fetchAll]);
 
   // F209: while passage vectors are warming up in the background, poll so the
   // progress count climbs live. Stops automatically once fully embedded.
@@ -356,7 +382,11 @@ export function IndexStatus() {
       {warmingUp && (
         <div data-testid="embedding-warmup" className="rounded-lg border border-conn-amber-ring bg-conn-amber-bg p-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-conn-amber-text">语义索引暖机中…</span>
+            <span
+              className={`text-xs font-medium ${status.passageWarmupActive ? 'text-conn-green-text' : 'text-conn-amber-text'}`}
+            >
+              {status.passageWarmupActive ? '语义索引暖机中…' : '语义索引待暖机'}
+            </span>
             <span className="text-xs font-mono text-conn-amber-text">
               {status.passageVectorsCount} / {status.passagesCount}
             </span>
@@ -369,9 +399,29 @@ export function IndexStatus() {
               }}
             />
           </div>
-          <p className="mt-1.5 text-micro text-cafe-secondary">
-            关键词检索已就绪；语义召回在后台补全，完成前部分历史暂未覆盖。
-          </p>
+          <div className="mt-1.5 flex items-center justify-between">
+            <p className="text-micro text-cafe-secondary">
+              关键词检索已就绪；语义召回在后台补全，完成前部分历史暂未覆盖。
+            </p>
+            <span className="ml-auto flex items-center gap-1.5">
+              {warmupError && (
+                <span data-testid="warmup-error" className="text-micro text-red-500">
+                  {warmupError}
+                </span>
+              )}
+              <button
+                type="button"
+                data-testid="warmup-resume-button"
+                disabled={warmupTriggering || status.passageWarmupActive}
+                onClick={triggerWarmup}
+                className={`shrink-0 rounded-md px-2.5 py-1 text-micro font-medium text-white transition-opacity hover:opacity-90 ${
+                  status.passageWarmupActive ? 'bg-conn-green-text' : 'bg-conn-amber-text'
+                } ${warmupTriggering || status.passageWarmupActive ? 'opacity-70' : ''}`}
+              >
+                {warmupTriggering ? '触发中…' : status.passageWarmupActive ? '暖机中…' : '继续暖机'}
+              </button>
+            </span>
+          </div>
         </div>
       )}
 

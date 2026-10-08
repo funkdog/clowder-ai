@@ -46,7 +46,22 @@ function render(props: RightStatusPanelProps): string {
 }
 
 describe('RightStatusPanel', () => {
-  it('renders status title, mode, and active cats', () => {
+  it('shows active session and invocation IDs directly without an ID disclosure', () => {
+    const html = render({
+      intentMode: 'execute',
+      targetCats: ['opus'],
+      catStatuses: { opus: 'streaming' },
+      catInvocations: { opus: { sessionId: 'full-visible-session-id', invocationId: 'full-visible-invocation-id' } },
+      activeInvocations: { 'active-opus': { catId: 'opus', mode: 'execute' } },
+      threadId: 'copyable-thread-id',
+      messageSummary: { total: 2, assistant: 1, system: 1, evidence: 0, followup: 0 },
+    });
+    expect(html).toContain('full-visible-session-id');
+    expect(html).toContain('full-visible-invocation-id');
+    expect(html).not.toContain('▸ IDs');
+  });
+
+  it('preserves persistent session tracking while retiring the permanent audit surface', () => {
     const html = render({
       intentMode: 'execute',
       targetCats: ['opus', 'codex'],
@@ -65,11 +80,18 @@ describe('RightStatusPanel', () => {
       },
     });
 
-    expect(html).toContain('状态栏');
+    expect(html).not.toContain('状态栏');
     expect(html).toContain('当前模式');
     expect(html).toContain('执行');
     expect(html).toContain('猫猫状态');
     expect(html).toContain('消息统计');
+    expect(html).toContain('会话记录');
+    expect(html).not.toContain('Audit Explorer');
+    expect(html).toContain('运行日志');
+    expect(html).toContain('对话 ID：');
+    expect(html).toContain('test-thread');
+    expect(html).toContain('ChatGPT 对话');
+    expect(html.indexOf('data-testid="cloud-conversation-link"')).toBeLessThan(html.indexOf('对话信息'));
     expect(html).toContain('布偶猫');
     expect(html).toContain('缅因猫');
     expect(html).toContain('12');
@@ -77,7 +99,7 @@ describe('RightStatusPanel', () => {
 
   it('AC-Z15 R7: ideate mode preserves targetCats UNION across all panels (cloud Codex P2)', () => {
     // co-creator alpha catch + cloud Codex round-3 P2: ideate 多猫场景下 ParallelStatusBar
-    // 用 UNION 显示，但 RightStatusPanel/MobileStatusSheet 用 slot-first，cat 完成清 slot 后
+    // 用 UNION 显示，但状态面板若用 slot-first，cat 完成清 slot 后
     // 卡片消失 → 跨 panel state coherence regression（顶部双卡，侧边/移动端单卡）。
     // 修法：所有 panel 都把 intentMode 传给 deriveActiveCats，UNION 全程一致。
     const html = render({
@@ -175,7 +197,9 @@ describe('RightStatusPanel', () => {
 
     expect(html).toContain('猫猫状态');
     // IDs are now behind a collapsible toggle (default collapsed in SSR)
-    expect(html).toContain('▸ IDs');
+    expect(html).not.toContain('▸ IDs');
+    expect(html).toContain('复制调用 ID');
+    expect(html).toContain('复制会话 ID');
     // The cat name and invocation section still render
     expect(html).toContain('缅因猫');
   });

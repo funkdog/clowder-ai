@@ -2,9 +2,12 @@ import { randomBytes } from 'node:crypto';
 import type {} from '@fastify/cookie';
 import type { FastifyInstance } from 'fastify';
 import fp from 'fastify-plugin';
+import { isDirectLoopbackRequest } from '../utils/loopback-request.js';
 
 const COOKIE_NAME = 'cat_cafe_session';
 const TOKEN_BYTES = 32;
+const DEFAULT_USER_ID = 'default-user';
+const UNPAIRED_USER_ID = 'unpaired-user';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -40,17 +43,18 @@ export class SessionStore {
 
 const globalStore = new SessionStore();
 
+/** Read the same session principal used by HTTP; headers cannot replace it. */
+export function sessionUserIdForCookies(cookies: Record<string, string | undefined>): string | null {
+  const token = cookies[COOKIE_NAME];
+  return token ? globalStore.validate(token) : null;
+}
+
 function sessionAuth(app: FastifyInstance, _opts: Record<string, never>, done: () => void) {
   app.decorateRequest('sessionUserId', undefined);
 
   app.addHook('onRequest', (request, _reply, next) => {
-    const token = request.cookies?.[COOKIE_NAME];
-    if (token) {
-      const userId = globalStore.validate(token);
-      if (userId) {
-        request.sessionUserId = userId;
-      }
-    }
+    const userId = sessionUserIdForCookies(request.cookies ?? {});
+    if (userId) request.sessionUserId = userId;
     next();
   });
 
@@ -62,7 +66,14 @@ export const sessionAuthPlugin = fp(sessionAuth, {
   dependencies: ['@fastify/cookie'],
 });
 
-function sessionRoutePlugin(app: FastifyInstance, _opts: Record<string, never>, done: () => void) {
+export interface SessionRouteOptions {
+  ownerUserId?: string;
+}
+
+function sessionRoutePlugin(app: FastifyInstance, opts: SessionRouteOptions, done: () => void) {
+  const ownerUserId = (opts.ownerUserId ?? DEFAULT_USER_ID).trim();
+  if (!ownerUserId) throw new Error('[session-auth] ownerUserId must not be blank');
+
   app.get('/api/session', async (request, reply) => {
     if (request.sessionUserId) {
       return { userId: request.sessionUserId };
@@ -70,15 +81,20 @@ function sessionRoutePlugin(app: FastifyInstance, _opts: Record<string, never>, 
 
     const fwdProto = (request.headers['x-forwarded-proto'] as string | undefined)?.split(',')[0]?.trim().toLowerCase();
     const isSecure = request.protocol === 'https' || fwdProto === 'https';
+    const bootstrapUserId = isDirectLoopbackRequest(request)
+      ? ownerUserId
+      : ownerUserId === DEFAULT_USER_ID
+        ? UNPAIRED_USER_ID
+        : DEFAULT_USER_ID;
 
-    const token = globalStore.create('default-user');
+    const token = globalStore.create(bootstrapUserId);
     reply.setCookie(COOKIE_NAME, token, {
       httpOnly: true,
       sameSite: 'strict',
       path: '/',
       ...(isSecure ? { secure: true } : {}),
     });
-    return { userId: 'default-user' };
+    return { userId: bootstrapUserId };
   });
 
   done();

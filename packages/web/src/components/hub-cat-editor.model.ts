@@ -1,7 +1,6 @@
 import {
   builtinAccountFamilyForClient,
-  CLI_EFFORT_VALUES,
-  type CliEffortValue,
+  type CliEffortPreset,
   getCliEffortOptionsForProvider,
   builtinAccountIdForClient as sharedBuiltinAccountIdForClient,
 } from '@cat-cafe/shared';
@@ -9,15 +8,13 @@ import type { CatData } from '@/hooks/useCatData';
 import { UNKNOWN_CAT_COLOR } from '@/lib/color-defaults';
 import type { BuiltinAccountClient, ProfileItem } from './hub-accounts.types';
 import { defaultAcpCommandForClient, defaultAcpStartupArgsForClient } from './hub-cat-editor.acp';
+import { defaultMcpSupportForClient } from './hub-cat-editor.protocols';
 import type { CatStrategyEntry, StrategyType } from './hub-strategy-types';
 
 export type ClientId = 'anthropic' | 'openai' | 'google' | 'kimi' | 'opencode' | 'antigravity' | 'catagent' | 'acp';
 /** @deprecated Use ClientId instead. */
 export type ClientValue = ClientId;
 export type SessionChainValue = 'true' | 'false';
-export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
-export type CodexApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never';
-export type CodexAuthMode = 'oauth' | 'api_key' | 'auto';
 
 export interface HubCatEditorFormState {
   catId: string;
@@ -39,7 +36,11 @@ export interface HubCatEditorFormState {
   defaultModel: string;
   commandArgs: string;
   cliConfigArgs: string[];
-  cliEffort: CliEffortValue | '';
+  cliEffort: string;
+  /** F291: '' inherits Codex user config. Optional keeps legacy form fixtures source-compatible. */
+  codexSpeed?: '' | 'standard' | 'fast';
+  /** F254 D2: Codex carrier override. '' = 跟随服务端 CAT_CAFE_CODEX_CARRIER 环境变量。 */
+  codexCarrier: '' | 'exec_json' | 'app_server';
   provider: string;
   acpEnabled: boolean;
   acpTransport: 'stdio' | 'httpstream';
@@ -47,11 +48,10 @@ export interface HubCatEditorFormState {
   acpStartupArgs: string;
   acpMaxLiveProcesses: string;
   acpIdleTtlMinutes: string;
+  mcpSupport: boolean;
   sessionChain: SessionChainValue;
-  maxPromptTokens: string;
-  maxContextTokens: string;
-  maxMessages: string;
-  maxContentLengthPerMsg: string;
+  /** clowder-ai#1208: single context window cap; empty = Auto. */
+  contextWindow: string;
   voiceVoice: string;
   voiceLangCode: string;
   voiceSpeed: string;
@@ -79,17 +79,15 @@ export interface HubCatEditorDraft {
 
 export interface StrategyFormState {
   strategy: StrategyType;
+  /** Policy for which executionStatus was returned by the last server read. */
+  statusStrategy: StrategyType;
   warnThreshold: string;
   actionThreshold: string;
   maxCompressions: string;
-  hybridCapable: boolean;
-  sessionChainEnabled: boolean;
-}
-
-export interface CodexRuntimeSettings {
-  sandboxMode: CodexSandboxMode;
-  approvalPolicy: CodexApprovalPolicy;
-  authMode: CodexAuthMode;
+  source: string;
+  revision: string;
+  changedAt: number;
+  executionStatus: NonNullable<CatStrategyEntry['executionStatus']>;
 }
 
 export const CLIENT_OPTIONS: Array<{ value: ClientId; label: string }> = [
@@ -114,23 +112,10 @@ export const SESSION_STRATEGY_OPTIONS: Array<{ value: StrategyType; label: strin
   { value: 'hybrid', label: 'hybrid' },
 ];
 
-export const CODEX_SANDBOX_OPTIONS: Array<{ value: CodexSandboxMode; label: string }> = [
-  { value: 'read-only', label: 'read-only' },
-  { value: 'workspace-write', label: 'workspace-write' },
-  { value: 'danger-full-access', label: 'danger-full-access' },
-];
-
-export const CODEX_APPROVAL_OPTIONS: Array<{ value: CodexApprovalPolicy; label: string }> = [
-  { value: 'untrusted', label: 'untrusted' },
-  { value: 'on-failure', label: 'on-failure' },
-  { value: 'on-request', label: 'on-request' },
-  { value: 'never', label: 'never' },
-];
-
-export const CODEX_AUTH_MODE_OPTIONS: Array<{ value: CodexAuthMode; label: string }> = [
-  { value: 'oauth', label: 'oauth' },
-  { value: 'api_key', label: 'api_key' },
-  { value: 'auto', label: 'auto' },
+export const CODEX_CARRIER_OPTIONS: Array<{ value: HubCatEditorFormState['codexCarrier']; label: string }> = [
+  { value: '', label: '默认（跟随服务端环境）' },
+  { value: 'exec_json', label: 'CLI（codex exec）' },
+  { value: 'app_server', label: 'App Server（池化常驻宿主）' },
 ];
 
 export { defaultAcpCommandForClient, defaultAcpStartupArgsForClient };
@@ -147,16 +132,27 @@ export const DEFAULT_ANTIGRAVITY_COMMAND_ARGS = '. --remote-debugging-port=9000'
 
 const GOOGLE_OWNED_DOMAINS = ['generativelanguage.googleapis.com', 'googleapis.com'];
 
-function isCliEffortValue(value: string | undefined): value is CliEffortValue {
-  return value !== undefined && CLI_EFFORT_VALUES.includes(value as CliEffortValue);
-}
-
 function voiceStr(value: string | number | undefined): string {
   return value == null ? '' : String(value);
 }
 
-export function getCliEffortOptionsForClient(client: ClientValue): readonly CliEffortValue[] | null {
-  return getCliEffortOptionsForProvider(client);
+export function getCliEffortOptionsForClient(
+  client: ClientValue,
+  defaultModel?: string | null,
+): readonly CliEffortPreset[] | null {
+  return getCliEffortOptionsForProvider(client, defaultModel);
+}
+
+/** True only for transports that persist the generic CLI extension fields. */
+export function usesCliTransport(form: Pick<HubCatEditorFormState, 'clientId' | 'acpEnabled'>): boolean {
+  return (
+    !form.acpEnabled &&
+    (form.clientId === 'anthropic' ||
+      form.clientId === 'openai' ||
+      form.clientId === 'google' ||
+      form.clientId === 'kimi' ||
+      form.clientId === 'opencode')
+  );
 }
 
 export function splitMentionPatterns(raw: string): string[] {
@@ -378,7 +374,9 @@ export function initialState(cat?: CatData | null, draft?: HubCatEditorDraft | n
     defaultModel: cat?.defaultModel ?? createDraft?.defaultModel ?? '',
     commandArgs: cat?.commandArgs?.join(' ') ?? createDraft?.commandArgs ?? '',
     cliConfigArgs: [...(cat?.cliConfigArgs ?? [])],
-    cliEffort: isCliEffortValue(persistedCliEffort) ? persistedCliEffort : '',
+    cliEffort: persistedCliEffort ?? '',
+    codexSpeed: cat?.cli?.serviceTier ?? '',
+    codexCarrier: cat?.cli?.carrier ?? '',
     provider: cat?.provider ?? '',
     acpEnabled:
       Boolean(acpConfig) || (cat?.clientId as ClientId | undefined) === 'acp' || createDraft?.clientId === 'acp',
@@ -395,11 +393,11 @@ export function initialState(cat?: CatData | null, draft?: HubCatEditorDraft | n
     acpMaxLiveProcesses: acpConfig?.pool?.maxLiveProcesses !== undefined ? String(acpConfig.pool.maxLiveProcesses) : '',
     acpIdleTtlMinutes:
       acpConfig?.pool?.idleTtlMs !== undefined ? String(Math.round(acpConfig.pool.idleTtlMs / 60_000)) : '',
+    mcpSupport:
+      cat?.mcpSupport ??
+      defaultMcpSupportForClient((cat?.clientId as ClientId | undefined) ?? createDraft?.clientId ?? 'anthropic'),
     sessionChain: String(cat?.sessionChain ?? true) as SessionChainValue,
-    maxPromptTokens: cat?.contextBudget ? String(cat.contextBudget.maxPromptTokens) : '',
-    maxContextTokens: cat?.contextBudget ? String(cat.contextBudget.maxContextTokens) : '',
-    maxMessages: cat?.contextBudget ? String(cat.contextBudget.maxMessages) : '',
-    maxContentLengthPerMsg: cat?.contextBudget ? String(cat.contextBudget.maxContentLengthPerMsg) : '',
+    contextWindow: cat?.contextWindow ? String(cat.contextWindow) : '',
     voiceVoice: voiceStr(voiceConfig?.voice),
     voiceLangCode: voiceStr(voiceConfig?.langCode),
     voiceSpeed: voiceStr(voiceConfig?.speed),
@@ -413,11 +411,17 @@ export function initialState(cat?: CatData | null, draft?: HubCatEditorDraft | n
 export function toStrategyForm(entry: CatStrategyEntry): StrategyFormState {
   return {
     strategy: entry.effective.strategy,
+    statusStrategy: entry.effective.strategy,
     warnThreshold: String(entry.effective.thresholds.warn),
     actionThreshold: String(entry.effective.thresholds.action),
     maxCompressions: String(entry.effective.hybrid?.maxCompressions ?? 2),
-    hybridCapable: entry.hybridCapable,
-    sessionChainEnabled: entry.sessionChainEnabled,
+    source: entry.source,
+    revision: entry.revision ?? 'unknown',
+    changedAt: entry.changedAt ?? 0,
+    executionStatus: entry.executionStatus ?? {
+      status: 'unavailable',
+      missingCapabilities: ['managed_invocation_boundary'],
+    },
   };
 }
 
@@ -436,8 +440,8 @@ export function buildStrategyPayload(strategy: StrategyFormState) {
     thresholds: { warn, action },
   };
   if (strategy.strategy === 'hybrid') {
-    const maxCompressions = Number.parseInt(strategy.maxCompressions, 10);
-    if (!Number.isFinite(maxCompressions) || maxCompressions <= 0) {
+    const maxCompressions = Number(strategy.maxCompressions);
+    if (!Number.isInteger(maxCompressions) || maxCompressions <= 0) {
       throw new Error('Max Compressions 必须是正整数');
     }
     payload.hybrid = { maxCompressions };
@@ -445,43 +449,20 @@ export function buildStrategyPayload(strategy: StrategyFormState) {
   return payload;
 }
 
-export function toCodexRuntimeSettings(config?: {
-  cli?: {
-    codexSandboxMode?: CodexSandboxMode;
-    codexApprovalPolicy?: CodexApprovalPolicy;
-  };
-  codexExecution?: {
-    authMode?: CodexAuthMode;
-  };
-}): CodexRuntimeSettings {
-  return {
-    sandboxMode: config?.cli?.codexSandboxMode ?? 'workspace-write',
-    approvalPolicy: config?.cli?.codexApprovalPolicy ?? 'on-request',
-    authMode: config?.codexExecution?.authMode ?? 'oauth',
-  };
-}
-
-export function buildCodexConfigPatches(
-  settings: CodexRuntimeSettings,
-  baseline: CodexRuntimeSettings,
-): Array<{ key: string; value: string }> {
-  const patches: Array<{ key: string; value: string }> = [];
-  if (settings.sandboxMode !== baseline.sandboxMode) {
-    patches.push({ key: 'cli.codexSandboxMode', value: settings.sandboxMode });
-  }
-  if (settings.approvalPolicy !== baseline.approvalPolicy) {
-    patches.push({ key: 'cli.codexApprovalPolicy', value: settings.approvalPolicy });
-  }
-  if (settings.authMode !== baseline.authMode) {
-    patches.push({ key: 'codex.execution.authMode', value: settings.authMode });
-  }
-  return patches;
-}
-
+export {
+  buildCodexConfigPatches,
+  CODEX_APPROVAL_OPTIONS,
+  CODEX_AUTH_MODE_OPTIONS,
+  CODEX_SANDBOX_OPTIONS,
+  type CodexApprovalPolicy,
+  type CodexAuthMode,
+  type CodexRuntimeSettings,
+  type CodexSandboxMode,
+  toCodexRuntimeSettings,
+} from './hub-cat-editor.codex';
 export {
   buildCatPatchPayload,
   buildCatPayload,
-  buildContextBudget,
   hintModelFormatForClient,
   validateModelFormatForClient,
 } from './hub-cat-editor.payload';

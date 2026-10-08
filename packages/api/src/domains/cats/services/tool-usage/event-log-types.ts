@@ -16,6 +16,8 @@
  * future eval needing tool call sequences.
  */
 
+import type { ExpansionFunnelMeta, RecallResultStatus } from '@cat-cafe/shared';
+
 export type ToolStatus = 'success' | 'low_hit' | 'no_match' | 'error';
 
 /** Base fields shared by every tool event. */
@@ -30,11 +32,14 @@ export interface BaseToolEvent {
   status: ToolStatus;
 }
 
-/** search_evidence summary — supports FM-5 (nudge effectiveness). */
+/** search_evidence summary — supports FM-5 plus typed F256 expansion tracking. */
 export interface SearchEvidenceSummary {
   resultCount: number;
+  resultStatus: RecallResultStatus;
   topScore: number | null;
   nudgeEmitted: boolean;
+  /** F256 Wave 1b: versioned gate/stage telemetry copied from the result sidecar. */
+  expansionFunnel?: ExpansionFunnelMeta;
 }
 
 /**
@@ -45,6 +50,7 @@ export interface SearchEvidenceSummary {
  * position in rankedCandidateAnchors — don't just record candidateCount.
  */
 export interface GraphResolveSummary {
+  resultStatus: RecallResultStatus;
   candidateCount: number;
   rankedCandidateAnchors: string[];
   selectedCandidateIndex?: number;
@@ -54,6 +60,7 @@ export interface GraphResolveSummary {
 /** list_recent summary — supports FM-3 (cold-start adoption). */
 export interface ListRecentSummary {
   resultCount: number;
+  resultStatus: RecallResultStatus;
   scope: string;
   since: string;
 }

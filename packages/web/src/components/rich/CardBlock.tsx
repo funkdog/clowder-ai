@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { InvestigationProgress } from '@/components/concierge/InvestigationProgress';
 import { MarkdownContent } from '@/components/MarkdownContent';
 import { pushThreadRouteWithHistory } from '@/components/ThreadSidebar/thread-navigation';
+import { useCatNameResolver } from '@/hooks/useCatNameResolver';
 import type { RichCardBlock } from '@/stores/chat-types';
 import { useChatStore } from '@/stores/chatStore';
 import { useConciergeStore } from '@/stores/conciergeStore';
@@ -82,6 +83,7 @@ export function CardBlock({
   messageId?: string;
   confirmations?: CardConfirmationEntry[];
 }) {
+  const resolveCatName = useCatNameResolver();
   const toneStyle = TONE_STYLES[block.tone ?? 'info'] ?? TONE_STYLES.info;
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -297,9 +299,9 @@ export function CardBlock({
           const peekContent = data.window
             .map((m) => {
               const prefix = m.isTarget ? '**→ ' : '  ';
-              const sender = m.catId ? `🐱 ${m.catId}` : `👤 ${m.userId}`;
+              const sender = m.catId ? `🐱 ${resolveCatName(m.catId)}` : `👤 ${m.userId}`;
               const suffix = m.isTarget ? ' ←**' : '';
-              return `${prefix}${sender}: ${m.content?.slice(0, 200) ?? ''}${suffix}`;
+              return `${prefix}${sender}: ${m.content ?? ''}${suffix}`;
             })
             .join('\n\n');
 
@@ -378,7 +380,6 @@ export function CardBlock({
             : { method: 'POST' };
         const res = await apiFetch(`/api/concierge/triage/${planId}/confirm`, requestInit);
         if (!res.ok) throw new Error(`确认失败: ${res.status}`);
-        setCopiedAction('concierge_triage_confirm');
 
         // If backend returns a thread, the confirmed action has transferred the user's intent:
         // go => target thread, propose_thread => newly-created investigation thread.
@@ -387,14 +388,24 @@ export function CardBlock({
         const data = (await res.json().catch(() => ({}))) as Record<string, unknown>;
         const threadId = typeof data.threadId === 'string' ? data.threadId : '';
         if ((intent === 'go' || intent === 'propose_thread') && threadId) {
+          setCopiedAction('concierge_triage_confirm');
           useConciergeStore.getState().onNavigationAction();
           pushThreadRouteWithHistory(threadId, window);
+        } else if ((intent === 'go' || intent === 'propose_thread') && !threadId) {
+          // BUG-UX-13 cloud P2: server already consumed the plan (status=completed) before
+          // responding, so a second click would 409. Mark terminal + show error.
+          setCopiedAction('concierge_triage_confirm');
+          setError('已确认，但目标对话未找到。请手动跳转到目标对话。');
         } else if (intent === 'investigate') {
+          setCopiedAction('concierge_triage_confirm');
           // AC-B2: extract investigationJobId → InvestigationProgress polls and renders report
           const jobId = typeof data.investigationJobId === 'string' ? data.investigationJobId : '';
           if (jobId) {
             setInvestigationJobId(jobId);
           }
+        } else {
+          // Other intents (or no intent): mark terminal on success
+          setCopiedAction('concierge_triage_confirm');
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : '确认失败');
@@ -451,7 +462,10 @@ export function CardBlock({
         return;
       }
       if (action === 'concierge_peek') {
-        await handleConciergePeek(payload);
+        // BUG-UX-12: normalize old stored peek actions to teleport.
+        // Pre-UX-12 messages may have concierge_peek in rich blocks; redirect to
+        // teleport so card buttons behave consistently with inline markers.
+        handleConciergeTeleport(payload);
         return;
       }
       // F229 Phase B: propose_thread action
@@ -524,7 +538,7 @@ export function CardBlock({
         </div>
       )}
       {block.actions && block.actions.length > 0 && (
-        <div className="mt-2 flex gap-2">
+        <div className="mt-2 flex flex-wrap gap-2">
           {block.actions.map((a, i) => {
             const restoredTriageStatus =
               a.action === 'concierge_triage_confirm' || a.action === 'concierge_triage_cancel'
@@ -553,7 +567,9 @@ export function CardBlock({
                   : a.action === 'concierge_triage_cancel'
                     ? '已取消'
                     : '已复制'
-                : a.label;
+                : a.action === 'concierge_peek'
+                  ? a.label.replace('原地看', '跳过去')
+                  : a.label;
 
             return (
               <button
@@ -561,7 +577,7 @@ export function CardBlock({
                 type="button"
                 disabled={disabled}
                 onClick={() => handleAction(a.action, a.payload)}
-                className="text-xs px-2 py-1 rounded bg-[var(--semantic-warning-surface)] hover:bg-[var(--semantic-warning-surface)] text-conn-amber-text border border-conn-amber-ring disabled:opacity-50 transition-colors"
+                className="max-w-full break-words text-left text-xs leading-5 px-2 py-1 rounded bg-[var(--semantic-warning-surface)] hover:bg-[var(--semantic-warning-surface)] text-conn-amber-text border border-conn-amber-ring disabled:opacity-50 transition-colors"
               >
                 {label}
               </button>

@@ -10,7 +10,7 @@
 export interface ConciergeConfig {
   /** 是否启用前台猫 (default true) */
   enabled: boolean;
-  /** 皮肤 — E0: ragdoll-v1 默认 | E1: yanyan-codex / xianxian-codex (9-state atlas) | yarn-ball legacy */
+  /** 皮肤 — E1: xianxian-codex 默认；yanyan-codex / ragdoll-v1 / yarn-ball 可选 */
   skin: 'yarn-ball' | 'ragdoll-v1' | 'yanyan-codex' | 'xianxian-codex';
   /** 前台猫显示名（KD-6: per-deployment 可配置，本家 Phase A 落地投票） */
   displayName: string;
@@ -24,27 +24,59 @@ export interface ConciergeConfig {
    * - 'quiet-badge': Tier 0-1 低优先级 badge，hover 才出文字（Phase A 默认）
    */
   proactivePolicy: 'ambient' | 'quiet-badge';
-  /** 一键静音/隐藏整个球 (AC-A6) */
+  /** 隐藏整个猫猫球；字段名为历史兼容保留，不表示关闭声音 (AC-A6) */
   muted: boolean;
   /** 球位置 (PR-A3b INV-P3: per-user 持久化) — null = default bottom-right */
   ballPosition: { x: number; y: number } | null;
+  /** 球大小 (E3: per-user 持久化, 48-192px) — undefined/null = BALL_SIZE_DEFAULT */
+  ballSize?: number;
+  /** 自主行为引擎开关 (E4, default true). When false, cat stays in business-projected state. */
+  behaviorEnabled?: boolean;
+  /** Household lookup choice shared by all companion surfaces; absent means the owner default (allowed). */
+  householdReadsAllowed?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Ball size constants (E3: resizable ball)
+// ---------------------------------------------------------------------------
+
+/** Minimum ball size — "pocket cat" (48px). Any smaller loses icon readability. */
+export const BALL_SIZE_MIN = 48;
+
+/** Maximum ball size — matches native sprite atlas resolution (192×208 cells). */
+export const BALL_SIZE_MAX = 192;
+
+/** Default ball size — legacy BALL_SIZE constant (72px squircle). */
+export const BALL_SIZE_DEFAULT = 72;
+
+/**
+ * Clamp and sanitize a ballSize value.
+ * Returns BALL_SIZE_DEFAULT for undefined/null/NaN, rounds to integer,
+ * and clamps to [BALL_SIZE_MIN, BALL_SIZE_MAX].
+ */
+export function clampBallSize(size: number | null | undefined): number {
+  if (size == null || Number.isNaN(size)) return BALL_SIZE_DEFAULT;
+  const rounded = Math.round(size);
+  return Math.max(BALL_SIZE_MIN, Math.min(BALL_SIZE_MAX, rounded));
 }
 
 /** ConciergeConfig 默认值（dutyCatProfileId 由 API 层根据 roster 解析） */
 export const CONCIERGE_CONFIG_DEFAULTS: Omit<ConciergeConfig, 'dutyCatProfileId'> = {
   enabled: true,
-  skin: 'yanyan-codex',
+  skin: 'xianxian-codex',
   displayName: '猫猫球',
   personaTone: '温暖、简短、不啰嗦',
   proactivePolicy: 'quiet-badge',
   muted: false,
   ballPosition: null,
+  ballSize: BALL_SIZE_DEFAULT,
+  behaviorEnabled: true,
 };
 
 /**
  * 球八态状态机
  * idle        — 默认待机（呼吸动画）
- * sleeping    — 静音/非活跃（可配置降级态）
+ * sleeping    — 休息/非活跃（隐藏态的可见降级）
  * listening   — STT 录音中（Phase C）
  * thinking    — 值班猫 invocation 进行中
  * found       — 记忆/功能发现返回结果（态 3）

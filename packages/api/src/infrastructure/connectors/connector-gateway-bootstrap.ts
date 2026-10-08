@@ -27,6 +27,8 @@ import {
 import type { RedisClient } from '@cat-cafe/shared/utils';
 import type { FastifyBaseLogger } from 'fastify';
 import { isCatAvailable } from '../../config/cat-config-loader.js';
+import { resolveTtsCacheDir } from '../../domains/cats/services/tts/document-listen-paths.js';
+import type { IssueCommentClassification } from '../../domains/community/issue-analysis/issue-comment-classifier.js';
 import type { ConnectorWebhookHandler } from '../../routes/connector-webhooks.js';
 import { resolveActiveProjectRoot } from '../../utils/active-project-root.js';
 import { getDefaultUploadDir } from '../../utils/upload-paths.js';
@@ -43,6 +45,10 @@ import { type IConnectorThreadBindingStore, MemoryConnectorThreadBindingStore } 
 import { GitHubRepoWebhookHandler } from './github-repo-event/GitHubRepoWebhookHandler.js';
 import { ReconciliationDedup } from './github-repo-event/ReconciliationDedup.js';
 import { RedisDeliveryDedup } from './github-repo-event/RedisDeliveryDedup.js';
+import {
+  createRepoInboxOwnerResolver,
+  type RepoInboxOwnerConfigStore,
+} from './github-repo-event/RepoInboxOwnerResolver.js';
 import { InboundMessageDedup } from './InboundMessageDedup.js';
 import {
   clearConnectorConfigCache,
@@ -82,6 +88,12 @@ export interface ConnectorGatewayConfig {
   feishuAdminOpenIds?: string | undefined;
   /** F134-E: 'webhook' (default) or 'websocket' (long-connection via WSClient) */
   feishuConnectionMode?: 'webhook' | 'websocket' | undefined;
+  /**
+   * #1035: Outbound group-chat `@alias` → Feishu `<at>` token map (JSON string).
+   * Example: `{"胖胖虾":{"openId":"ou_xxx","displayName":"胖胖虾"}}`
+   * Malformed JSON disables the feature (logged warn, no crash).
+   */
+  feishuGroupBotMentionsJson?: string | undefined;
   dingtalkAppKey?: string | undefined;
   dingtalkAppSecret?: string | undefined;
   weixinBotToken?: string | undefined;
@@ -199,6 +211,10 @@ export interface ConnectorGatewayDeps {
   readonly commandRegistry?: import('../commands/CommandRegistry.js').CommandRegistry;
   /** F142: shared binding store — if provided, gateway reuses it instead of creating a new instance */
   readonly bindingStore?: IConnectorThreadBindingStore;
+  /** Canonical GitHub issue-comment classifier shared with scheduler collection paths. */
+  readonly classifyGitHubIssueComment?: (comment: { author: string; body: string }) => IssueCommentClassification;
+  /** Canonical per-repo community routing config used by GitHub Repo Inbox. */
+  readonly repoConfigStore?: RepoInboxOwnerConfigStore;
   /** @internal Test-only: override WSClient factory to avoid real SDK connections */
   readonly _wsClientFactory?:
     | ((opts: { appId: string; appSecret: string }) => {
@@ -211,6 +227,8 @@ export interface ConnectorGatewayDeps {
 }
 
 export interface ConnectorGatewayHandle {
+  /** Credential-free lifecycle diagnostic for the initial preconfigured-source resolution. */
+  readonly preconfiguredAutostartStatus: PreconfiguredConnectorAutostartStatus;
   readonly outboundHook: OutboundDeliveryHook;
   readonly streamingHook: StreamingOutboundHook;
   readonly webhookHandlers: Map<string, ConnectorWebhookHandler>;
@@ -243,6 +261,8 @@ export function loadConnectorGatewayConfig(): ConnectorGatewayConfig {
     feishuBotOpenId: process.env.FEISHU_BOT_OPEN_ID,
     feishuAdminOpenIds: process.env.FEISHU_ADMIN_OPEN_IDS,
     feishuConnectionMode: process.env.FEISHU_CONNECTION_MODE === 'websocket' ? 'websocket' : 'webhook',
+    // #1035: outbound `@alias` → Feishu `<at>` token map (JSON string)
+    feishuGroupBotMentionsJson: process.env.FEISHU_GROUP_BOT_MENTIONS_JSON,
     dingtalkAppKey: process.env.DINGTALK_APP_KEY,
     dingtalkAppSecret: process.env.DINGTALK_APP_SECRET,
     weixinBotToken: process.env.WEIXIN_BOT_TOKEN,
@@ -262,12 +282,18 @@ export function loadConnectorGatewayConfig(): ConnectorGatewayConfig {
   };
 }
 
-type ConnectorAutostartEnv = {
+export type ConnectorAutostartEnv = {
   readonly [key: string]: string | undefined;
   readonly CONNECTOR_GATEWAY_AUTOSTART?: string | undefined;
-  readonly CAT_CAFE_RUNTIME_ROOT?: string | undefined;
-  readonly NODE_ENV?: string | undefined;
 };
+
+export interface ConnectorGatewayStartOptions {
+  /**
+   * Test seam for the launching-process environment. Production callers omit
+   * this so the final resolver reads the real process-level lifecycle decision.
+   */
+  readonly autostartEnv?: ConnectorAutostartEnv;
+}
 
 function parseBooleanOverride(value: string | undefined): boolean | undefined {
   const normalized = value?.trim().toLowerCase();
@@ -278,39 +304,71 @@ function parseBooleanOverride(value: string | undefined): boolean | undefined {
 }
 
 export function isPreconfiguredConnectorAutostartEnabled(env: ConnectorAutostartEnv = process.env): boolean {
-  const explicit = parseBooleanOverride(env.CONNECTOR_GATEWAY_AUTOSTART);
-  if (explicit !== undefined) return explicit;
-  return env.NODE_ENV === 'production' && Boolean(env.CAT_CAFE_RUNTIME_ROOT?.trim());
+  return parseBooleanOverride(env.CONNECTOR_GATEWAY_AUTOSTART) === true;
 }
 
-export function applyConnectorGatewayAutostartPolicy(
+export type PreconfiguredConnectorAutostartStatus =
+  | 'enabled'
+  | 'disabled-no-credentials'
+  | 'disabled-credentials-suppressed';
+
+const PRECONFIGURED_CONNECTOR_CREDENTIAL_FIELDS = [
+  'telegramBotToken',
+  'feishuAppId',
+  'feishuAppSecret',
+  'feishuVerificationToken',
+  'dingtalkAppKey',
+  'dingtalkAppSecret',
+  'weixinBotToken',
+  'wecomBotId',
+  'wecomBotSecret',
+  'wecomCorpId',
+  'wecomAgentId',
+  'wecomAgentSecret',
+  'wecomToken',
+  'wecomEncodingAesKey',
+  'xiaoyiAk',
+  'xiaoyiSk',
+  'xiaoyiAgentId',
+] as const satisfies readonly (keyof ConnectorGatewayConfig)[];
+
+const PRECONFIGURED_CONNECTOR_CREDENTIAL_ENV_KEYS = new Set<string>([
+  'TELEGRAM_BOT_TOKEN',
+  'FEISHU_APP_ID',
+  'FEISHU_APP_SECRET',
+  'FEISHU_VERIFICATION_TOKEN',
+  'DINGTALK_APP_KEY',
+  'DINGTALK_APP_SECRET',
+  'WEIXIN_BOT_TOKEN',
+  'WECOM_BOT_ID',
+  'WECOM_BOT_SECRET',
+  'WECOM_CORP_ID',
+  'WECOM_AGENT_ID',
+  'WECOM_AGENT_SECRET',
+  'WECOM_TOKEN',
+  'WECOM_ENCODING_AES_KEY',
+  'XIAOYI_AK',
+  'XIAOYI_SK',
+  'XIAOYI_AGENT_ID',
+]);
+
+function hasText(value: string | undefined): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function hasConfigCredentials(config: ConnectorGatewayConfig): boolean {
+  return PRECONFIGURED_CONNECTOR_CREDENTIAL_FIELDS.some((field) => hasText(config[field]));
+}
+
+export function classifyPreconfiguredConnectorAutostart(
   config: ConnectorGatewayConfig,
   env: ConnectorAutostartEnv = process.env,
-): ConnectorGatewayConfig {
-  if (isPreconfiguredConnectorAutostartEnabled(env)) return config;
+  additionalCredentialSourcesPresent = false,
+): PreconfiguredConnectorAutostartStatus {
+  if (isPreconfiguredConnectorAutostartEnabled(env)) return 'enabled';
 
-  return {
-    ...config,
-    telegramBotToken: undefined,
-    feishuAppId: undefined,
-    feishuAppSecret: undefined,
-    feishuVerificationToken: undefined,
-    feishuBotOpenId: undefined,
-    feishuAdminOpenIds: undefined,
-    dingtalkAppKey: undefined,
-    dingtalkAppSecret: undefined,
-    weixinBotToken: undefined,
-    wecomBotId: undefined,
-    wecomBotSecret: undefined,
-    wecomCorpId: undefined,
-    wecomAgentId: undefined,
-    wecomAgentSecret: undefined,
-    wecomToken: undefined,
-    wecomEncodingAesKey: undefined,
-    xiaoyiAk: undefined,
-    xiaoyiSk: undefined,
-    xiaoyiAgentId: undefined,
-  };
+  const hasCredentials = additionalCredentialSourcesPresent || hasConfigCredentials(config);
+  return hasCredentials ? 'disabled-credentials-suppressed' : 'disabled-no-credentials';
 }
 
 /**
@@ -325,6 +383,7 @@ function configToEnvMap(config: ConnectorGatewayConfig): Record<string, string |
     FEISHU_APP_SECRET: config.feishuAppSecret,
     FEISHU_VERIFICATION_TOKEN: config.feishuVerificationToken,
     FEISHU_BOT_OPEN_ID: config.feishuBotOpenId,
+    FEISHU_GROUP_BOT_MENTIONS_JSON: config.feishuGroupBotMentionsJson,
     FEISHU_ADMIN_OPEN_IDS: config.feishuAdminOpenIds,
     FEISHU_CONNECTION_MODE: config.feishuConnectionMode,
     DINGTALK_APP_KEY: config.dingtalkAppKey,
@@ -386,8 +445,12 @@ function normalizeExternalConnectorDefinitionIcon(definition: ConnectorDefinitio
 export async function startConnectorGateway(
   config: ConnectorGatewayConfig,
   deps: ConnectorGatewayDeps,
+  options: ConnectorGatewayStartOptions = {},
 ): Promise<ConnectorGatewayHandle | null> {
   const { log } = deps;
+  const autostartEnv = options.autostartEnv ?? process.env;
+  const preconfiguredConnectorAutostartEnabled = isPreconfiguredConnectorAutostartEnabled(autostartEnv);
+  let preconfiguredCredentialsPresent = hasConfigCredentials(config);
 
   const bindingStore =
     deps.bindingStore ??
@@ -408,12 +471,13 @@ export async function startConnectorGateway(
   const effectiveUserId = config.coCreatorUserId || deps.defaultUserId;
 
   // F134 Phase D: Permission store + admin config
-  const adminOpenIds = config.feishuAdminOpenIds
-    ? config.feishuAdminOpenIds
-        .split(',')
-        .map((s) => s.trim())
-        .filter(Boolean)
-    : [];
+  const adminOpenIds =
+    preconfiguredConnectorAutostartEnabled && config.feishuAdminOpenIds
+      ? config.feishuAdminOpenIds
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean)
+      : [];
   const permissionStore: IConnectorPermissionStore = deps.redis
     ? new RedisConnectorPermissionStore(deps.redis)
     : new MemoryConnectorPermissionStore();
@@ -553,9 +617,67 @@ export async function startConnectorGateway(
     );
   }
 
+  /**
+   * Resolve all initial configuration sources before applying lifecycle policy.
+   * The returned `startupEnv` is the only environment allowed to reach plugin
+   * initialization. Manual activation intentionally re-resolves unfiltered
+   * values later, after a user action has explicitly requested a connection.
+   */
+  function resolveInitialPluginEnv(
+    plugin: import('./im-connector-plugin.js').IMConnectorPlugin,
+    isBuiltin: boolean,
+  ): {
+    resolvedEnv: Record<string, string | undefined>;
+    startupEnv: Record<string, string | undefined>;
+  } {
+    const resolvedEnv: Record<string, string | undefined> = {};
+    const manifest = manifests.get(plugin.id);
+    const manifestValueFields = manifest ? manifest.config.filter(isValueField) : [];
+    const keys = [...new Set([...plugin.requiredEnvKeys, ...(plugin.optionalEnvKeys ?? [])])];
+
+    for (const key of keys) {
+      let sourceValue: string | undefined;
+      if (manifest) {
+        const stored = getStoredConnectorValue(plugin.id, key);
+        if (stored === null) {
+          // KD-19 tombstone: user cleared this field in Hub — block all fallback.
+          resolvedEnv[key] = undefined;
+        } else if (stored !== undefined) {
+          sourceValue = stored;
+          resolvedEnv[key] = stored;
+        } else {
+          // Built-in: configEnv has mapped values from loadConnectorGatewayConfig().
+          // Installed: configEnv has no mapping for plugin keys — fall to process.env.
+          const envVal = isBuiltin ? configEnv[key] : process.env[key];
+          const yamlField = manifestValueFields.find((field) => field.envName === key);
+          const yamlDefault = yamlField ? encodeDefault(yamlField) : undefined;
+          sourceValue = envVal;
+          resolvedEnv[key] = envVal ?? yamlDefault;
+        }
+      } else {
+        // Legacy npm plugins without manifest — no config store path.
+        sourceValue = isBuiltin ? configEnv[key] : process.env[key];
+        resolvedEnv[key] = sourceValue;
+      }
+
+      const credentialKey = isBuiltin ? PRECONFIGURED_CONNECTOR_CREDENTIAL_ENV_KEYS.has(key) : true;
+      if (credentialKey && hasText(sourceValue)) preconfiguredCredentialsPresent = true;
+    }
+
+    const startupEnv = preconfiguredConnectorAutostartEnabled
+      ? resolvedEnv
+      : Object.fromEntries(keys.map((key) => [key, undefined]));
+    return { resolvedEnv, startupEnv };
+  }
+
   // Detect invalid telegram token (token provided but malformed — preserves warning for user)
   const telegramPlugin = allPlugins.find((p) => p.id === 'telegram');
-  if (configEnv.TELEGRAM_BOT_TOKEN?.trim() && telegramPlugin && !telegramPlugin.isConfigured(configEnv)) {
+  if (
+    preconfiguredConnectorAutostartEnabled &&
+    configEnv.TELEGRAM_BOT_TOKEN?.trim() &&
+    telegramPlugin &&
+    !telegramPlugin.isConfigured(configEnv)
+  ) {
     log.warn('[ConnectorGateway] Invalid TELEGRAM_BOT_TOKEN format — Telegram connector disabled');
   }
 
@@ -567,6 +689,7 @@ export async function startConnectorGateway(
   let wecomBotStopFn: (() => Promise<void>) | null = null;
   stopFns.add(async () => wecomBotStopFn?.());
   const wecomBotPlugin = allPlugins.find((p) => p.id === 'wecom-bot');
+  let initialWecomBotEnv: Record<string, string | undefined> = {};
 
   // ── Unified plugin initialization loop ──
   for (const plugin of allPlugins) {
@@ -575,6 +698,7 @@ export async function startConnectorGateway(
     // WeComBot stream startup is handled separately, but the plugin must stay
     // registered so Hub action routes can validate/connect before credentials exist.
     if (plugin.id === 'wecom-bot') {
+      initialWecomBotEnv = resolveInitialPluginEnv(plugin, isBuiltin).startupEnv;
       plugins.set(plugin.id, plugin);
       continue;
     }
@@ -606,33 +730,9 @@ export async function startConnectorGateway(
       });
     }
 
-    // Build env for this plugin — F240: stored (Hub UI) > config param (env/test) > YAML default
-    // KD-17: only value fields have envName; KD-18: defaults encoded through codec
-    // R5-P1 fix: installed plugins with manifest also use config store (was gated on isBuiltin)
-    const pluginEnv: Record<string, string | undefined> = {};
-    const manifest = manifests.get(plugin.id);
-    const manifestValueFields = manifest ? manifest.config.filter(isValueField) : [];
-    for (const key of [...plugin.requiredEnvKeys, ...(plugin.optionalEnvKeys ?? [])]) {
-      if (manifest) {
-        const stored = getStoredConnectorValue(plugin.id, key);
-        if (stored === null) {
-          // KD-19 tombstone: user cleared this field in Hub — block all fallback
-          pluginEnv[key] = undefined;
-        } else if (stored !== undefined) {
-          pluginEnv[key] = stored;
-        } else {
-          // Built-in: configEnv has mapped values from loadConnectorGatewayConfig()
-          // Installed: configEnv has no mapping for plugin keys — fall to process.env
-          const envVal = isBuiltin ? configEnv[key] : process.env[key];
-          const yamlField = manifestValueFields.find((f) => f.envName === key);
-          const yamlDefault = yamlField ? encodeDefault(yamlField) : undefined;
-          pluginEnv[key] = envVal ?? yamlDefault;
-        }
-      } else {
-        // Legacy npm plugins without manifest — no config store path
-        pluginEnv[key] = isBuiltin ? configEnv[key] : process.env[key];
-      }
-    }
+    // F240: stored (Hub UI) > config param/env > YAML default, followed by
+    // the final lifecycle-authority filter for automatic initialization.
+    const { resolvedEnv, startupEnv: pluginEnv } = resolveInitialPluginEnv(plugin, isBuiltin);
 
     // Weixin always creates adapter (for QR login support even without credentials)
     const isWeixin = plugin.id === 'weixin';
@@ -640,7 +740,7 @@ export async function startConnectorGateway(
 
     // Update external plugin metadata with actual isConfigured() result (cloud P2 fix:
     // Hub must use plugin's own predicate, not the all-requiredEnvKeys heuristic)
-    if (!isBuiltin) updateExternalConnectorConfigured(plugin.id, isConfigured);
+    if (!isBuiltin) updateExternalConnectorConfigured(plugin.id, plugin.isConfigured(resolvedEnv));
 
     // F240 A-3 fix: Always register plugin (for action endpoints even when unconfigured).
     // Adapters are only created below when configured — plugin code is always available.
@@ -783,6 +883,9 @@ export async function startConnectorGateway(
         invokeTrigger: deps.invokeTrigger,
         dedup: ghDedup,
         reconciliationDedup: ghReconciliationDedup,
+        ...(deps.repoConfigStore
+          ? { resolveInboxCatId: createRepoInboxOwnerResolver(deps.repoConfigStore, ghInboxCatId, log) }
+          : {}),
         redis: deps.redis as import('./github-repo-event/RedisDeliveryDedup.js').RedisLike,
         deliveryDeps: {
           messageStore:
@@ -793,6 +896,7 @@ export async function startConnectorGateway(
         eventLog: ghEventLog,
         projector:
           ghProjector as import('./github-repo-event/GitHubRepoWebhookHandler.js').GitHubRepoHandlerDeps['projector'],
+        classifyIssueComment: deps.classifyGitHubIssueComment,
       },
     );
     webhookHandlers.set('github-repo-event', ghHandler);
@@ -857,12 +961,10 @@ export async function startConnectorGateway(
     }
   };
 
-  // F240: WeComBot config — three-state resolution (KD-19 tombstone aware)
-  const storedBotId = getStoredConnectorValue('wecom-bot', 'WECOM_BOT_ID');
-  const storedBotSecret = getStoredConnectorValue('wecom-bot', 'WECOM_BOT_SECRET');
-  // null = tombstone (user cleared) → block fallback; undefined = absent → fall through
-  const effectiveWecomBotId = storedBotId === null ? undefined : (storedBotId ?? config.wecomBotId);
-  const effectiveWecomBotSecret = storedBotSecret === null ? undefined : (storedBotSecret ?? config.wecomBotSecret);
+  // Initial WeCom Bot startup uses the same final lifecycle-authority filter.
+  // `startWeComBotStream()` remains available for an explicit Hub action.
+  const effectiveWecomBotId = initialWecomBotEnv.WECOM_BOT_ID;
+  const effectiveWecomBotSecret = initialWecomBotEnv.WECOM_BOT_SECRET;
   if (effectiveWecomBotId && effectiveWecomBotSecret) {
     await startWeComBotStream(effectiveWecomBotId, effectiveWecomBotSecret);
   }
@@ -875,7 +977,7 @@ export async function startConnectorGateway(
 
   // R3-P1: Resolve route URLs to local file paths for real media delivery
   const uploadDir = getDefaultUploadDir(process.env.UPLOAD_DIR);
-  const ttsCacheDir = resolve(process.env.TTS_CACHE_DIR ?? './data/tts-cache');
+  const ttsCacheDir = resolve(resolveTtsCacheDir());
   const resolvedMediaDir = resolve(mediaDir);
   const webPublicDir = resolve(process.env.WEB_PUBLIC_DIR ?? '../web/public');
   const mediaPathResolver = (url: string): string | undefined => {
@@ -920,6 +1022,9 @@ export async function startConnectorGateway(
     bindingStore,
     adapters: streamableAdapters,
     log,
+    // F254 Phase E: connector placeholders are receipts only. Answer bytes are
+    // not edited into external messages until the atomic output commit wins.
+    receiptOnlyUntilCommit: true,
   });
 
   // Phase 5b: Media file cleanup (24h TTL, sweep every hour)
@@ -1072,6 +1177,11 @@ export async function startConnectorGateway(
   }
 
   return {
+    preconfiguredAutostartStatus: classifyPreconfiguredConnectorAutostart(
+      config,
+      autostartEnv,
+      preconfiguredCredentialsPresent,
+    ),
     outboundHook,
     streamingHook,
     webhookHandlers,

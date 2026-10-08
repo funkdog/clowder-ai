@@ -1,10 +1,7 @@
 ---
 name: worktree
-description: >
-  创建 Git worktree 隔离开发环境，含 Redis 6398 安全配置。
-  Use when: 开始任何代码修改、新功能开发、bug fix。
-  Not for: 纯文档修改（≤5 行）、不涉及代码/脚本/API/第一方执行面的讨论。
-  Output: 隔离的 worktree + 正确的 Redis/环境配置。
+tips_exempt: "Renewed 2026-09-29 for Alpha Redis 6397 and shared developer Redis 6398 safety guidance; this internal checkout setup has no separate end-user command or useful Hub discovery moment."
+description: 为代码、脚本、API 与第一方执行面创建隔离 Git worktree，并配置 Redis 6398；classifier 放行的 co-creation docs direct push 不进入本流程。
 triggers:
   - "开始开发"
   - "新 worktree"
@@ -14,7 +11,19 @@ renamed-from: using-git-worktrees
 
 # Worktree
 
-开始任何非 trivial 的功能开发前，必须拉 worktree 隔离，不要直接在 main 上改代码。Skill / MCP description 如果改到 API route、localhost、script、CLI command、第一方执行面，即使是 ≤5 行，也不按“纯文档免验证”处理：至少 commit 前跑 `pnpm check`；非 trivial 行为改动仍应开 worktree。
+开始任何非 trivial 的功能开发前，必须拉 worktree 隔离，不要直接在 main 上改代码。Skill / MCP description 如果改到 API route、localhost、script、CLI command、第一方执行面，即使只有几行，也不按“纯文档免验证”处理：默认跑 skill reference/surface 与 claim 对应的定向检查；只有共享契约、门禁执行链或 targeted 无法覆盖跨包合流风险时才跑 full `pnpm gate`；高风险标签单独加强对应独立审查 / 授权。非 trivial 行为改动仍应开 worktree。
+
+获准的新 Feature 开工或旧 Phase 续做，在原责任现场先按 `custody-recognition` 核 accepted scope 并复用原 Task；worktree 只是代码隔离，不是新的托付身份。已批准的执行子线程继续自己的实现，不读取或迁移父线程 Task。
+
+## Co-Creation Docs 边界
+
+纯文档不再按行数决定是否进 worktree。用户授权落盘的共创文档先加载 `co-creation-docs`；显然低风险时猫可直接判定，拿不准或准备升到重载体时才运行 `pnpm classify:co-creation-docs`：
+
+- 显然 low-risk 或 `delivery=direct_push` → 不加载本 skill；走轻量文档校验 + 按内容决定 `review=required|reuse|skip` + commit/push。
+- `delivery=pull_request` 且 `lane=co_creation_docs` → 独立分支用于冲突/治理 review，但不自动升级 full gate。
+- `lane=regular_development` → 正常加载本 skill。
+
+`cat-cafe-skills/**`、`sop-definitions/**`、脚本、CLI 与其他第一方执行面始终属于 regular development；文件扩展名是 `.md` 也不例外。
 
 ## 开工前 Recall（F102 记忆系统）🔴
 
@@ -29,10 +38,10 @@ search_evidence("{topic}", scope="all")
 
 ## 目录位置（铁律）
 
-**Cat Cafe 项目：`../cat-cafe-{feature-name}`（relay-station/ 同级）**
+**Clowder AI 项目：`../cat-cafe-{feature-name}`（relay-station/ 同级）**
 
 ```bash
-git worktree add ../cat-cafe-{feature-name} -b feat/{feature-name}
+pnpm worktree:new ../cat-cafe-{feature-name} --branch feat/{feature-name} --owner {你的 catId} --policy merged
 ```
 
 - 🔴 **禁止在项目内部创建**（不要用 `.worktrees/` 子目录）
@@ -40,7 +49,7 @@ git worktree add ../cat-cafe-{feature-name} -b feat/{feature-name}
 - 🔴 **禁止在 `cat-cafe-runtime` 里执行 `pnpm start` / `pnpm runtime:start`**（会先 kill 旧 API，等于把在线 runtime 踢掉）
 - 🔴 **`localhost:3003/3004` 默认属于 `cat-cafe-runtime`**。如果你要验证当前 worktree 的未合入改动，浏览器 / Playwright / curl 不能直接打这两个端口，除非你明确是在做 runtime 验收而不是开发验证
 
-其他项目：先查 `CLAUDE.md / AGENTS.md` 有没有指定位置 → 有就用 → 没有再问用户。
+其他项目：优先遵守仓库指定位置；未指定时可选择不冲突的同级隔离目录。只有目录权限或真实约束不明确时才询问。
 
 ## 创建前：Main 同步检查（F073 门禁）
 
@@ -49,45 +58,63 @@ git worktree add ../cat-cafe-{feature-name} -b feat/{feature-name}
 ```bash
 # Step 1: 检查是否有未提交的文档变更
 git status --porcelain docs/ | head -5
-# 如果有输出 → 先 commit 再继续
+# 如果有输出 → 核对归属与本次范围；不得批量提交其他工作的改动
 
 # Step 2: 检查 main 与 remote 双向同步
 git fetch origin main --quiet
 AHEAD=$(git rev-list --count origin/main..main)
 BEHIND=$(git rev-list --count main..origin/main)
 echo "ahead=$AHEAD behind=$BEHIND"
-# ahead > 0 → 先 git push origin main
-# behind > 0 → 先 git pull origin main
+# ahead/behind 非零 → 查明待整合内容与归属，不自动发布或覆盖
 # 两者都 = 0 → 可以继续
 ```
 
-如果 main 与 remote 不同步：
-1. `git add docs/` + commit（如有未提交变更）
-2. `git pull origin main`（如果 behind > 0，先拉取其他猫的更新）
-3. `git push origin main`（如果 ahead > 0，推送本地更新）
-4. 确认 ahead=0 behind=0 后再创建 worktree
+如果 main 与 remote 不同步，先记录具体基线、差异与任务归属。同步或发布只处理已获授权、可追溯到本任务的变更；不得使用 `git add docs/` 将所有现有文档打包，也不得为通过同步检查推送来源未核对的 main commits。已有授权可复用，不重复询问。
+
+主仓存在其他工作的未完成现场时保全它。在 Rule 0 下选择冻结上游 commit 的独立 checkout，应记录为何主仓同步要求不适用、实际 base SHA 与隔离证据；现有机器判据未覆盖的例外不能宣称已由机器放行。同期的主仓整合由其明确责任人处理。
+
+## 创建前：查在飞 PR（别和别的猫撞车）🔴
+
+Main 同步只保证你和 `origin/main` 一致，**不告诉你有没有别的猫正在改同一批文件**。开 worktree 修**跨 feature / 共享代码 / incident（回归 / 脏状态 / "看起来没人管的红灯"）**类问题前，查在飞的 PR——**两刀，缺一不可**：
+
+```bash
+# 刀 1：列在飞 PR，缩到和你要改的 feature/incident 关键词相关的
+gh pr list --state open --search "<关键词>" \
+  --json number,title,headRefName --jq '.[] | "#\(.number) [\(.headRefName)] \(.title)"'
+
+# 刀 2：对可疑候选，确认它到底碰没碰你要改的文件
+gh pr diff <n> --name-only          # 或 gh pr view <n> --json files --jq '.files[].path'
+```
+
+- 🔴 **刀 2 不能省**：`gh pr list` 只给标题 / 分支名，**不显示 changed files**。只跑刀 1 就下"没人在改这个文件"的结论 = 假的安心——这道 pre-flight 自己就成了"名字承诺、覆盖不到"的空门。必须刀 2 核到文件集重叠，才算查过。
+- 命中同一文件 → **先去那只猫的归口 thread 打个招呼**（cross_post 一句"我也在看 X"），别闷头重复。
+- 修 incident / 回归时补历史链路：`gh pr list --state all --limit 30 --search "<关键词>"`。
+- 诊断里列到的分支名（CI 运行表 / `git worktree list`），**凡是匹配你这次关键词 / 同代码区的**，问一句"它在修什么"——别对全仓几百个分支做无差别 triage，那噪音比省下的重复劳动还多。
+- 反过来：你开始修一个跨 feature / incident 问题后，也在归口 thread 留一句"我在改 X"。协调是双向的。
+
+> 教训（2026-07-09 intake #2816 连环事故）：两只猫同一天、修同一批 clobber、找同一个 reviewer，互相不知道。其中一只从零重推诊断 + 366 行恢复补丁**全部作废**——只因开工前没跑这两刀。`git grep` 告诉你"代码是什么样"，回答不了"谁正在改它"。
 
 ## 创建步骤
 
 ```bash
-# 1. 创建 worktree
-git worktree add ../cat-cafe-{feature-name} -b feat/{feature-name}
+# 1. 创建 worktree（唯一入口；owner 默认取 $CAT_CAFE_CAT_ID，policy 默认 merged，登记随创建完成）
+#    满额时直接拒绝并按 owner 列出谁占着位置（见「异常」）；它从不挪动任何人的目录
+pnpm worktree:new ../cat-cafe-{feature-name} --branch feat/{feature-name}
 cd ../cat-cafe-{feature-name}
 
 # 2. 安装依赖（必须清除 NODE_ENV，否则跳过 devDeps 导致 build 失败！）
 env -u NODE_ENV pnpm install
 
-# 3. 创建 .env（Redis 隔离，必须！）
-cat > .env <<EOF
-REDIS_URL=redis://localhost:6398
-NEXT_PUBLIC_API_URL=http://localhost:3102
-EOF
+# 3. 仅需要运行服务时准备隔离环境
+# 读取当前环境与仓库 preflight 约定；配置变更遵守现有授权边界。
+# 纯 skill/文档/静态检查无需创建 .env 或启动 Redis。
 
-# 4. 验证 Redis 隔离
-echo $REDIS_URL   # 必须是 redis://localhost:6398，不能是 6399
+# 4. 验证运行时实际采用的隔离地址
+# 使用 start-dev 的 preflight / 进程运行信息证明；echo 未加载的变量不是证据。
 
-# 5. 验证基线测试通过
-pnpm test
+# 5. 验证与改动风险匹配的基线（示例；不要机械跑无关全仓测试）
+pnpm check:skills   # skill surface
+pnpm test           # 仅在跨包行为 / high-assurance 需要全量 baseline 时
 ```
 
 ## Redis 隔离（数据安全红线）
@@ -95,9 +122,10 @@ pnpm test
 | Redis | 端口 | 用途 |
 |-------|------|------|
 | **用户 Redis** | **6399** | operator的数据，🔴 圣域，只读 |
-| **开发 Redis** | **6398** | 猫猫开发测试，随便折腾 |
+| **开发 Redis** | **6398** | 共享开发实例；操作前核归属，不做全库清理 |
+| **Alpha Redis** | **6397** | 已合入 main 的隔离验收；数据在 Alpha checkout 内 |
 
-**Worktree 中启动服务 = 必须用 6398。**
+**普通功能 worktree 启动服务须用 6398 或隔离 offset；标准 Alpha 专用 6397。**
 不设置 REDIS_URL 就启动服务 = 回落到 6399 = 数据丢失风险（LL-015）。
 
 ## 多 Worktree 并发：WORKTREE_PORT_OFFSET
@@ -108,7 +136,7 @@ F182 大赛 / 多猫并发开发时，6 个 worktree 同时跑各自服务不打
 
 | OFFSET | Redis | API | Web | NEXT_PUBLIC_API_URL |
 |---|---|---|---|---|
-| 0（alpha 默认） | 6398 | 3102 | 5102 | http://localhost:3102 |
+| 0（worktree 默认） | 6398 | 3102 | 5102 | http://localhost:3102 |
 | -10 | 6388 | 3112 | 5112 | http://localhost:3112 |
 | -20 | 6378 | 3122 | 5122 | http://localhost:3122 |
 | ... | ... | ... | ... | ... |
@@ -154,9 +182,9 @@ pnpm check:worktree-port-offset   # 验证全部 7 个大赛 OFFSET 派生 + 端
 
 详细设计见 *(internal reference removed)*。
 
-## 合入后清理
+## 收工：合入后当场清理
 
-分支合入 main 后**当场清理**，不要留到下次：
+分支合入 main 后**当场清理**（merge-gate Step 8 同一套），不要留到下次：
 
 ```bash
 git worktree remove ../cat-cafe-{feature-name}
@@ -164,11 +192,26 @@ git branch -d feat/{feature-name}
 git worktree prune
 ```
 
-检查是否有积压未清理：
-```bash
-git worktree list             # 列出所有 worktree
-git branch --merged main      # 哪些分支已合入
-```
+**忘了清会怎样（如实说明）**：什么都不会自动发生——没有定时回收，`worktree:new` 也从不挪动任何目录。
+你忘清的目录会一直占你的名额，直到满额时它出现在拒绝消息的 owner 清单里。登记只是让工具**看得出**
+哪些已被主人放行（`merged`：内容已进 origin/main〔含 squash 合入〕且闲置 7 天；`ttl`：到期）；
+真正挪进隔离区（`pnpm worktree:reap --apply`）和删除（`--purge`）都是显式命令，由获授权的人执行。
+所以收工那三行是你的事。
+
+## 异常：满额、想保留、要恢复
+
+| 场景 | 你看到什么 | 怎么做 |
+|------|-----------|--------|
+| 满额被拒 | `capacity: 40/40 …` + 按 owner 列出的占位目录 | 先收掉自己列表里做完的；其余在对应 owner 的 thread 问一句。**不要去清别人的目录，也不用管 undeclared 老库存**（它们不占名额，由维护者一次性处理） |
+| 想长期保留 | — | 建时加 `--policy never`；已有的（包括已在隔离区里的）：`pnpm worktree:new <path> --declare-only --policy never`，之后不会被 purge |
+| 临时沙盒 | — | `--policy ttl --ttl-days N`（review 沙盒默认 7） |
+| 目录被挪走了 | 原路径不见了 | 在 `../.reaper-quarantine/ledger.jsonl` 按原路径找到那条，执行其 `restore` 命令（`git worktree move <隔离路径> <原路径>`） |
+| 隔离后又在里面干活了 / 改了登记 | — | 不用管：隔离后有改动、新提交或重新登记的目录**不会被 purge**（`review:changed-in-quarantine` / `redeclared-in-quarantine`），恢复回去即可 |
+
+规则细节留给工具（`scripts/lib/worktree-reaper-core.mjs`），这里只记要点：
+- **名额只算登记过的活跃 worktree**（上限 40）；隔离区里的、白名单的（`runtime`/`alpha`/`tutorials`/`sharing`/`recovery-backups`）、没登记的老目录都不算。`pnpm worktree:check` 看当前数字。
+- **只动出生时登记过的目录**；没登记的只进报告（`pnpm worktree:reap` dry-run，账本 `.cat-cafe/tmp/reaper-<date>.tsv`）。
+- **有未提交改动、locked、有进程在用的永远不动**；隔离满 14 天且期间没人动过，才进入 `--purge` 候选。
 
 ## Commit / Stash 溯源 Footer（F193 Phase E）
 
@@ -221,8 +264,8 @@ Thread-Context: threadId=[thread-id] invocationId=0001780508313338 catId=codex
 - [ ] **Main 文档双向同步**（`git status --porcelain docs/` 无输出 + ahead=0 + behind=0，F073 门禁）
 - [ ] 目录放在 relay-station/ 同级（不在项目内部）
 - [ ] 不是 `*-runtime` 命名
-- [ ] `.env` 包含 `REDIS_URL=redis://localhost:6398`
-- [ ] 基线测试通过（失败了先报告再问是否继续）
+- [ ] 若要运行服务，已通过实际 preflight 核对隔离地址/offset，未指向生产数据；纯静态工作不要求 `.env`
+- [ ] 风险匹配的 baseline 通过（targeted 默认；共享契约、门禁执行链或无法覆盖的跨包影响才全量）
 - [ ] 当前会话不是 `cat-cafe-runtime` 的运行态验收会话（验收会话默认只读，不做重启命令）
 - [ ] 验证目标 URL 已明确；若是 `3003/3004`，你知道自己在打 runtime，而不是当前 worktree 的本地改动
 
@@ -232,4 +275,4 @@ Thread-Context: threadId=[thread-id] invocationId=0001780508313338 catId=codex
 
 ## Next Step
 
-→ **直接加载 `tdd`**（在 worktree 里开始实现）。SOP 链条自动推进（§17）。
+行为 / bug 风险 → `tdd`；确定性生成物或现有 checker 已精准覆盖 → 直接以该红灯为 RED 修到绿；复杂度需要时才补 `writing-plans`。

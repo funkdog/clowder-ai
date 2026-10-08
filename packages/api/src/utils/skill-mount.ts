@@ -1,10 +1,12 @@
-import { lstat, readlink, realpath, symlink } from 'node:fs/promises';
-import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
+import { lstat, readlink, realpath, rm, symlink } from 'node:fs/promises';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { DEFAULT_MOUNT_RULES, type MountRules, STANDARD_MOUNT_POINT_IDS } from '@cat-cafe/shared';
 import { pathsEqual } from './project-path.js';
 import { resolveStartupProjectRoot } from './startup-root.js';
 
 export type SkillMountPointKey = 'claude' | 'codex' | 'gemini' | 'kimi';
+
+export const SHARED_SKILL_REFS_ALIAS = '.cat-cafe-shared-refs';
 
 export function buildMountPointDirCandidates(
   projectRoot: string,
@@ -159,6 +161,63 @@ export async function createSkillSymlink(target: string, path: string): Promise<
   }
 }
 
+/**
+ * Keep shared skill refs addressable from a provider mount without depending on
+ * whether the runtime resolves the per-skill symlink before normalizing `..`.
+ */
+export async function ensureSharedSkillRefsMount(
+  skillsDir: string,
+  skillsSource: string,
+): Promise<'created' | 'existing' | 'conflict' | 'source-missing'> {
+  const sharedRefsSource = join(skillsSource, 'refs');
+  try {
+    if (!(await lstat(sharedRefsSource)).isDirectory()) return 'source-missing';
+  } catch {
+    return 'source-missing';
+  }
+
+  const aliasPath = join(skillsDir, SHARED_SKILL_REFS_ALIAS);
+  try {
+    const status = await lstat(aliasPath);
+    if (!status.isSymbolicLink()) return 'conflict';
+    const current = await readlink(aliasPath);
+    const currentTarget = isAbsolute(current) ? current : resolve(dirname(aliasPath), current);
+    const [realCurrent, realExpected] = await Promise.all([
+      realpath(currentTarget).catch(() => currentTarget),
+      realpath(sharedRefsSource).catch(() => sharedRefsSource),
+    ]);
+    return pathsEqual(realCurrent, realExpected) ? 'existing' : 'conflict';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return 'conflict';
+  }
+
+  const target = process.platform === 'win32' ? sharedRefsSource : relative(dirname(aliasPath), sharedRefsSource);
+  await createSkillSymlink(target, aliasPath);
+  return 'created';
+}
+
+/** Remove the reserved coordinate only when it is one of our managed links. */
+export async function removeSharedSkillRefsMount(skillsDir: string, skillsSource: string): Promise<boolean> {
+  const aliasPath = join(skillsDir, SHARED_SKILL_REFS_ALIAS);
+  try {
+    const skillsDirStatus = await lstat(skillsDir);
+    if (skillsDirStatus.isSymbolicLink() || !skillsDirStatus.isDirectory()) return false;
+    if (!(await lstat(aliasPath)).isSymbolicLink()) return false;
+    const current = await readlink(aliasPath);
+    const currentTarget = isAbsolute(current) ? current : resolve(dirname(aliasPath), current);
+    const expectedTarget = join(skillsSource, 'refs');
+    const [realCurrent, realExpected] = await Promise.all([
+      realpath(currentTarget).catch(() => currentTarget),
+      realpath(expectedTarget).catch(() => expectedTarget),
+    ]);
+    if (!pathsEqual(realCurrent, realExpected)) return false;
+    await rm(aliasPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Accept symlink target when it points to expected path OR main-repo cat-cafe-skills/{skillName}. */
 export async function isCorrectSymlink(
   linkPath: string,
@@ -166,42 +225,89 @@ export async function isCorrectSymlink(
   skillName?: string,
   fallbackSkillsRoot?: string,
 ): Promise<boolean> {
-  try {
-    const stat = await lstat(linkPath);
-    if (!stat.isSymbolicLink()) return false;
-    const dest = await readlink(linkPath);
-    const absDest = isAbsolute(dest) ? dest : resolve(dirname(linkPath), dest);
-    const [realDest, realExpected] = await Promise.all([
-      realpath(absDest).catch(() => absDest),
-      realpath(expectedTarget).catch(() => expectedTarget),
-    ]);
-    const normalizedDest = realDest.replace(/[/\\]$/, '');
-    const normalizedExpected = realExpected.replace(/[/\\]$/, '');
-    if (pathsEqual(normalizedDest, normalizedExpected)) return true;
+  return (await inspectSkillSymlink(linkPath, expectedTarget, skillName, fallbackSkillsRoot)).state === 'correct';
+}
 
-    if (skillName && fallbackSkillsRoot) {
-      const parentDir = dirname(normalizedDest);
-      const nameMatches = normalizedDest.endsWith(`${sep}${skillName}`);
-      const isCatCafeSkillsDir = basename(parentDir) === 'cat-cafe-skills';
-      const resolvedFallbackRoot = (await realpath(fallbackSkillsRoot).catch(() => fallbackSkillsRoot)).replace(
-        /[/\\]$/,
-        '',
-      );
-      const inFallbackRoot = pathsEqual(parentDir, resolvedFallbackRoot);
-      const hasManifest = await realpath(join(parentDir, 'manifest.yaml'))
-        .then(() => true)
-        .catch(() => false);
-      const hasSkillMd = await realpath(join(normalizedDest, 'SKILL.md'))
-        .then(() => true)
-        .catch(() => false);
-      if (isCatCafeSkillsDir && inFallbackRoot && nameMatches && hasManifest && hasSkillMd) {
-        return true;
-      }
-    }
-    return false;
-  } catch {
+/**
+ * `correct` / `incorrect` are observations; `unknown` means a path existed but
+ * could not be read (`CODE:path` in `gaps`). `isCorrectSymlink` folds unknown
+ * into `false` for writers that only act on a confirmed mount; readers that
+ * report what they saw use this instead (F300 2.1 review R2 P1-2).
+ */
+export type SymlinkInspection =
+  | { readonly state: 'correct' }
+  | { readonly state: 'incorrect' }
+  | { readonly state: 'unknown'; readonly gaps: readonly string[] };
+
+/** Not-there is an answer; anything else that stops a read is a gap. */
+function readGap(error: unknown, path: string): string | null {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'ENOENT' || code === 'ENOTDIR') return null;
+  return `${code ?? 'EUNKNOWN'}:${path}`;
+}
+
+/** realpath, or the lexical path when the target does not exist (a dangling link is still comparable). */
+async function realpathOrLexical(path: string, gaps: string[]): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    const gap = readGap(error, path);
+    if (gap) gaps.push(gap);
+    return path;
+  }
+}
+
+async function existsOrGap(path: string, gaps: string[]): Promise<boolean> {
+  try {
+    await realpath(path);
+    return true;
+  } catch (error) {
+    const gap = readGap(error, path);
+    if (gap) gaps.push(gap);
     return false;
   }
+}
+
+export async function inspectSkillSymlink(
+  linkPath: string,
+  expectedTarget: string,
+  skillName?: string,
+  fallbackSkillsRoot?: string,
+): Promise<SymlinkInspection> {
+  let isLink: boolean;
+  let dest: string;
+  try {
+    isLink = (await lstat(linkPath)).isSymbolicLink();
+    if (!isLink) return { state: 'incorrect' };
+    dest = await readlink(linkPath);
+  } catch (error) {
+    const gap = readGap(error, linkPath);
+    return gap ? { state: 'unknown', gaps: [gap] } : { state: 'incorrect' };
+  }
+  const gaps: string[] = [];
+  const absDest = isAbsolute(dest) ? dest : resolve(dirname(linkPath), dest);
+  const [realDest, realExpected] = await Promise.all([
+    realpathOrLexical(absDest, gaps),
+    realpathOrLexical(expectedTarget, gaps),
+  ]);
+  const normalizedDest = realDest.replace(/[/\\]$/, '');
+  const normalizedExpected = realExpected.replace(/[/\\]$/, '');
+  // A comparison made on a path we could not resolve is not an observation.
+  const settle = (matched: boolean): SymlinkInspection =>
+    gaps.length > 0 ? { state: 'unknown', gaps } : { state: matched ? 'correct' : 'incorrect' };
+  if (pathsEqual(normalizedDest, normalizedExpected)) return settle(true);
+
+  if (skillName && fallbackSkillsRoot) {
+    const parentDir = dirname(normalizedDest);
+    const nameMatches = normalizedDest.endsWith(`${sep}${skillName}`);
+    const isCatCafeSkillsDir = basename(parentDir) === 'cat-cafe-skills';
+    const resolvedFallbackRoot = (await realpathOrLexical(fallbackSkillsRoot, gaps)).replace(/[/\\]$/, '');
+    const inFallbackRoot = pathsEqual(parentDir, resolvedFallbackRoot);
+    const hasManifest = await existsOrGap(join(parentDir, 'manifest.yaml'), gaps);
+    const hasSkillMd = await existsOrGap(join(normalizedDest, 'SKILL.md'), gaps);
+    if (isCatCafeSkillsDir && inFallbackRoot && nameMatches && hasManifest && hasSkillMd) return settle(true);
+  }
+  return settle(false);
 }
 
 export async function isSkillMountedAtPoint(
@@ -210,16 +316,39 @@ export async function isSkillMountedAtPoint(
   skillName: string,
   fallbackSkillsRoot?: string,
 ): Promise<boolean> {
+  return (
+    (await inspectSkillMountAtPoint(dirCandidates, expectedSkillsRoot, skillName, fallbackSkillsRoot)).state ===
+    'mounted'
+  );
+}
+
+export type SkillMountInspection =
+  | { readonly state: 'mounted' }
+  | { readonly state: 'not_mounted' }
+  | { readonly state: 'unknown'; readonly gaps: readonly string[] };
+
+/** Same checks and order as `isSkillMountedAtPoint`; a confirmed mount anywhere wins over gaps elsewhere. */
+export async function inspectSkillMountAtPoint(
+  dirCandidates: string[],
+  expectedSkillsRoot: string,
+  skillName: string,
+  fallbackSkillsRoot?: string,
+): Promise<SkillMountInspection> {
+  const gaps: string[] = [];
   for (const dir of dirCandidates) {
-    if (await isCorrectSymlink(dir, expectedSkillsRoot)) return true;
-    if (fallbackSkillsRoot && (await isCorrectSymlink(dir, fallbackSkillsRoot))) return true;
-    if (
-      await isCorrectSymlink(join(dir, skillName), join(expectedSkillsRoot, skillName), skillName, fallbackSkillsRoot)
-    ) {
-      return true;
+    const inspections = [
+      () => inspectSkillSymlink(dir, expectedSkillsRoot),
+      ...(fallbackSkillsRoot ? [() => inspectSkillSymlink(dir, fallbackSkillsRoot)] : []),
+      () =>
+        inspectSkillSymlink(join(dir, skillName), join(expectedSkillsRoot, skillName), skillName, fallbackSkillsRoot),
+    ];
+    for (const inspect of inspections) {
+      const result = await inspect();
+      if (result.state === 'correct') return { state: 'mounted' };
+      if (result.state === 'unknown') gaps.push(...result.gaps);
     }
   }
-  return false;
+  return gaps.length > 0 ? { state: 'unknown', gaps: [...new Set(gaps)] } : { state: 'not_mounted' };
 }
 
 /**

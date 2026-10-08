@@ -6,6 +6,10 @@
 import type { CatId, CommunityEvent, CommunityEventKind, ConnectorSource } from '@cat-cafe/shared';
 import type { ICommunityEventLog } from '../../../domains/community/CommunityEventLog.js';
 import { issueCommentEventId } from '../../../domains/community/community-keys.js';
+import {
+  classifyIssueComment as classifyIssueCommentActivity,
+  type IssueCommentClassification,
+} from '../../../domains/community/issue-analysis/issue-comment-classifier.js';
 import type { WebhookHandleResult } from '../../../routes/connector-webhooks.js';
 import type {
   ConnectorDeliveryDeps,
@@ -16,6 +20,7 @@ import type { IConnectorThreadBindingStore } from '../ConnectorThreadBindingStor
 import { type InboxThreadStore, resolveInboxThread } from './inbox-thread-resolver.js';
 import type { ReconciliationDedup } from './ReconciliationDedup.js';
 import type { RedisDeliveryDedup, RedisLike } from './RedisDeliveryDedup.js';
+import type { ResolveRepoInboxCatId } from './RepoInboxOwnerResolver.js';
 import type { GitHubRepoInboxConfig, RepoInboxSignal } from './types.js';
 import { verifyGitHubSignature } from './verify-signature.js';
 
@@ -69,9 +74,13 @@ export interface GitHubRepoHandlerDeps {
   readonly deliveryDeps?: ConnectorDeliveryDeps;
   readonly redis?: RedisLike; // KD-20: per-repo inbox thread creation lock
   readonly reconciliationDedup?: Pick<ReconciliationDedup, 'markNotified'>; // Phase B bridge
+  /** Dynamic canonical owner lookup. Called once immediately before each delivery. */
+  readonly resolveInboxCatId?: ResolveRepoInboxCatId;
   // F168 Phase A: community event log + projector (best-effort, optional)
   readonly eventLog?: ICommunityEventLog;
   readonly projector?: ICommunityProjectorApply;
+  /** Canonical classifier shared with both polling collection paths. */
+  readonly classifyIssueComment?: (comment: { author: string; body: string }) => IssueCommentClassification;
 }
 
 export class GitHubRepoWebhookHandler {
@@ -176,6 +185,10 @@ export class GitHubRepoWebhookHandler {
     }
 
     try {
+      const inboxCatId = this.deps.resolveInboxCatId
+        ? await this.deps.resolveInboxCatId(signal.repoFullName)
+        : this.config.inboxCatId;
+
       // 8. Find or create per-repo inbox thread (KD-14, KD-20)
       const threadId = await this.ensureInboxThread(signal.repoFullName);
 
@@ -206,7 +219,7 @@ export class GitHubRepoWebhookHandler {
       delivered = await this.deps.deliverFn(this.deps.deliveryDeps ?? ({} as ConnectorDeliveryDeps), {
         threadId,
         userId: this.config.defaultUserId,
-        catId: this.config.inboxCatId,
+        catId: inboxCatId,
         content,
         source,
       });
@@ -215,7 +228,7 @@ export class GitHubRepoWebhookHandler {
       void Promise.resolve(
         this.deps.invokeTrigger.trigger(
           threadId,
-          this.config.inboxCatId as CatId,
+          inboxCatId as CatId,
           this.config.defaultUserId,
           content,
           delivered.messageId,
@@ -404,6 +417,7 @@ export class GitHubRepoWebhookHandler {
             id: number;
             user?: { login?: string };
             author_association?: string;
+            body?: string;
           }
         | undefined;
       if (!issue || !comment) return;
@@ -417,11 +431,22 @@ export class GitHubRepoWebhookHandler {
       // for idempotent convergence — delivery ID would differ between the two paths.
       // P2-③: use shared factory so webhook + polling paths can never drift on format.
       sourceEventId = issueCommentEventId(repo, issue.number, comment.id);
+      const classifiableComment = {
+        author: comment.user?.login ?? '',
+        body: comment.body ?? '',
+      };
+      const commentClassification =
+        this.deps.classifyIssueComment?.(classifiableComment) ?? classifyIssueCommentActivity(classifiableComment);
       eventPayload = {
         commentId: comment.id,
-        authorLogin: comment.user?.login ?? '',
+        authorLogin: classifiableComment.author,
         // P1-4a: required by delivery policy to distinguish maintainer vs external activity
         authorAssociation: comment.author_association ?? 'NONE',
+        body: classifiableComment.body,
+        critical: commentClassification.critical,
+        ...(commentClassification.suppressionReason
+          ? { suppressionReason: commentClassification.suppressionReason }
+          : {}),
       };
     } else if (eventType === 'issues' && (action === 'labeled' || action === 'unlabeled')) {
       const issue = payload.issue as { number: number; title?: string } | undefined;

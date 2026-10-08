@@ -9,7 +9,7 @@
 
 import { lstat, mkdir, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { STANDARD_MOUNT_POINT_IDS } from '@cat-cafe/shared';
 import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { readCapabilitiesConfig, withCapabilityLock } from '../config/capabilities/capability-orchestrator.js';
@@ -18,10 +18,10 @@ import { validateSkillName } from '../config/governance/skill-sync.js';
 import { readMountRules } from '../config/mount/mount-rules-store.js';
 import { classifyMountPath, syncProject } from '../skills/skill-sync-engine.js';
 import { resolveOwnerGate } from '../utils/owner-gate.js';
+import { redirectRuntimeProjectPath, resolvePersistentProjectPath } from '../utils/persistent-project-path.js';
 import { resolvePluginSkillSourcesForProject } from '../utils/plugin-skill-source.js';
-import { validateProjectPath } from '../utils/project-path.js';
 import { resolveSessionUserId } from '../utils/request-identity.js';
-import { buildSkillMountTargets, createSkillSymlink, resolveMainRepoPath } from '../utils/skill-mount.js';
+import { buildSkillMountTargets, createSkillSymlink } from '../utils/skill-mount.js';
 import { listSourceSkillNames } from '../utils/skill-source.js';
 import { resolveSkillsSourceDir } from './skills.js';
 
@@ -51,17 +51,18 @@ interface SkillsWriteRouteOptions {
 
 export const skillsWriteRoutes: FastifyPluginAsync<SkillsWriteRouteOptions> = async (app, opts) => {
   const CAT_CAFE_SKILLS_SRC = opts.skillsSourceDir ?? resolveSkillsSourceDir();
+  const skillsRepoRoot = dirname(CAT_CAFE_SKILLS_SRC);
+  const globalProjectRoot = await redirectRuntimeProjectPath(opts.mainProjectRoot ?? skillsRepoRoot);
+  if (!globalProjectRoot) throw new Error('Unable to resolve persistent global project root for skill writes');
 
   app.post('/api/skills/sync', async (request, reply) => {
     const access = requireSkillsWriteAccess(request, reply);
     if (access.error) return { error: access.error };
     const body = (request.body ?? {}) as { projectPath?: string };
     const skillsSrc = CAT_CAFE_SKILLS_SRC;
-    const skillsRepoRoot = dirname(skillsSrc);
-    const globalProjectRoot = opts.mainProjectRoot ?? skillsRepoRoot;
     let projectRoot = globalProjectRoot;
     if (body.projectPath) {
-      const validated = await validateProjectPath(body.projectPath);
+      const validated = await resolvePersistentProjectPath(body.projectPath);
       if (!validated) {
         reply.status(400);
         return { error: 'Invalid project path: must be an existing directory under allowed roots' };
@@ -70,29 +71,40 @@ export const skillsWriteRoutes: FastifyPluginAsync<SkillsWriteRouteOptions> = as
     }
 
     return withCapabilityLock(projectRoot, async () => {
-      const mainRoot = opts.mainProjectRoot ?? (await resolveMainRepoPath());
       const [mountRules, globalConfig] = await Promise.all([
-        readMountRules(projectRoot, mainRoot),
+        readMountRules(projectRoot, globalProjectRoot),
         readCapabilitiesConfig(globalProjectRoot),
       ]);
 
       // Extract global policy for external projects
       const globalDisabledSkills = new Set<string>();
       const globalMountPaths = new Map<string, readonly string[]>();
+      const globalCustomSourceSkills = new Map<string, { skillsSource: string; pluginId?: string }>();
       for (const cap of globalConfig?.capabilities ?? []) {
-        if (cap.type !== 'skill' || cap.source !== 'cat-cafe' || cap.pluginId) continue;
+        if (cap.type !== 'skill' || cap.source !== 'cat-cafe') continue;
         if (!(cap.globalEnabled ?? cap.enabled)) globalDisabledSkills.add(cap.id);
         if (Array.isArray(cap.mountPaths)) globalMountPaths.set(cap.id, cap.mountPaths);
+        // F228: collect custom-source skills (plugin-provided) for sync propagation
+        if (cap.skillsSource) {
+          globalCustomSourceSkills.set(cap.id, {
+            skillsSource: isAbsolute(cap.skillsSource)
+              ? cap.skillsSource
+              : resolve(globalProjectRoot, cap.skillsSource),
+            ...(cap.pluginId ? { pluginId: cap.pluginId } : {}),
+          });
+        }
       }
 
       const result = await syncProject(projectRoot, skillsSrc, {
         mountRules,
         disabledSkills: projectRoot !== globalProjectRoot ? globalDisabledSkills : undefined,
         globalMountPathsBySkill: globalMountPaths,
+        globalCustomSourceSkills,
+        mainProjectRoot: projectRoot !== globalProjectRoot ? globalProjectRoot : undefined,
       });
 
       // Plugin skills: separate source dirs, handled with classifyMountPath
-      const pluginsDir = join(skillsRepoRoot, 'plugins');
+      const pluginsDir = join(skillsRepoRoot, 'packages', 'api', 'src', 'plugins');
       const config = await readCapabilitiesConfig(projectRoot);
       const pluginSkills = resolvePluginSkillSourcesForProject(config, pluginsDir, projectRoot);
       const pluginMounted: string[] = [];
@@ -171,10 +183,9 @@ export const skillsWriteRoutes: FastifyPluginAsync<SkillsWriteRouteOptions> = as
     }
 
     const skillsSrc = CAT_CAFE_SKILLS_SRC;
-    const globalProjectRoot = opts.mainProjectRoot ?? dirname(skillsSrc);
     let projectRoot = globalProjectRoot;
     if (body.projectPath) {
-      const validated = await validateProjectPath(body.projectPath);
+      const validated = await resolvePersistentProjectPath(body.projectPath);
       if (!validated) {
         reply.status(400);
         return { error: 'Invalid project path: must be an existing directory under allowed roots' };
@@ -188,15 +199,23 @@ export const skillsWriteRoutes: FastifyPluginAsync<SkillsWriteRouteOptions> = as
     }
 
     return withCapabilityLock(projectRoot, async () => {
-      const mainRoot = opts.mainProjectRoot ?? (await resolveMainRepoPath());
-      const mountRules = await readMountRules(projectRoot, mainRoot);
+      const mountRules = await readMountRules(projectRoot, globalProjectRoot);
       const globalConfig = await readCapabilitiesConfig(globalProjectRoot);
       const globalDisabledSkills = new Set<string>();
       const globalMountPaths = new Map<string, readonly string[]>();
+      const globalCustomSources = new Map<string, { skillsSource: string; pluginId?: string }>();
       for (const cap of globalConfig?.capabilities ?? []) {
-        if (cap.type !== 'skill' || cap.source !== 'cat-cafe' || cap.pluginId) continue;
+        if (cap.type !== 'skill' || cap.source !== 'cat-cafe') continue;
         if (!(cap.globalEnabled ?? cap.enabled)) globalDisabledSkills.add(cap.id);
         if (Array.isArray(cap.mountPaths)) globalMountPaths.set(cap.id, cap.mountPaths);
+        if (cap.skillsSource) {
+          globalCustomSources.set(cap.id, {
+            skillsSource: isAbsolute(cap.skillsSource)
+              ? cap.skillsSource
+              : resolve(globalProjectRoot, cap.skillsSource),
+            ...(cap.pluginId ? { pluginId: cap.pluginId } : {}),
+          });
+        }
       }
 
       // syncProject reconciles all skills including the target — idempotent
@@ -204,11 +223,13 @@ export const skillsWriteRoutes: FastifyPluginAsync<SkillsWriteRouteOptions> = as
         mountRules,
         disabledSkills: projectRoot !== globalProjectRoot ? globalDisabledSkills : undefined,
         globalMountPathsBySkill: globalMountPaths,
+        globalCustomSourceSkills: globalCustomSources,
+        mainProjectRoot: projectRoot !== globalProjectRoot ? globalProjectRoot : undefined,
       });
       const updatedConfig = await readCapabilitiesConfig(projectRoot);
       const cap = updatedConfig?.capabilities.find(
-        (c: { type: string; id: string; source: string; pluginId?: string }) =>
-          c.type === 'skill' && c.id === body.skillName && c.source === 'cat-cafe' && !c.pluginId,
+        (c: { type: string; id: string; source: string }) =>
+          c.type === 'skill' && c.id === body.skillName && c.source === 'cat-cafe',
       );
       const skillConflicts = result.conflicts.filter((c) => c.skillName === body.skillName);
       return {

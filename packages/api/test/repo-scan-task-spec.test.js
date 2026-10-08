@@ -362,6 +362,32 @@ describe('RepoScanTaskSpec', () => {
       assert.equal(await reconciliationDedup.isNotified('owner/repo', 'pr', 10), true);
     });
 
+    it('records the dedup marker when timeout aborts immediately after durable delivery', async () => {
+      const controller = new AbortController();
+      const { opts, reconciliationDedup } = createOpts({
+        deliverFn: async (_deps, input) => {
+          controller.abort(new DOMException('scheduler timeout', 'AbortError'));
+          return { messageId: 'msg-delivered-before-timeout', content: input.content };
+        },
+      });
+      const spec = createRepoScanTaskSpec(opts);
+      const gateResult = await spec.admission.gate(gateCtx());
+      const workItem = gateResult.workItems[0];
+
+      await assert.doesNotReject(() =>
+        spec.run.execute(workItem.signal, workItem.subjectKey, {
+          assignedCatId: null,
+          signal: controller.signal,
+        }),
+      );
+
+      assert.equal(
+        await reconciliationDedup.isNotified('owner/repo', 'pr', 10),
+        true,
+        'a delivered inbox message must always record its dedup marker',
+      );
+    });
+
     it('triggers cat after delivery', async () => {
       const { opts, triggerCalls } = createOpts();
       const spec = createRepoScanTaskSpec(opts);
@@ -373,6 +399,38 @@ describe('RepoScanTaskSpec', () => {
       assert.equal(triggerCalls.length, 1);
       assert.equal(triggerCalls[0][0], 'thread-inbox-1'); // threadId
       assert.equal(triggerCalls[0][1], 'cat-maine-coon'); // catId
+    });
+
+    it('re-resolves the repo inbox owner for every delivery and wake', async () => {
+      let currentOwner = 'codex-sol';
+      const resolverCalls = [];
+      const { opts, deliveredMessages, triggerCalls } = createOpts({
+        inboxCatId: 'stale-env-owner',
+        async resolveInboxCatId(repoFullName) {
+          resolverCalls.push(repoFullName);
+          return currentOwner;
+        },
+      });
+      const spec = createRepoScanTaskSpec(opts);
+      const gateResult = await spec.admission.gate(gateCtx());
+
+      await spec.run.execute(gateResult.workItems[0].signal, gateResult.workItems[0].subjectKey, {
+        assignedCatId: null,
+      });
+      currentOwner = 'codex61-sol';
+      await spec.run.execute(gateResult.workItems[1].signal, gateResult.workItems[1].subjectKey, {
+        assignedCatId: null,
+      });
+
+      assert.deepEqual(resolverCalls, ['owner/repo', 'owner/repo']);
+      assert.deepEqual(
+        deliveredMessages.map((message) => message.catId),
+        ['codex-sol', 'codex61-sol'],
+      );
+      assert.deepEqual(
+        triggerCalls.map((call) => call[1]),
+        ['codex-sol', 'codex61-sol'],
+      );
     });
 
     it('skips delivery if no inbox thread exists for repo', async () => {

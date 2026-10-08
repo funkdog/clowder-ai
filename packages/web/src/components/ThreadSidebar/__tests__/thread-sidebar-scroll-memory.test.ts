@@ -1,6 +1,7 @@
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { markApiGetGeneration } from '@/utils/api-get-generation';
 import { ThreadSidebar } from '../ThreadSidebar';
 
 const mockPush = vi.fn();
@@ -76,13 +77,22 @@ vi.mock('@/hooks/useCatData', () => ({
   useCatData: () => ({ getCatById: () => null, cats: [] }),
 }));
 
+let nextMockGetGeneration = 0;
+
 function jsonOk(data: unknown) {
-  return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(data) });
+  const response = new Response(JSON.stringify(data), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+  markApiGetGeneration(response, ++nextMockGetGeneration);
+  return Promise.resolve(response);
 }
 
 function findScrollContainer(root: HTMLElement): HTMLDivElement {
   const scroller = Array.from(root.querySelectorAll('div')).find(
-    (el): el is HTMLDivElement => el.className.includes('overflow-y-auto') && !!el.querySelector('[data-thread-id]'),
+    (el): el is HTMLDivElement =>
+      (el.className.includes('overflow-y-auto') || el.className.includes('overflow-y:overlay')) &&
+      !!el.querySelector('[data-thread-id]'),
   );
   if (!scroller) throw new Error('scroll container not found');
   return scroller;
@@ -103,7 +113,7 @@ describe('ThreadSidebar scroll memory', () => {
     mockPush.mockReset();
     mockApiFetch.mockReset();
     mockApiFetch.mockImplementation((path: string) => {
-      if (path === '/api/threads') return jsonOk({ threads: TEST_THREADS });
+      if (path === '/api/threads?view=sidebar') return jsonOk({ threads: TEST_THREADS });
       if (path === '/api/governance/health') return jsonOk({ projects: [] });
       return jsonOk({});
     });
@@ -158,8 +168,24 @@ describe('ThreadSidebar scroll memory', () => {
   }
 
   function expandAll(rootEl: HTMLElement) {
+    // v12: variable toggle button only renders on the project tab. Switch there first.
+    const projectTab = rootEl.querySelector('[data-testid="sidebar-tab-project"]') as HTMLButtonElement | null;
+    if (projectTab) {
+      act(() => {
+        projectTab.click();
+      });
+    }
+    // Variable button: allCollapsed → "expand-all-btn", else → "collapse-all-btn".
+    // To guarantee all-expanded end state regardless of initial state: first collapse all
+    // (so we reach a known allCollapsed=true), then click expand-all.
+    const collapseBtn = rootEl.querySelector('[data-testid="collapse-all-btn"]') as HTMLButtonElement | null;
+    if (collapseBtn) {
+      act(() => {
+        collapseBtn.click();
+      });
+    }
     const expandBtn = rootEl.querySelector('[data-testid="expand-all-btn"]') as HTMLButtonElement | null;
-    if (!expandBtn) throw new Error('expand-all button not found');
+    if (!expandBtn) throw new Error('expand-all button not found after collapse');
     act(() => {
       expandBtn.click();
     });
@@ -167,7 +193,7 @@ describe('ThreadSidebar scroll memory', () => {
 
   it('keeps sidebar scroll position when switching to a thread far below', async () => {
     act(() => {
-      root.render(React.createElement(ThreadSidebar));
+      root.render(React.createElement(ThreadSidebar, { routeThreadId: mockStore.currentThreadId as string }));
     });
     await flush();
     expandAll(container);
@@ -188,7 +214,7 @@ describe('ThreadSidebar scroll memory', () => {
     mockStore.currentThreadId = 'thread-18';
     root = createRoot(container);
     act(() => {
-      root.render(React.createElement(ThreadSidebar));
+      root.render(React.createElement(ThreadSidebar, { routeThreadId: mockStore.currentThreadId as string }));
     });
     await flush();
     expandAll(container);
@@ -199,7 +225,7 @@ describe('ThreadSidebar scroll memory', () => {
 
   it('does not overwrite sessionStorage with 0 when sidebar unmounts (detached DOM)', async () => {
     act(() => {
-      root.render(React.createElement(ThreadSidebar));
+      root.render(React.createElement(ThreadSidebar, { routeThreadId: mockStore.currentThreadId as string }));
     });
     await flush();
     expandAll(container);

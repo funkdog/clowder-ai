@@ -7,6 +7,7 @@
  * ADR-008 S2: retry 端点接通实际执行
  */
 
+import type { CatId } from '@cat-cafe/shared';
 import type { FastifyPluginAsync } from 'fastify';
 import { getDefaultCatId } from '../config/cat-config-loader.js';
 import { createModuleLogger } from '../infrastructure/logger.js';
@@ -14,18 +15,29 @@ import { createModuleLogger } from '../infrastructure/logger.js';
 const log = createModuleLogger('routes/invocations');
 
 import type { InvocationTracker } from '../domains/cats/services/agents/invocation/InvocationTracker.js';
+import {
+  isTerminalDispositionEvent,
+  PerCatTerminalDispositionCollector,
+} from '../domains/cats/services/agents/invocation/PerCatTerminalDispositionCollector.js';
 import type { QueueProcessor } from '../domains/cats/services/agents/invocation/QueueProcessor.js';
+import { requireInvocationRecordUpdate } from '../domains/cats/services/agents/invocation/require-invocation-record-update.js';
 import { stampVisibleTurn } from '../domains/cats/services/agents/invocation/visible-turn.js';
 import type { AgentRouter } from '../domains/cats/services/agents/routing/AgentRouter.js';
-import type { PersistenceContext } from '../domains/cats/services/agents/routing/route-helpers.js';
+import {
+  createA2ASlotTrackingBridge,
+  type PersistenceContext,
+} from '../domains/cats/services/agents/routing/route-helpers.js';
 import { parseIntent } from '../domains/cats/services/context/IntentParser.js';
 import type { IInvocationRecordStore } from '../domains/cats/services/stores/ports/InvocationRecordStore.js';
 import type { IMessageStore } from '../domains/cats/services/stores/ports/MessageStore.js';
+import type { ITurnExecutionStore } from '../domains/cats/services/stores/ports/TurnExecutionStore.js';
 import type { SocketManager } from '../infrastructure/websocket/index.js';
+import { resolveStrictUserId } from '../utils/request-identity.js';
 import { getDefaultUploadDir } from '../utils/upload-paths.js';
 
 export interface InvocationsRoutesOptions {
   invocationRecordStore: IInvocationRecordStore;
+  turnExecutionStore?: Pick<ITurnExecutionStore, 'listByParent'>;
   messageStore: IMessageStore;
   socketManager: SocketManager;
   router: AgentRouter;
@@ -47,7 +59,6 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
       reply.status(404);
       return { error: 'Invocation not found', code: 'INVOCATION_NOT_FOUND' };
     }
-
     return {
       id: record.id,
       threadId: record.threadId,
@@ -56,9 +67,29 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
       targetCats: record.targetCats,
       intent: record.intent,
       status: record.status,
+      ...(record.successfulCatIds ? { successfulCatIds: record.successfulCatIds } : {}),
       ...(record.error ? { error: record.error } : {}),
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
+    };
+  });
+
+  // Durable child execution glass box. It intentionally does not read the
+  // callback-auth registry, whose TTL is an authentication concern only.
+  app.get<{ Params: { id: string } }>('/api/invocations/:id/executions', async (request, reply) => {
+    if (!opts.turnExecutionStore) {
+      reply.status(503);
+      return { error: 'Turn execution ledger unavailable', code: 'TURN_EXECUTION_LEDGER_UNAVAILABLE' };
+    }
+    const executions = await opts.turnExecutionStore.listByParent(request.params.id);
+    if (executions.length === 0) {
+      reply.status(404);
+      return { error: 'Turn executions not found', code: 'TURN_EXECUTIONS_NOT_FOUND' };
+    }
+    return {
+      parentInvocationId: request.params.id,
+      executionCount: executions.length,
+      executions,
     };
   });
 
@@ -72,9 +103,11 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
       reply.status(404);
       return { error: 'Invocation not found', code: 'INVOCATION_NOT_FOUND' };
     }
+    const ownerAuthProvenance = resolveStrictUserId(request) === record.userId ? 'strict' : 'compatibility_fallback';
 
     // Snapshot status before any await yields (in-memory get() returns a live reference)
     const snapshotStatus = record.status;
+    const snapshotError = record.error ?? '';
 
     // ② Only failed and queued are retryable
     if (snapshotStatus !== 'failed' && snapshotStatus !== 'queued') {
@@ -104,8 +137,15 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
       };
     }
 
-    // ④ Rebuild intent from stored content + targetCats
-    const intent = parseIntent(storedMessage.content, record.targetCats.length);
+    const previouslySuccessfulCatIds = [...(record.successfulCatIds ?? [])];
+    const retryTargetCats = record.targetCats.filter((catId) => !previouslySuccessfulCatIds.includes(catId));
+    if (retryTargetCats.length === 0) {
+      reply.status(409);
+      return { error: 'All original targets have already completed', code: 'INVOCATION_NOT_RETRYABLE' };
+    }
+
+    // ④ Preserve the original body; retry only targets without a success witness.
+    const intent = parseIntent(storedMessage.content, retryTargetCats.length);
 
     // ⑤ Delete guard check
     if (opts.invocationTracker.isDeleting(record.threadId)) {
@@ -117,9 +157,66 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
       };
     }
 
-    // ⑥ Start invocation tracking for ALL target cats (multi-cat F5 recovery)
-    const primaryCat = record.targetCats[0] ?? 'unknown';
-    const controller = opts.invocationTracker.startAll(record.threadId, record.targetCats, record.userId);
+    // ⑥ Claim retry before touching tracker/reservation ownership.
+    // expectedStatus ensures only one concurrent request wins; a loser must not retire
+    // an unrelated queued pre-start reservation through replacement acquisition.
+    const claimed = await opts.invocationRecordStore.update(id, {
+      status: 'running',
+      error: '',
+      expectedStatus: snapshotStatus,
+    });
+    if (!claimed) {
+      reply.status(409);
+      return {
+        error: `Cannot retry invocation with status '${snapshotStatus}'`,
+        code: 'INVOCATION_NOT_RETRYABLE',
+        currentStatus: snapshotStatus,
+      };
+    }
+
+    // ⑦ Start invocation tracking for ALL target cats (multi-cat F5 recovery)
+    const primaryCat = retryTargetCats[0] ?? 'unknown';
+    const jointAcquire = opts.queueProcessor?.acquireExternalExecution?.bind(opts.queueProcessor);
+    const controller = jointAcquire
+      ? await jointAcquire(record.threadId, retryTargetCats, record.userId, {
+          mode: 'replacement',
+          executionId: id,
+        })
+      : opts.invocationTracker.startAll(record.threadId, retryTargetCats, record.userId, id);
+    if (!controller) {
+      // running -> queued is not a legal lifecycle transition. A retry of an already-queued
+      // record that loses ownership therefore terminalizes as failed; an originally failed
+      // record restores its prior terminal state and error.
+      const refusalStatus = snapshotStatus === 'queued' ? 'failed' : snapshotStatus;
+      const refusalError = snapshotStatus === 'queued' ? 'invocation_owner_changed_before_retry_start' : snapshotError;
+      let refused = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt > 0) {
+          const current = await opts.invocationRecordStore.get(id);
+          if (current?.status !== 'running') break;
+        }
+        refused = await opts.invocationRecordStore.update(id, {
+          status: refusalStatus,
+          error: refusalError,
+          expectedStatus: 'running',
+        });
+        if (refused) break;
+      }
+      if (!refused) {
+        const current = await opts.invocationRecordStore.get(id);
+        const context = { invocationId: id, threadId: record.threadId, snapshotStatus, currentStatus: current?.status };
+        if (current?.status === 'running') {
+          log.error(context, 'Retry ownership refusal left a durable claim running after terminalization retries');
+        } else {
+          log.warn(context, 'Retry ownership refusal stopped terminalization because the durable status changed');
+        }
+      }
+      reply.status(409);
+      return {
+        error: 'Invocation owner changed before retry could start',
+        code: 'INVOCATION_OWNER_CHANGED',
+      };
+    }
     if (controller.signal.aborted) {
       await opts.invocationRecordStore.update(id, { status: 'canceled' });
       reply.status(409);
@@ -130,23 +227,10 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
       };
     }
 
-    // ⑦ Claim retry: CAS transition to running BEFORE reply (prevents concurrent retry)
-    // expectedStatus ensures only one concurrent request wins; loser gets null → 409
-    // Also clears stale error from previous failure (P2 fix)
-    const claimed = await opts.invocationRecordStore.update(id, {
-      status: 'running',
-      error: '',
-      expectedStatus: snapshotStatus,
-    });
-    if (!claimed) {
-      opts.invocationTracker.completeAll(record.threadId, record.targetCats, controller);
-      reply.status(409);
-      return {
-        error: `Cannot retry invocation with status '${snapshotStatus}'`,
-        code: 'INVOCATION_NOT_RETRYABLE',
-        currentStatus: snapshotStatus,
-      };
-    }
+    // F254 D1.2b: retry reuses the existing InvocationRecord id as the callback parent id.
+    // Clear stale read evidence from earlier failed/canceled attempts before this attempt can
+    // record fresh queued_seen via get_thread_context(responseMode=full).
+    opts.queueProcessor?.clearQueuedSeenInvocationForCats?.(record.threadId, record.targetCats, id);
 
     // ⑧ Reply 202 immediately
     reply.status(202);
@@ -167,12 +251,22 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
 
       // F39: Track final status for queue auto-dequeue
       let finalStatus: 'succeeded' | 'failed' | 'canceled' = 'failed';
+      const terminalDispositions = new PerCatTerminalDispositionCollector({
+        targetCatIds: retryTargetCats,
+        isCanceled: (catId) => opts.invocationTracker.getSlotState?.(record.threadId, catId) === 'canceled',
+      });
+      const successfulCatIds = () =>
+        [...new Set([...previouslySuccessfulCatIds, ...terminalDispositions.getSuccessfulCatIds()])] as CatId[];
+      const successWitness = () => {
+        const completed = successfulCatIds();
+        return completed.length > 0 ? { successfulCatIds: completed } : {};
+      };
 
       try {
         opts.socketManager.broadcastToRoom(`thread:${record.threadId}`, 'intent_mode', {
           threadId: record.threadId,
           mode: intent.intent,
-          targetCats: record.targetCats,
+          targetCats: retryTargetCats,
         });
 
         // ADR-008 S3: collect cursor boundaries; ack only after succeeded
@@ -187,9 +281,11 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
           storedMessage.content,
           record.threadId,
           storedMessage.id,
-          record.targetCats,
+          retryTargetCats,
           intent,
           {
+            ownerAuthProvenance,
+            humanDispositionInvocationOrigin: 'direct_owner',
             ...(storedMessage.contentBlocks ? { contentBlocks: storedMessage.contentBlocks } : {}),
             uploadDir,
             signal: controller.signal,
@@ -200,18 +296,36 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
             // invocation is honored immediately (not ignored until cancel-all). Mirrors messages.ts /
             // QueueProcessor.
             signalForCat: (catId: string) => opts.invocationTracker.getController?.(record.threadId, catId)?.signal,
+            ...createA2ASlotTrackingBridge(opts.invocationTracker, controller, id),
             ...(opts.queueProcessor
               ? {
                   queueHasQueuedMessages: (tid: string) =>
                     opts.queueProcessor?.hasQueuedNonAgentForThread(tid) ?? false,
+                  getQueuedFreshnessMessagesForCat: (
+                    tid: string,
+                    uid: string,
+                    catId: string,
+                    parentInvocationId?: string,
+                  ) => opts.queueProcessor?.getQueuedFreshnessMessagesForCat(tid, uid, catId, parentInvocationId) ?? [],
                   hasQueuedOrActiveAgentForCat: (tid: string, catId: string) =>
                     opts.queueProcessor?.hasActiveOrQueuedAgentForCat(tid, catId) ?? false,
-                  deferA2AEnqueue: (e: any) => opts.queueProcessor?.enqueueRaw(e),
+                  hasPendingForCat: (tid: string, uid: string, catId: string) =>
+                    opts.queueProcessor?.hasPendingForCat(tid, uid, catId) ?? false,
+                  deferA2AEnqueue: (e) => opts.queueProcessor?.enqueueRaw({ ...e, ownerAuthProvenance }),
+                  // F254 B3: freshness re-invoke enqueue for retry endpoint.
+                  // Without this, freshnessReinvoke metadata from invoke-single-cat is
+                  // silently dropped — same class as the messages.ts immediate-path fix.
+                  // Matches QueueProcessor + messages.ts pattern: strip freshnessContext.
+                  freshnessReinvokeEnqueue: (e: any) => {
+                    const { freshnessContext: _ctx, ...queueFields } = e;
+                    return opts.queueProcessor?.enqueueRaw({ ...queueFields, ownerAuthProvenance });
+                  },
                 }
               : {}),
             cursorBoundaries,
             persistenceContext,
             parentInvocationId: id,
+            onPromptMessagesExposed: (input) => opts.queueProcessor?.markPromptMessagesSeen(input) ?? Promise.resolve(),
             // F222 P1: User-initiated retry → eligible for frustration detection
             frustrationAutoIssueEligible: true,
           },
@@ -219,7 +333,8 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
           if (msg.type === 'done' && msg.errorCode) {
             governanceErrorCode = msg.errorCode;
           }
-          if ((msg.type === 'done' || msg.type === 'error') && msg.catId) {
+          terminalDispositions.observe(msg);
+          if (isTerminalDispositionEvent(msg) && msg.catId) {
             opts.invocationTracker.completeSlot(record.threadId, msg.catId, controller);
           }
           // F194 Phase Z9 (砚砚 R1 P1-2): use stampVisibleTurn helper. After route-serial /
@@ -238,6 +353,7 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
           await opts.invocationRecordStore.update(id, {
             status: 'failed',
             error: `Message delivered but persistence failed: ${errorDetail}`,
+            ...successWitness(),
           });
           opts.socketManager.broadcastAgentMessage(
             {
@@ -252,6 +368,7 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
           await opts.invocationRecordStore.update(id, {
             status: 'failed',
             error: governanceErrorCode,
+            ...successWitness(),
           });
         } else {
           // F-parallel-cancel (cloud #7): AGGREGATE finalStatus — a single-cat cancel no longer
@@ -260,7 +377,7 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
           // finally below, AFTER this, so tombstones are still visible). Mirrors QueueProcessor.
           const batchReason = controller.signal.reason;
           const aggStatus = opts.invocationTracker.resolveFinalStatus
-            ? opts.invocationTracker.resolveFinalStatus(record.threadId, record.targetCats, {
+            ? opts.invocationTracker.resolveFinalStatus(record.threadId, retryTargetCats, {
                 aborted: controller.signal.aborted,
                 reason: batchReason as string | undefined,
               })
@@ -274,8 +391,20 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
             // ADR-008 S3: ack cursors before marking succeeded so that if ack
             // throws, the catch block sees running→failed (valid transition).
             await opts.router.ackCollectedCursors(record.userId, record.threadId, cursorBoundaries);
-            await opts.invocationRecordStore.update(id, { status: 'succeeded' });
-            finalStatus = 'succeeded';
+            const error = terminalDispositions.getPrimaryTerminalError();
+            const completed = successfulCatIds();
+            const status = error ? ('failed' as const) : ('succeeded' as const);
+            await requireInvocationRecordUpdate({
+              store: opts.invocationRecordStore,
+              invocationId: id,
+              update: {
+                status,
+                ...(completed.length > 0 || status === 'succeeded' ? { successfulCatIds: completed } : {}),
+                ...(error ? { error } : {}),
+              },
+              writer: 'invocation retry route',
+            });
+            finalStatus = status;
           }
         }
       } catch (err) {
@@ -284,6 +413,7 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
         await opts.invocationRecordStore.update(id, {
           status: 'failed',
           error: errorMsg,
+          ...successWitness(),
         });
         opts.socketManager.broadcastAgentMessage(
           {
@@ -297,11 +427,25 @@ export const invocationsRoutes: FastifyPluginAsync<InvocationsRoutesOptions> = a
         );
       } finally {
         clearInterval(heartbeatInterval);
-        opts.invocationTracker.completeAll(record.threadId, record.targetCats, controller);
+        opts.invocationTracker.completeAll(record.threadId, retryTargetCats, controller);
         // F39: Notify queue processor for auto-dequeue chain
-        opts.queueProcessor?.onInvocationComplete(record.threadId, primaryCat, finalStatus).catch(() => {
-          /* best-effort */
-        });
+        opts.queueProcessor
+          ?.onInvocationComplete(
+            record.threadId,
+            primaryCat,
+            finalStatus,
+            // F254 D1.2b: stale evidence was cleared when this retry was claimed, so `id`
+            // now represents only queued_seen tokens freshly recorded during this attempt.
+            id,
+            finalStatus === 'succeeded' ? terminalDispositions.getSuccessfulCatIds() : [],
+            false,
+            terminalDispositions.getTerminalInvocationIdByCatId(),
+            [],
+            terminalDispositions.getTerminalConsumptionByInvocationId(),
+          )
+          .catch(() => {
+            /* best-effort */
+          });
       }
     })();
   });

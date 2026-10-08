@@ -4,31 +4,18 @@
  * F229 ConciergeToolbar — 猫的能力工具栏（Layer 2）
  *
  * surfaceState=toolbar 时渲染，其他态返回 null
- * 两个诚实入口 + stagger 动画（0/80ms）
+ * 单一、清晰的对话入口
  * 全部颜色从 OKLCH token 来，零 Tailwind 原生色
  *
- * 按钮动作（co-creator拍板简化：四假按钮 → 两诚实入口）：
- *   ? → setSurfaceState('bubble') + 预填"你能帮我什么？"（能力引导）
- *   💬 → setSurfaceState('bubble') 空气泡（直接聊）
+ * 能力引导放到空面板内，避免工具栏出现两个几乎相同的入口。
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { reopenConciergeDesktopLossNotice, useConciergeDesktopStore } from '@/stores/conciergeDesktopStore';
 import { useConciergeStore } from '@/stores/conciergeStore';
+import { ConciergeDesktopLaunch } from './ConciergeDesktopLaunch';
 
 // Inline SVG icons (no icon library dependency)
-const HelpIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-    <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.5" />
-    <path
-      d="M6.5 6.2c0-1 .7-1.7 1.5-1.7s1.5.7 1.5 1.7c0 .7-.4 1.1-1 1.4-.3.2-.5.4-.5.9"
-      stroke="currentColor"
-      strokeWidth="1.5"
-      strokeLinecap="round"
-    />
-    <circle cx="8" cy="11" r="0.8" fill="currentColor" />
-  </svg>
-);
-
 const ChatIcon = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
     <path
@@ -40,24 +27,16 @@ const ChatIcon = () => (
   </svg>
 );
 
-const TOOLS = [
-  {
-    key: 'help',
-    label: '能帮什么',
-    icon: <HelpIcon />,
-    prompt: '你能帮我什么？',
-  },
-  {
-    key: 'chat',
-    label: '聊聊',
-    icon: <ChatIcon />,
-    prompt: '',
-  },
-] as const;
-
 export function ConciergeToolbar() {
+  const [openingDesktop, setOpeningDesktop] = useState(false);
+  const chatButton = useRef<HTMLButtonElement>(null);
   const surfaceState = useConciergeStore((s) => s.surfaceState);
+  const desktopLost = useConciergeDesktopStore((s) => s.desktopLost);
+  const noticeVisible = useConciergeDesktopStore((s) => s.noticeVisible);
   const setSurfaceState = useConciergeStore((s) => s.setSurfaceState);
+  useEffect(() => {
+    if (!openingDesktop && surfaceState === 'toolbar') chatButton.current?.focus();
+  }, [openingDesktop, surfaceState]);
 
   // P2 cloud fix: second-level Escape — toolbar → collapsed (mirrors ConciergePanel's bubble → toolbar)
   // Guard inside effect so the listener is only registered (and removed on cleanup) when in toolbar state.
@@ -72,46 +51,53 @@ export function ConciergeToolbar() {
 
   if (surfaceState !== 'toolbar') return null;
 
+  if (openingDesktop)
+    return (
+      <ConciergeDesktopLaunch
+        onClose={() => setOpeningDesktop(false)}
+        onText={() => {
+          setOpeningDesktop(false);
+          setSurfaceState('bubble', '');
+        }}
+      />
+    );
+
   return (
     <div
       data-testid="concierge-toolbar"
-      className="absolute bottom-[calc(100%+8px)] right-0 flex flex-col items-end gap-2 pointer-events-auto"
+      className="absolute top-[calc(100%+8px)] left-1/2 -translate-x-1/2 flex flex-row items-center gap-2 pointer-events-auto"
       role="toolbar"
       aria-label="猫猫能力工具栏"
     >
-      {TOOLS.map((tool, i) => (
+      <button
+        ref={chatButton}
+        type="button"
+        aria-label="聊聊"
+        style={{ backgroundColor: 'var(--accent-100)' }}
+        className={[
+          'concierge-tool pointer-events-auto',
+          'flex h-9 items-center justify-center gap-1.5 rounded-full px-3',
+          'text-xs font-medium text-[color:var(--cafe-text-secondary)]',
+          'shadow-[var(--shadow-elevation-1)]',
+          'border border-[color:var(--cafe-border-subtle)]',
+          'transition-all duration-200 hover:scale-105 hover:bg-[var(--accent-200)]',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--cafe-accent)]',
+        ].join(' ')}
+        onClick={() => setOpeningDesktop(true)}
+      >
+        <ChatIcon />
+        <span>聊聊</span>
+      </button>
+      {desktopLost && !noticeVisible && (
         <button
-          key={tool.key}
           type="button"
-          aria-label={tool.label}
-          title={tool.label}
-          style={{
-            transitionDelay: `${i * 80}ms`,
-            backgroundColor: 'var(--accent-100)',
-          }}
-          className={[
-            'concierge-tool',
-            'pointer-events-auto',
-            'flex items-center justify-center',
-            'w-9 h-9 rounded-full',
-            'text-[color:var(--cafe-text-secondary)]',
-            'shadow-[var(--shadow-elevation-1)]',
-            'border border-[color:var(--cafe-border-subtle)]',
-            'transition-all duration-200',
-            'hover:scale-110',
-            'focus:outline-none focus-visible:ring-2 focus-visible:ring-[color:var(--cafe-accent)]',
-          ].join(' ')}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--accent-200)';
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLButtonElement).style.backgroundColor = 'var(--accent-100)';
-          }}
-          onClick={() => setSurfaceState('bubble', tool.prompt)}
+          aria-label="查看桌面猫猫球状态"
+          onClick={reopenConciergeDesktopLossNotice}
+          className="rounded-full border border-cafe-divider bg-cafe-surface px-2 py-1 text-micro text-cafe-secondary shadow-sm hover:text-cafe-accent focus-visible:outline focus-visible:outline-2 focus-visible:outline-cafe-accent"
         >
-          {tool.icon}
+          桌面状态
         </button>
-      ))}
+      )}
     </div>
   );
 }

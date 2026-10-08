@@ -6,15 +6,18 @@
  * approve does the backend actually create a thread.
  */
 
+import type { ApprovalPublication } from './approval-hub.js';
+import type { DevelopmentScopeV1 } from './growing-development.js';
 import type { CatId } from './ids.js';
 
 /**
  * Status lifecycle:
  *   pending → approving → approved   (claim then finalize, atomic against reject)
  *   pending → rejected               (one-shot)
+ *   pending → withdrawn              (requester-only, one-shot)
  *   approving → pending              (rollback on thread-creation failure)
  */
-export type ProposalStatus = 'pending' | 'approving' | 'approved' | 'rejected';
+export type ProposalStatus = 'pending' | 'approving' | 'approved' | 'rejected' | 'withdrawn';
 
 /**
  * F128 reporting modes — the contract for whether (and how) a sub-thread
@@ -30,6 +33,17 @@ export type ProposalStatus = 'pending' | 'approving' | 'approved' | 'rejected';
 export type ReportingMode = 'none' | 'final-only' | 'state-transitions' | 'blocking-ack';
 
 /**
+ * F277: the declared placement role of a thread at birth.
+ * `unknown` is deliberately absent: it is a read-model fallback for legacy facts,
+ * never a value a cat or user may declare.
+ */
+export type DeclaredWorkMode = 'subtask' | 'parallel' | 'investigation' | 'standalone';
+
+/** F277/F128: zero-config reporting suggestion; an explicit reportingMode always wins. */
+export function suggestedReportingModeForWorkMode(mode: DeclaredWorkMode | undefined): ReportingMode {
+  return mode === 'parallel' || mode === 'standalone' ? 'none' : 'final-only';
+}
+/**
  * A thread proposal created by a cat, awaiting user decision.
  */
 export interface ThreadProposal {
@@ -40,6 +54,8 @@ export interface ThreadProposal {
   sourceThreadId: string;
   sourceInvocationId: string;
   sourceCatId: CatId;
+  /** Exact trigger message persisted at create time; absent only on legacy proposals. */
+  sourceMessageId?: string;
 
   // Prefilled fields (user may override at approve time)
   title: string;
@@ -54,11 +70,16 @@ export interface ThreadProposal {
    * ProposalApproveOverrides; still immutable after approve creates the thread.
    */
   reportingMode?: ReportingMode;
+  /** F277: user-editable placement role, immutable after approval creates the Thread. */
+  declaredWorkMode?: DeclaredWorkMode;
   projectPath: string;
 
   // Audit — creation
   createdBy: string;
   createdAt: number;
+
+  /** Phase-I publication state; absent only on pre-Phase-I records. */
+  publication?: ApprovalPublication;
 
   /**
    * Message id of the rich proposal card that was successfully appended to the source thread.
@@ -67,6 +88,31 @@ export interface ThreadProposal {
    * card append would otherwise hand callers a phantom proposalId that gets cleaned up.
    */
   cardMessageId?: string;
+
+  /**
+   * F167 × F322: When this proposal delegates work for a specific task,
+   * this records the exact task ID. Without this, the delegate binding
+   * provider cannot prove task-level delegation and will fail closed.
+   *
+   * Set at propose time when the proposing cat is working on a known task.
+   * Absent on legacy proposals or proposals not tied to a specific task.
+   */
+  subjectTaskId?: string;
+  /**
+   * F167 R4: Immutable snapshot of the task's title at proposal creation time.
+   * Displayed on the operator approval card so the user can see which task's execution
+   * authority they are granting. Also serves as an audit trail — if the task title
+   * changes after approval, this records what was originally authorized.
+   */
+  subjectTaskTitle?: string;
+  /**
+   * F167 R5: Immutable snapshot of the task's `entrustedWork.developmentScope` at
+   * proposal creation time. At claim time, the provider compares this against the
+   * task's current scope — if workUnitRef, acceptedSourceRef, or acceptedRevision
+   * changed, the delegation is invalidated (scope drift). Tasks without a
+   * developmentScope at creation time get no delegate authority (fail closed).
+   */
+  approvedDevelopmentScope?: DevelopmentScopeV1;
 
   // Audit — approval outcome
   approvedBy?: string;
@@ -84,6 +130,10 @@ export interface ThreadProposal {
   rejectedBy?: string;
   rejectedAt?: number;
   rejectionReason?: string;
+
+  // Audit — requester withdrawal outcome
+  withdrawnBy?: CatId;
+  withdrawnAt?: number;
 }
 
 /**
@@ -108,4 +158,6 @@ export interface ProposalApproveOverrides {
    * injected protocol must use this final value, not necessarily the cat's proposal default.
    */
   reportingMode?: ReportingMode;
+  /** F277: final placement role chosen on the approval card. */
+  declaredWorkMode?: DeclaredWorkMode;
 }

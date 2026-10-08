@@ -16,13 +16,30 @@ describe('callback propose-profile-update route', () => {
   let store;
   let messageStore;
   let writeMod;
+  let repository;
+  let originByRequest;
 
-  const seedPrimer = (content, catId = 'opus') => {
-    writeFileSync(join(profileDir, 'relationship', `${catId}-primer.md`), content, 'utf8');
+  const seedPrimer = (content, catId = 'opus', userId = 'alice') => {
+    const path = repository.primerPath(repository.scope(userId, catId));
+    mkdirSync(join(path, '..'), { recursive: true });
+    writeFileSync(path, content, 'utf8');
   };
 
   const propose = async ({ userId = 'alice', catId = 'opus', threadId = 'thread_1', body }) => {
-    const { invocationId, callbackToken } = await registry.create(userId, catId, threadId);
+    const key = body.clientRequestId ? `${userId}:${catId}:${threadId}:${body.clientRequestId}` : undefined;
+    let origin = key ? originByRequest.get(key) : undefined;
+    if (!origin) {
+      origin = messageStore.append({
+        userId,
+        catId: null,
+        content: 'Please update the profile',
+        mentions: [],
+        timestamp: Date.now(),
+        threadId,
+      });
+      if (key) originByRequest.set(key, origin);
+    }
+    const { invocationId, callbackToken } = await registry.create(userId, catId, threadId, undefined, origin.id);
     return app.inject({
       method: 'POST',
       url: '/api/callbacks/propose-profile-update',
@@ -31,23 +48,29 @@ describe('callback propose-profile-update route', () => {
         'x-callback-token': callbackToken,
         'content-type': 'application/json',
       },
-      payload: body,
+      payload: { sourceMessageId: origin.id, ...body },
     });
   };
 
   beforeEach(async () => {
-    profileDir = mkdtempSync(join(tmpdir(), 'f231-propose-'));
-    mkdirSync(join(profileDir, 'relationship'), { recursive: true });
+    const dataDir = mkdtempSync(join(tmpdir(), 'f231-propose-'));
     const routeMod = await import('../dist/routes/callback-propose-profile-update-routes.js');
     const RegMod = await import('../dist/domains/cats/services/agents/invocation/InvocationRegistry.js');
     const StoreMod = await import('../dist/domains/cats/services/stores/ports/ProfileUpdateProposalStore.js');
     const MsgMod = await import('../dist/domains/cats/services/stores/ports/MessageStore.js');
     const authMod = await import('../dist/routes/callback-auth-prehandler.js');
     writeMod = await import('../dist/domains/cats/services/profile/writeProfileUpdate.js');
+    const RepoMod = await import('../dist/domains/cats/services/profile/ProfileRepository.js');
+    repository = new RepoMod.FileProfileRepository({
+      dataDir,
+      relationshipKeyForCat: (catId) => ({ opus: 'ragdoll', 'codex-sol': 'maine-coon' })[catId],
+    });
+    profileDir = repository.profileDir('alice');
 
     registry = new RegMod.InvocationRegistry();
     store = new StoreMod.InMemoryProfileUpdateProposalStore();
     messageStore = new MsgMod.MessageStore();
+    originByRequest = new Map();
     const socketManager = { emitToUser() {}, broadcastToRoom() {} };
     app = Fastify();
     authMod.registerCallbackAuthHook(app, registry); // sets request.callbackAuth (proposal-test-harness gets this via full callbacksRoutes)
@@ -56,7 +79,7 @@ describe('callback propose-profile-update route', () => {
       proposalStore: store,
       messageStore,
       socketManager,
-      profileDir,
+      repository,
     });
     await app.ready();
   });
@@ -69,7 +92,7 @@ describe('callback propose-profile-update route', () => {
   it('happy path: pins current primer as beforeContent + baseContentHash, creates pending + card', async () => {
     seedPrimer('OLD primer');
     const res = await propose({
-      body: { afterContent: 'NEW primer', rationale: 'landy likes blue', signalKind: 'cat-declared' },
+      body: { afterContent: 'NEW primer', rationale: 'operator likes blue', signalKind: 'cat-declared' },
     });
     assert.equal(res.statusCode, 200);
     const body = JSON.parse(res.body);
@@ -78,7 +101,7 @@ describe('callback propose-profile-update route', () => {
     assert.equal(proposal.beforeContent, 'OLD primer');
     assert.equal(proposal.baseContentHash, writeMod.hashContent('OLD primer'));
     assert.equal(proposal.afterContent, 'NEW primer');
-    assert.equal(proposal.targetPath, join('relationship', 'opus-primer.md'));
+    assert.equal(proposal.targetPath, 'relationship/ragdoll-primer.md');
     assert.equal(proposal.targetLayer, 'primer');
     assert.equal(proposal.sourceCatId, 'opus');
     assert.equal(proposal.signalProvenance.kind, 'cat-declared');
@@ -98,15 +121,29 @@ describe('callback propose-profile-update route', () => {
     assert.equal(proposal.baseContentHash, writeMod.hashContent(''));
   });
 
+  it('projects a new model catId onto its stable relationship persona', async () => {
+    seedPrimer('SOL FAMILY OLD', 'codex-sol');
+    const res = await propose({
+      catId: 'codex-sol',
+      body: { afterContent: 'SOL FAMILY NEW', rationale: 'same persona', signalKind: 'cat-declared' },
+    });
+    assert.equal(res.statusCode, 200);
+    const proposal = store.get(JSON.parse(res.body).proposalId);
+    assert.equal(proposal.targetPath, 'relationship/maine-coon-primer.md');
+    assert.equal(proposal.beforeContent, 'SOL FAMILY OLD');
+  });
+
   it('INV-6: targetLayer capsule rejected (400 — AC-C1 primer only)', async () => {
     seedPrimer('OLD');
     const res = await propose({
       body: { afterContent: 'X', rationale: 'r', signalKind: 'cat-declared', targetLayer: 'capsule' },
     });
     assert.equal(res.statusCode, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error, 'invalid_target_layer', 'typed error for rejected layer');
   });
 
-  it('stale invocation → stale_ignored (no proposal created)', async () => {
+  it('replaced invocation → typed auth failure (no proposal created)', async () => {
     seedPrimer('OLD');
     const first = await registry.create('alice', 'opus', 'thread_1');
     await registry.create('alice', 'opus', 'thread_1'); // supersede first
@@ -118,10 +155,15 @@ describe('callback propose-profile-update route', () => {
         'x-callback-token': first.callbackToken,
         'content-type': 'application/json',
       },
-      payload: { afterContent: 'X', rationale: 'r', signalKind: 'cat-declared' },
+      payload: {
+        afterContent: 'X',
+        rationale: 'r',
+        signalKind: 'cat-declared',
+        sourceMessageId: 'unused-for-stale-invocation',
+      },
     });
-    assert.equal(res.statusCode, 200);
-    assert.equal(JSON.parse(res.body).status, 'stale_ignored');
+    assert.equal(res.statusCode, 401);
+    assert.equal(JSON.parse(res.body).reason, 'replaced');
   });
 
   it('idempotent on clientRequestId (same proposalId, deduped)', async () => {
@@ -133,7 +175,7 @@ describe('callback propose-profile-update route', () => {
     assert.equal(JSON.parse(r2.body).deduped, true);
   });
 
-  it('dedup loser returns retryable until the confirmation card is visible', async () => {
+  it('dedup retry recovers a staged proposal by publishing and anchoring its card', async () => {
     seedPrimer('OLD');
     const existingProposalId = 'profile_update_pending_no_card';
     store.reserveDedup('alice', 'req-invisible', existingProposalId);
@@ -143,7 +185,7 @@ describe('callback propose-profile-update route', () => {
       sourceInvocationId: 'inv_1',
       sourceCatId: 'opus',
       targetLayer: 'primer',
-      targetPath: join('relationship', 'opus-primer.md'),
+      targetPath: 'relationship/ragdoll-primer.md',
       beforeContent: 'OLD',
       baseContentHash: writeMod.hashContent('OLD'),
       afterContent: 'X',
@@ -156,11 +198,12 @@ describe('callback propose-profile-update route', () => {
       body: { afterContent: 'X', rationale: 'r', signalKind: 'cat-declared', clientRequestId: 'req-invisible' },
     });
 
-    assert.equal(res.statusCode, 503);
+    assert.equal(res.statusCode, 200);
     const body = JSON.parse(res.body);
     assert.equal(body.proposalId, existingProposalId);
-    assert.equal(body.retryable, true);
-    assert.match(body.error, /card.*visible|visible.*card/i);
+    assert.equal(body.deduped, true);
+    assert.ok(body.messageId);
+    assert.equal(store.get(existingProposalId).publication.state, 'anchored');
   });
 
   it('dedup self-heals a visible card even after more than 500 newer messages', async () => {
@@ -173,7 +216,7 @@ describe('callback propose-profile-update route', () => {
       sourceInvocationId: 'inv_1',
       sourceCatId: 'opus',
       targetLayer: 'primer',
-      targetPath: join('relationship', 'opus-primer.md'),
+      targetPath: 'relationship/ragdoll-primer.md',
       beforeContent: 'OLD',
       baseContentHash: writeMod.hashContent('OLD'),
       afterContent: 'X',
@@ -216,93 +259,117 @@ describe('callback propose-profile-update route', () => {
     assert.equal(body.deduped, true);
     assert.equal(store.get(existingProposalId).cardMessageId, cardMessage.id);
   });
-});
 
-// F246 v2: proposal_created socket event regression (cloud review P2).
-// Ensures F231 emits the generic proposal_created event that the Approval Hub
-// listens for (useApprovalHub → cat-cafe:proposal-created CustomEvent), alongside
-// the legacy profile_update_proposal_created event.
-describe('F246 v2: proposal_created socket event for F231', () => {
-  let profileDir;
-  let app;
-  let registry;
-  let store;
-  let messageStore;
-  let emitCalls;
+  // --- T5: Phase E corpus propose ---
 
-  const seedPrimer = (content, catId = 'opus') => {
-    writeFileSync(join(profileDir, 'relationship', `${catId}-primer.md`), content, 'utf8');
-  };
+  it('targetLayer corpus: derives targetPath from PROFILE_CORPUS_RELATIVE_PATH, reads corpus beforeContent', async () => {
+    // Seed a corpus file
+    mkdirSync(join(profileDir, 'corpus'), { recursive: true });
+    writeFileSync(join(profileDir, 'corpus', 'shared-facts.md'), 'old fact', 'utf8');
 
-  const propose = async ({ userId = 'alice', catId = 'opus', threadId = 'thread_1', body }) => {
-    const { invocationId, callbackToken } = await registry.create(userId, catId, threadId);
-    return app.inject({
-      method: 'POST',
-      url: '/api/callbacks/propose-profile-update',
-      headers: {
-        'x-invocation-id': invocationId,
-        'x-callback-token': callbackToken,
-        'content-type': 'application/json',
-      },
-      payload: body,
-    });
-  };
-
-  beforeEach(async () => {
-    profileDir = mkdtempSync(join(tmpdir(), 'f231-socket-'));
-    mkdirSync(join(profileDir, 'relationship'), { recursive: true });
-    const routeMod = await import('../dist/routes/callback-propose-profile-update-routes.js');
-    const RegMod = await import('../dist/domains/cats/services/agents/invocation/InvocationRegistry.js');
-    const StoreMod = await import('../dist/domains/cats/services/stores/ports/ProfileUpdateProposalStore.js');
-    const MsgMod = await import('../dist/domains/cats/services/stores/ports/MessageStore.js');
-    const authMod = await import('../dist/routes/callback-auth-prehandler.js');
-
-    registry = new RegMod.InvocationRegistry();
-    store = new StoreMod.InMemoryProfileUpdateProposalStore();
-    messageStore = new MsgMod.MessageStore();
-    emitCalls = [];
-    const socketManager = {
-      emitToUser(userId, event, data) {
-        emitCalls.push({ userId, event, data });
-      },
-      broadcastToRoom() {},
-    };
-    app = Fastify();
-    authMod.registerCallbackAuthHook(app, registry);
-    routeMod.registerCallbackProposeProfileUpdateRoutes(app, {
-      registry,
-      proposalStore: store,
-      messageStore,
-      socketManager,
-      profileDir,
-    });
-    await app.ready();
-  });
-
-  afterEach(async () => {
-    await app.close();
-    rmSync(profileDir, { recursive: true, force: true });
-  });
-
-  it('emits proposal_created alongside profile_update_proposal_created', async () => {
-    seedPrimer('OLD primer');
     const res = await propose({
-      body: { afterContent: 'NEW', rationale: 'testing socket', signalKind: 'cat-declared' },
+      body: {
+        afterContent: 'new fact',
+        rationale: 'operator told us',
+        signalKind: 'cvo-instructed',
+        targetLayer: 'corpus',
+      },
     });
     assert.equal(res.statusCode, 200);
     const body = JSON.parse(res.body);
+    assert.equal(body.status, 'pending');
+    const proposal = store.get(body.proposalId);
+    assert.equal(proposal.targetLayer, 'corpus');
+    assert.equal(proposal.targetPath, 'corpus/shared-facts.md');
+    assert.equal(proposal.beforeContent, 'old fact');
+    assert.equal(proposal.baseContentHash, writeMod.hashContent('old fact'));
+  });
 
-    // Legacy event must still be present
-    const legacy = emitCalls.find((c) => c.event === 'profile_update_proposal_created');
-    assert.ok(legacy, 'profile_update_proposal_created event emitted');
-    assert.equal(legacy.userId, 'alice');
+  it('targetLayer corpus: absent corpus → beforeContent empty', async () => {
+    const res = await propose({
+      body: {
+        afterContent: 'first fact',
+        rationale: 'init',
+        signalKind: 'cat-declared',
+        targetLayer: 'corpus',
+      },
+    });
+    assert.equal(res.statusCode, 200);
+    const proposal = store.get(JSON.parse(res.body).proposalId);
+    assert.equal(proposal.beforeContent, '');
+    assert.equal(proposal.baseContentHash, writeMod.hashContent(''));
+  });
 
-    // F246 hub-refresh event must also be emitted
-    const hubEvent = emitCalls.find((c) => c.event === 'proposal_created');
-    assert.ok(hubEvent, 'proposal_created event emitted for Approval Hub refresh');
-    assert.equal(hubEvent.userId, 'alice');
-    assert.equal(hubEvent.data.proposalId, body.proposalId);
-    assert.equal(hubEvent.data.status, 'pending');
-    assert.equal(hubEvent.data.sourceFeatureId, 'F231');
+  it('targetLayer capsule → 400 (Phase E: still rejected, A4)', async () => {
+    const res = await propose({
+      body: { afterContent: 'X', rationale: 'r', signalKind: 'cat-declared', targetLayer: 'capsule' },
+    });
+    assert.equal(res.statusCode, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error, 'invalid_target_layer', 'typed error for capsule');
+  });
+
+  it('unknown targetLayer → 400 with typed error', async () => {
+    const res = await propose({
+      body: { afterContent: 'X', rationale: 'r', signalKind: 'cat-declared', targetLayer: 'wormhole' },
+    });
+    assert.equal(res.statusCode, 400);
+    const body = JSON.parse(res.body);
+    assert.equal(body.error, 'invalid_target_layer', 'typed error for unknown layer');
+    assert.ok(body.detail, 'detail present');
+  });
+
+  it('dedup retry bypasses target read failure (P1 idempotency guard)', async () => {
+    // A successful first proposal with clientRequestId should be retrievable even
+    // when the corpus repository becomes temporarily unavailable on retry.
+    mkdirSync(join(profileDir, 'corpus'), { recursive: true });
+    writeFileSync(join(profileDir, 'corpus', 'shared-facts.md'), 'stable fact', 'utf8');
+
+    const body = {
+      afterContent: 'updated fact',
+      rationale: 'idempotency test',
+      signalKind: 'cat-declared',
+      targetLayer: 'corpus',
+      clientRequestId: 'req-durable',
+    };
+
+    const r1 = await propose({ body });
+    assert.equal(r1.statusCode, 200, 'first call succeeds');
+    const firstProposalId = JSON.parse(r1.body).proposalId;
+
+    // Break the corpus repository — simulates transient disk/storage failure
+    const origReadCorpus = repository.readCorpus;
+    repository.readCorpus = () => {
+      throw new Error('disk gone');
+    };
+    try {
+      // Retry with same clientRequestId — dedup should short-circuit before target read
+      const r2 = await propose({ body });
+      assert.equal(r2.statusCode, 200, 'retry succeeds via dedup despite broken repository');
+      const retryBody = JSON.parse(r2.body);
+      assert.equal(retryBody.proposalId, firstProposalId, 'returns same proposal');
+      assert.equal(retryBody.deduped, true, 'marked as deduped');
+    } finally {
+      repository.readCorpus = origReadCorpus;
+    }
+  });
+
+  it('corpus repository error returns 503 corpus_target_unavailable', async () => {
+    // Monkeypatch readCorpus to throw (simulating disk I/O or missing repo)
+    const origReadCorpus = repository.readCorpus;
+    repository.readCorpus = () => {
+      throw new Error('disk I/O');
+    };
+    try {
+      const res = await propose({
+        body: { afterContent: 'new fact', rationale: 'r', signalKind: 'cat-declared', targetLayer: 'corpus' },
+      });
+      assert.equal(res.statusCode, 503, 'returns 503 on corpus repository error');
+      const body = JSON.parse(res.body);
+      assert.equal(body.error, 'corpus_target_unavailable', 'typed error for unavailable corpus');
+      assert.ok(body.detail, 'detail message present');
+    } finally {
+      repository.readCorpus = origReadCorpus;
+    }
   });
 });

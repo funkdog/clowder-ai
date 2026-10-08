@@ -20,7 +20,11 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { type MountRules, STANDARD_MOUNT_POINT_IDS } from '@cat-cafe/shared';
 import { pathsEqual } from '../utils/project-path.js';
-import { buildSkillMountTargets, isManagedDirectoryLevelSkillsSymlink } from '../utils/skill-mount.js';
+import {
+  buildSkillMountTargets,
+  isManagedDirectoryLevelSkillsSymlink,
+  SHARED_SKILL_REFS_ALIAS,
+} from '../utils/skill-mount.js';
 import {
   canonicalSkillMountPathPolicy,
   normalizeSkillMountPathPolicy,
@@ -157,9 +161,16 @@ function buildSkillIssues(scenarios: {
 export interface CheckGlobalOpts {
   /** Skills registered in global capabilities.json (cat-cafe managed). */
   globalConfigSkills: ReadonlySet<string>;
+  /** Skills with custom skillsSource (e.g. plugin-provided). These are NOT
+   *  in the default source dir and should NOT be flagged as phantom. */
+  customSourceSkills?: ReadonlySet<string>;
   disabledSkills: Iterable<string>;
   skillMountPaths: SkillMountPathInput;
   platformName?: NodeJS.Platform;
+  /** Per-skill resolved source directories. Plugin skills have custom sources
+   *  outside the default source dir; without this, mount drift detection
+   *  compares against the wrong expected path. */
+  effectiveSourceMap?: ReadonlyMap<string, string>;
 }
 
 export interface CheckProjectOpts {
@@ -172,6 +183,8 @@ export interface CheckProjectOpts {
   /** Merged skill mount path policy (global + project). */
   skillMountPaths: SkillMountPathInput;
   platformName?: NodeJS.Platform;
+  /** Per-skill resolved source directories (same as CheckGlobalOpts). */
+  effectiveSourceMap?: ReadonlyMap<string, string>;
 }
 
 // ────────── Internal types ──────────
@@ -321,6 +334,7 @@ async function checkMountDrift(
   expectedSet: ReadonlySet<string>,
   policy: ReadonlyMap<string, ReadonlySet<string>>,
   platformName?: NodeJS.Platform,
+  effectiveSourceMap?: ReadonlyMap<string, string>,
 ): Promise<MountDriftResult> {
   const mountTargets = buildDriftMountTargets(projectRoot, mountRules);
   const missingMounts: Array<{ skill: string; mountPointIds: string[] }> = [];
@@ -368,7 +382,8 @@ async function checkMountDrift(
           skillConflicts.push(c);
           continue;
         }
-        const result = await classifyEntry(join(target.dir, skillName), join(skillsSource, skillName), platformName);
+        const effSource = effectiveSourceMap?.get(skillName) ?? skillsSource;
+        const result = await classifyEntry(join(target.dir, skillName), join(effSource, skillName), platformName);
         if (result.kind === 'managed-symlink') continue;
         if (result.kind === 'missing') {
           missingMountPoints.push(target.mountPointId);
@@ -396,8 +411,12 @@ async function checkMountDrift(
       continue;
     }
     for (const name of entries) {
+      // The reserved shared-refs alias is deliberately created and preserved by
+      // the sync engine (ensureSharedSkillRefsMount) — never report it as stale.
+      if (name === SHARED_SKILL_REFS_ALIAS) continue;
       if (expectedSet.has(name) && skillAllowsMountPoint(policy, name, target.mountPointId)) continue;
-      const result = await classifyEntry(join(target.dir, name), join(skillsSource, name), platformName);
+      const effSource = effectiveSourceMap?.get(name) ?? skillsSource;
+      const result = await classifyEntry(join(target.dir, name), join(effSource, name), platformName);
       if (result.kind === 'managed-symlink') staleMounts.add(name);
     }
   }
@@ -457,7 +476,9 @@ export async function checkGlobal(
 
   // 1.1 Registration: source ↔ global config
   const unregistered = sourceNames.filter((n) => !opts.globalConfigSkills.has(n));
-  const phantom = [...opts.globalConfigSkills].filter((n) => !sourceSet.has(n));
+  // Skills with custom skillsSource live outside the default source dir —
+  // they are expected to not appear in sourceSet and should not be phantom.
+  const phantom = [...opts.globalConfigSkills].filter((n) => !sourceSet.has(n) && !opts.customSourceSkills?.has(n));
 
   // 1.2 Mount: global config ↔ symlinks
   const expectedSet = buildExpectedSet(policy, disabledSet);
@@ -468,6 +489,7 @@ export async function checkGlobal(
     expectedSet,
     policy,
     opts.platformName,
+    opts.effectiveSourceMap,
   );
 
   const issues = buildSkillIssues({
@@ -520,7 +542,15 @@ export async function checkProject(
   const orphanSet = new Set(configOrphans);
   const expectedSet = buildExpectedSet(policy, disabledSet);
   for (const orphan of orphanSet) expectedSet.delete(orphan);
-  const mount = await checkMountDrift(projectRoot, skillsSource, mountRules, expectedSet, policy, opts.platformName);
+  const mount = await checkMountDrift(
+    projectRoot,
+    skillsSource,
+    mountRules,
+    expectedSet,
+    policy,
+    opts.platformName,
+    opts.effectiveSourceMap,
+  );
 
   const issues = buildSkillIssues({
     conflicts: mount.conflicts,

@@ -3,8 +3,17 @@
  * Split out of RedisProposalStore.ts to keep both files under the 350-line hard limit (AC-X1).
  */
 
-import type { CatId, ProposalApproveOverrides, ProposalStatus, ReportingMode, ThreadProposal } from '@cat-cafe/shared';
+import type {
+  CatId,
+  DeclaredWorkMode,
+  ProposalApproveOverrides,
+  ProposalStatus,
+  ReportingMode,
+  ThreadProposal,
+} from '@cat-cafe/shared';
+import { developmentScopeV1Schema } from '@cat-cafe/shared';
 import type { FinalizeApprovalInput } from '../ports/ProposalStore.js';
+import { hydrateApprovalPublication, serializeApprovalPublication } from './RedisApprovalPublication.js';
 
 /**
  * CAS Lua: atomically check current status matches expected → HSET fields + ZREM/ZADD pending index.
@@ -82,8 +91,17 @@ export function serializeProposal(proposal: ThreadProposal): string[] {
     String(proposal.createdAt),
   ];
   if (proposal.initialMessage) fields.push('initialMessage', proposal.initialMessage);
+  if (proposal.sourceMessageId) fields.push('sourceMessageId', proposal.sourceMessageId);
   if (proposal.cardMessageId) fields.push('cardMessageId', proposal.cardMessageId);
   if (proposal.reportingMode) fields.push('reportingMode', proposal.reportingMode);
+  if (proposal.declaredWorkMode) fields.push('declaredWorkMode', proposal.declaredWorkMode);
+  if (proposal.publication) fields.push('publication', serializeApprovalPublication(proposal.publication));
+  if (proposal.withdrawnBy) fields.push('withdrawnBy', proposal.withdrawnBy);
+  if (proposal.withdrawnAt) fields.push('withdrawnAt', String(proposal.withdrawnAt));
+  if (proposal.subjectTaskId) fields.push('subjectTaskId', proposal.subjectTaskId);
+  if (proposal.subjectTaskTitle) fields.push('subjectTaskTitle', proposal.subjectTaskTitle);
+  if (proposal.approvedDevelopmentScope)
+    fields.push('approvedDevelopmentScope', JSON.stringify(proposal.approvedDevelopmentScope));
   return fields;
 }
 
@@ -103,19 +121,40 @@ export function hydrateProposal(data: Record<string, string>): ThreadProposal {
     projectPath: data.projectPath!,
     createdBy: data.createdBy!,
     createdAt: parseInt(data.createdAt!, 10),
+    ...optionalSourceMessage(data.sourceMessageId),
   };
   if (initialMessage) proposal.initialMessage = initialMessage;
   if (data.reportingMode) proposal.reportingMode = data.reportingMode as ReportingMode;
+  if (data.declaredWorkMode) proposal.declaredWorkMode = data.declaredWorkMode as DeclaredWorkMode;
   if (data.approvedBy) proposal.approvedBy = data.approvedBy;
   if (data.approvedAt) proposal.approvedAt = parseInt(data.approvedAt, 10);
   if (data.createdThreadId) proposal.createdThreadId = data.createdThreadId;
   if (data.rejectedBy) proposal.rejectedBy = data.rejectedBy;
   if (data.rejectedAt) proposal.rejectedAt = parseInt(data.rejectedAt, 10);
   if (data.rejectionReason) proposal.rejectionReason = data.rejectionReason;
+  if (data.withdrawnBy) proposal.withdrawnBy = data.withdrawnBy as CatId;
+  if (data.withdrawnAt) proposal.withdrawnAt = parseInt(data.withdrawnAt, 10);
   if (data.cardMessageId) proposal.cardMessageId = data.cardMessageId;
+  const publication = hydrateApprovalPublication(data.publication);
+  if (publication) proposal.publication = publication;
+  if (data.subjectTaskId) proposal.subjectTaskId = data.subjectTaskId;
+  if (data.subjectTaskTitle) proposal.subjectTaskTitle = data.subjectTaskTitle;
+  if (data.approvedDevelopmentScope) {
+    try {
+      const parsed = developmentScopeV1Schema.safeParse(JSON.parse(data.approvedDevelopmentScope));
+      if (parsed.success) proposal.approvedDevelopmentScope = parsed.data;
+      // Invalid JSON or schema mismatch → fail closed (no delegate authority)
+    } catch {
+      /* corrupted JSON → fail closed (no delegate authority) */
+    }
+  }
   const claimedAt = parseInt(data.claimedAt ?? '0', 10);
   if (claimedAt > 0) proposal.claimedAt = claimedAt;
   return proposal;
+}
+
+function optionalSourceMessage(sourceMessageId: string | undefined): Pick<ThreadProposal, 'sourceMessageId'> {
+  return sourceMessageId ? { sourceMessageId } : {};
 }
 
 export function applyFinalize(proposal: ThreadProposal, input: FinalizeApprovalInput, now: number): ThreadProposal {
@@ -136,6 +175,7 @@ export function applyOverrides(proposal: ThreadProposal, overrides: ProposalAppr
   if (overrides.preferredCats !== undefined) proposal.preferredCats = [...overrides.preferredCats];
   if (overrides.projectPath !== undefined) proposal.projectPath = overrides.projectPath;
   if (overrides.reportingMode !== undefined) proposal.reportingMode = overrides.reportingMode;
+  if (overrides.declaredWorkMode !== undefined) proposal.declaredWorkMode = overrides.declaredWorkMode;
   if (overrides.initialMessage === null) delete proposal.initialMessage;
   else if (typeof overrides.initialMessage === 'string') proposal.initialMessage = overrides.initialMessage;
 }

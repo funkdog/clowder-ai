@@ -3,13 +3,15 @@
 import { usePathname } from 'next/navigation';
 import { useLayoutEffect, useState } from 'react';
 import { ChatContainer } from '@/components/ChatContainer';
-import { CHAT_THREAD_ROUTE_EVENT, getThreadIdFromPathname } from '@/components/ThreadSidebar/thread-navigation';
-import { CallbackAuthSnapshotMount } from '@/stores/callbackAuthStore';
+import {
+  getBrowserThreadRoutePathname,
+  getThreadIdFromPathname,
+  subscribeBrowserThreadRoute,
+} from '@/components/ThreadSidebar/thread-navigation';
 import { resolveLayoutThreadId } from './layout-thread-id';
 
 function getThreadRouteSnapshot(): string {
-  if (typeof window === 'undefined') return 'default';
-  return getThreadIdFromPathname(window.location.pathname);
+  return getThreadIdFromPathname(getBrowserThreadRoutePathname());
 }
 
 /**
@@ -29,24 +31,14 @@ export default function ChatLayout({ children }: { children: React.ReactNode }) 
   useLayoutEffect(() => {
     const syncBrowserRoute = () => setBrowserThreadId(getThreadRouteSnapshot());
     syncBrowserRoute();
-    window.addEventListener('popstate', syncBrowserRoute);
-    window.addEventListener(CHAT_THREAD_ROUTE_EVENT, syncBrowserRoute);
-    return () => {
-      window.removeEventListener('popstate', syncBrowserRoute);
-      window.removeEventListener(CHAT_THREAD_ROUTE_EVENT, syncBrowserRoute);
-    };
+    return subscribeBrowserThreadRoute(syncBrowserRoute);
   }, []);
   const threadId = resolveLayoutThreadId(pathnameThreadId, browserThreadId, immediateBrowserThreadId);
 
   return (
     <>
-      {/*
-        F174 D2b-2 + cloud P2 #1403 (round 10): mount the callback-auth snapshot
-        provider as a render-isolated null leaf so the 30s poll tick re-render
-        stays inside this component instead of bubbling through ChatLayout →
-        ChatContainer → thread tree.
-      */}
-      <CallbackAuthSnapshotMount />
+      {/* CallbackAuthSnapshotMount moved to AppShell — it needs to be available
+          on all routes (settings, memory, etc.), not just chat. */}
       <ChatContainer threadId={threadId} />
       {children}
     </>

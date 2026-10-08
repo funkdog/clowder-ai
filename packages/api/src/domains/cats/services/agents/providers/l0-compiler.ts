@@ -24,67 +24,44 @@ import { spawn as nodeSpawn } from 'node:child_process';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveProfileDir } from '../../profile/profile-dir.js';
+import {
+  CURRENT_CORPUS_PROFILE_URI,
+  CURRENT_RELATIONSHIP_PROFILE_URI,
+  DEFAULT_PROFILE_USER_ID,
+} from '@cat-cafe/shared/profile-contract';
+import { profilePointerEmitted } from '../../../../../infrastructure/telemetry/instruments.js';
+import { FileProfileRepository } from '../../profile/ProfileRepository.js';
+import { L0DependencySignatureTracker } from './l0-dependency-signature.js';
+import { type L0CacheGeneration, L0ProfileCache, type L0Projection } from './l0-profile-cache.js';
 
 const SCRIPT_BASENAME = 'compile-system-prompt-l0.mjs';
+const l0Cache = new L0ProfileCache();
+const dependencySignatures = new L0DependencySignatureTracker();
 
-// ── L0 cache ────────────────────────────────────────────────────────
-// The compiled L0 depends on static inputs (shared-rules.md, cat config,
-// teammate roster) that don't change during a session. Caching avoids
-// spawning a subprocess on every invoke(). The cache is populated at
-// startup via warmL0Cache() and invalidated on hot-reload via clearL0Cache().
-const l0Cache = new Map<string, string>();
-
-// In-flight Promise dedup — Phase G AC-G10 (砚砚 Design Gate position 1).
-// Without this, two concurrent calls on a cold cache (e.g. invoke provider
-// + Prompt X-Ray capture inside the same invocation hot path) both spawn
-// subprocesses. The dedup map collapses concurrent compiles onto a single
-// subprocess invocation; the in-flight entry is removed once the Promise
-// settles, after which the result is in l0Cache for any subsequent reads.
-const l0InflightPromises = new Map<string, Promise<string>>();
-const l0CacheGenerations = new Map<string, number>();
-let l0GlobalGeneration = 0;
-
-function bumpL0Generation(catId?: string): void {
-  if (catId) {
-    l0CacheGenerations.set(catId, (l0CacheGenerations.get(catId) ?? 0) + 1);
-    return;
-  }
-  l0GlobalGeneration += 1;
-  l0CacheGenerations.clear();
+function recordProfilePointerEmission(compiledL0: string): void {
+  const hasPrimer = compiledL0.includes(CURRENT_RELATIONSHIP_PROFILE_URI);
+  const hasCorpus = compiledL0.includes(CURRENT_CORPUS_PROFILE_URI);
+  if (hasPrimer) profilePointerEmitted.add(1, { 'profile.layer': 'primer' });
+  if (hasCorpus) profilePointerEmitted.add(1, { 'profile.layer': 'corpus' });
 }
 
-function getL0Generation(catId: string): { global: number; cat: number } {
-  return {
-    global: l0GlobalGeneration,
-    cat: l0CacheGenerations.get(catId) ?? 0,
-  };
-}
-
-function isL0GenerationCurrent(catId: string, generation: { global: number; cat: number }): boolean {
-  const current = getL0Generation(catId);
-  return current.global === generation.global && current.cat === generation.cat;
+function refreshL0DependencySignature(cwd: string, scriptPath: string): string | null {
+  return dependencySignatures.refresh(cwd, scriptPath, () => l0Cache.clear());
 }
 
 /** Clear cached L0 for one cat or all cats (call on hot-reload / re-sync). */
-export function clearL0Cache(catId?: string): void {
-  if (catId) {
-    l0Cache.delete(catId);
-    bumpL0Generation(catId);
-    // Also drop any in-flight promise — next call will re-spawn fresh. The
-    // generation guard prevents the older promise from repopulating l0Cache
-    // when it eventually resolves after this clear.
-    l0InflightPromises.delete(catId);
-  } else {
-    l0Cache.clear();
-    bumpL0Generation();
-    l0InflightPromises.clear();
-  }
+export function clearL0Cache(catId?: string, userId?: string): void {
+  l0Cache.clear(catId, userId);
+}
+
+/** Phase E: clear all cached L0s for a given owner (corpus is owner-wide, not cat-scoped). */
+export function clearL0CacheOwner(userId: string): void {
+  l0Cache.clearOwner(userId);
 }
 
 /** Number of cached entries (test/diagnostic). */
 export function l0CacheSize(): number {
-  return l0Cache.size;
+  return l0Cache.size();
 }
 
 /**
@@ -94,10 +71,11 @@ export function l0CacheSize(): number {
 export async function warmL0Cache(
   catIds: string[],
   logger?: { warn: (obj: Record<string, unknown>, msg: string) => void },
+  userId: string = process.env.CAT_CAFE_USER_ID ?? DEFAULT_PROFILE_USER_ID,
 ): Promise<void> {
   await Promise.all(
     catIds.map((catId) =>
-      compileL0ViaSubprocess({ catId }).catch((err: unknown) => {
+      compileL0ViaSubprocess({ catId, userId }).catch((err: unknown) => {
         logger?.warn({ catId, err: (err as Error).message }, 'L0 pre-compile failed at startup (will retry on invoke)');
       }),
     ),
@@ -153,6 +131,12 @@ export function resolveL0CompilerScriptPath(cwd: string = process.cwd()): string
 export interface CompileL0Options {
   /** Cat to compile L0 for (must be registered in the runtime cat catalog). */
   catId: string;
+  /** User whose private profile is compiled. Defaults to CAT_CAFE_USER_ID/default-user. */
+  userId?: string;
+  /** Private Work retains home L0 without USER_CAPSULE; public uses its separate bounded projection. */
+  projection?: L0Projection;
+  /** Canonical data root test/config seam. Defaults to CAT_CAFE_DATA_DIR/~/.cat-cafe. */
+  dataDir?: string;
   /**
    * When set → the script writes the compiled L0 to this path (Claude
    * `--system-prompt-file`). When omitted → the compiled L0 is captured from
@@ -165,6 +149,40 @@ export interface CompileL0Options {
   spawnFn?: typeof nodeSpawn;
 }
 
+type L0ProjectionContext =
+  | { readonly projection: Exclude<L0Projection, 'owner'>; readonly profileSignature: string }
+  | { readonly projection: 'owner'; readonly profileDir: string; readonly profileSignature: string | null };
+
+function resolveProjection(options: CompileL0Options): L0Projection {
+  if (options.projection === undefined) return 'owner';
+  if (options.projection === 'owner' || options.projection === 'public' || options.projection === 'collective-work')
+    return options.projection;
+  throw new Error(`Unsupported L0 projection: ${String(options.projection)}`);
+}
+
+function resolveProjectionContext(
+  options: CompileL0Options,
+  userId: string,
+  cacheKey: string,
+  projection: L0Projection,
+): L0ProjectionContext {
+  if (projection !== 'owner') return { projection, profileSignature: `l0-projection:${projection}` };
+  const profileDir = new FileProfileRepository({ dataDir: options.dataDir }).profileDir(userId);
+  return {
+    projection,
+    profileDir,
+    profileSignature: l0Cache.refreshProfileSignature(cacheKey, profileDir),
+  };
+}
+
+function projectionProfileIsCurrent(context: L0ProjectionContext): boolean {
+  return (
+    context.projection !== 'owner' ||
+    (context.profileSignature !== null &&
+      l0Cache.profileSignatureIsCurrent(context.profileDir, context.profileSignature))
+  );
+}
+
 /**
  * Compile per-cat L0 by invoking the Phase B CLI as a subprocess.
  * @returns the compiled L0 string (file content when `outPath` is set, else stdout).
@@ -173,11 +191,20 @@ export interface CompileL0Options {
  */
 export async function compileL0ViaSubprocess(options: CompileL0Options): Promise<string> {
   const { catId, outPath } = options;
+  const userId = options.userId ?? process.env.CAT_CAFE_USER_ID ?? DEFAULT_PROFILE_USER_ID;
+  const projection = resolveProjection(options);
+  const key = l0Cache.key(userId, catId, projection);
+  const cwd = options.cwd ?? process.cwd();
+  const scriptPath = resolveL0CompilerScriptPath(cwd);
+  const dependencySignature = scriptPath ? refreshL0DependencySignature(cwd, scriptPath) : null;
+  const projectionContext = resolveProjectionContext(options, userId, key, projection);
+  const { profileSignature } = projectionContext;
 
   // Cache hit — skip subprocess entirely
-  const cached = l0Cache.get(catId);
+  const cached = dependencySignature && profileSignature !== null ? l0Cache.get(key) : undefined;
   if (cached) {
     if (outPath) writeFileSync(outPath, cached, 'utf8');
+    recordProfilePointerEmission(cached);
     return cached;
   }
 
@@ -185,25 +212,32 @@ export async function compileL0ViaSubprocess(options: CompileL0Options): Promise
   // subprocess. The first caller installs the Promise; subsequent callers
   // await the same one. Per-call `outPath` is honored: any caller that
   // passed `outPath` writes the resolved L0 to that path before returning.
-  // Phase G AC-G10 — see comment block at l0InflightPromises declaration.
-  const inflight = l0InflightPromises.get(catId);
+  // Phase G AC-G10 — the profile cache owns the shared in-flight promise.
+  const inflight = dependencySignature && profileSignature !== null ? l0Cache.getInflight(key) : undefined;
   if (inflight) {
     const result = await inflight;
     if (outPath) writeFileSync(outPath, result, 'utf8');
+    recordProfilePointerEmission(result);
     return result;
   }
 
-  const compileGeneration = getL0Generation(catId);
-  const compilePromise = doCompileL0(options, compileGeneration);
-  l0InflightPromises.set(catId, compilePromise);
+  const compileGeneration = l0Cache.generation(key);
+  const compilePromise = doCompileL0(
+    { ...options, userId },
+    key,
+    compileGeneration,
+    dependencySignature,
+    projectionContext,
+  );
+  l0Cache.setInflight(key, compilePromise);
   try {
-    return await compilePromise;
+    const result = await compilePromise;
+    recordProfilePointerEmission(result);
+    return result;
   } finally {
     // Always clean up the in-flight entry once settled — subsequent calls
     // will read from l0Cache (on success) or re-attempt (on failure).
-    if (l0InflightPromises.get(catId) === compilePromise) {
-      l0InflightPromises.delete(catId);
-    }
+    l0Cache.deleteInflight(key, compilePromise);
   }
 }
 
@@ -213,9 +247,13 @@ export async function compileL0ViaSubprocess(options: CompileL0Options): Promise
  */
 async function doCompileL0(
   options: CompileL0Options,
-  compileGeneration: { global: number; cat: number },
+  cacheKey: string,
+  compileGeneration: L0CacheGeneration,
+  dependencySignature: string | null,
+  projectionContext: L0ProjectionContext,
 ): Promise<string> {
   const { catId, outPath, cwd = process.cwd(), spawnFn = nodeSpawn } = options;
+  const { profileSignature } = projectionContext;
   const scriptPath = resolveL0CompilerScriptPath(cwd);
   if (!scriptPath) {
     throw new Error(
@@ -223,12 +261,17 @@ async function doCompileL0(
     );
   }
 
-  // F231: capsule/primer live in private/profile/ (gitignored user data). resolveProfileDir is
-  // the SINGLE SOURCE OF TRUTH shared with the profile-update write routes — read (here) and
-  // write (routes) MUST resolve identically or the nurturing loop silently breaks (a primer
-  // written to one path while the injector reads another).
-  const profileDir = resolveProfileDir(cwd, scriptPath);
-  const args = [scriptPath, '--cat', catId, '--profile-dir', profileDir, ...(outPath ? ['--out', outPath] : [])];
+  // F231 KD-19: private profile truth is user-scoped persistent data, never cwd/worktree state.
+  // Public and private Work compilation receive neither profile paths nor bytes.
+  const args = [
+    scriptPath,
+    '--cat',
+    catId,
+    ...(projectionContext.projection !== 'owner'
+      ? ['--projection', projectionContext.projection]
+      : ['--profile-dir', projectionContext.profileDir]),
+    ...(outPath ? ['--out', outPath] : []),
+  ];
 
   const stdout = await new Promise<string>((resolvePromise, rejectPromise) => {
     const child = spawnFn(process.execPath, args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
@@ -271,8 +314,14 @@ async function doCompileL0(
     }
   }
 
-  if (isL0GenerationCurrent(catId, compileGeneration)) {
-    l0Cache.set(catId, result);
+  if (
+    dependencySignature &&
+    profileSignature !== null &&
+    dependencySignatures.isCurrent(dependencySignature) &&
+    projectionProfileIsCurrent(projectionContext) &&
+    l0Cache.generationIsCurrent(cacheKey, compileGeneration)
+  ) {
+    l0Cache.set(cacheKey, result, profileSignature);
   }
   return result;
 }

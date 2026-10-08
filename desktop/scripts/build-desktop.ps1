@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds the Cat Cafe Windows installer package.
+  Builds the Clowder AI Windows installer package.
 
 .DESCRIPTION
   Full pipeline:
@@ -9,7 +9,7 @@
        with flat hoisted node_modules (real files, no junctions)
     3. Bundle Redis portable for offline install
     4. Build the Electron shell (via desktop/ npm install + electron-builder)
-    5. Compile Inno Setup installer -> dist/CatCafe-Setup-x.x.x.exe
+    5. Compile Inno Setup installer -> dist/ClowderAI-Setup-x.x.x.exe
 
   Why pnpm deploy (not tar of root node_modules): pnpm on Windows uses
   junctions, which require absolute paths. A tarball of node_modules bakes in
@@ -224,30 +224,54 @@ if (-not $reuseBundled) {
 }
 
 $bundledRedis = Join-Path (Join-Path $ProjectRoot "bundled") "redis"
-if (Test-Path (Join-Path $bundledRedis "redis-server.exe")) {
+$redisBin = Join-Path $bundledRedis "redis-server.exe"
+if (Test-Path $redisBin) {
     Write-Ok "Redis portable already present"
 } else {
     New-Item -ItemType Directory -Path $bundledRedis -Force | Out-Null
     Write-Host "  Downloading Redis for Windows..."
-    $headers = @{ "User-Agent" = "CatCafe-Build" }
+    $headers = @{ "User-Agent" = "ClowderAI-Build" }
+    # Use GITHUB_TOKEN when available (CI) to avoid API rate-limit (60 req/hr unauthenticated).
+    if ($env:GITHUB_TOKEN) {
+        $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)"
+    }
     $releaseApi = "https://api.github.com/repos/redis-windows/redis-windows/releases/latest"
-    try {
-        $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers -TimeoutSec 30
-        $asset = $release.assets | Where-Object { $_.name -match "^Redis-.*-Windows-x64-msys2\.zip$" } | Select-Object -First 1
-        if (-not $asset) { Write-Err "No Redis Windows asset found"; exit 1 }
-        $zipPath = Join-Path $bundledRedis "redis-windows.zip"
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -Headers $headers -UseBasicParsing -TimeoutSec 120
-        $extractDir = Join-Path $bundledRedis "_extract"
-        Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
-        $innerDir = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1
-        if ($innerDir) {
-            Get-ChildItem -Path $innerDir.FullName | Move-Item -Destination $bundledRedis -Force
+    # P1-3: Retry up to 3 times, then fail-closed in CI (release builds must include Redis).
+    $redisDownloaded = $false
+    for ($redisAttempt = 1; $redisAttempt -le 3; $redisAttempt++) {
+        if ($redisAttempt -gt 1) {
+            Write-Host "  Retry $redisAttempt/3 for Redis download..." -ForegroundColor Yellow
+            Start-Sleep -Seconds 5
         }
-        Remove-Item $extractDir -Recurse -Force
-        Remove-Item $zipPath -Force
-        Write-Ok "Redis portable bundled ($($asset.name))"
-    } catch {
-        Write-Warn "Redis download failed — installer will use memory store or system Redis"
+        try {
+            $release = Invoke-RestMethod -Uri $releaseApi -Headers $headers -TimeoutSec 30
+            $asset = $release.assets | Where-Object { $_.name -match "^Redis-.*-Windows-x64-msys2\.zip$" } | Select-Object -First 1
+            if (-not $asset) { throw "No Redis Windows asset found in release" }
+            $zipPath = Join-Path $bundledRedis "redis-windows.zip"
+            Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -Headers $headers -UseBasicParsing -TimeoutSec 120
+            $extractDir = Join-Path $bundledRedis "_extract"
+            Expand-Archive -Path $zipPath -DestinationPath $extractDir -Force
+            $innerDir = Get-ChildItem -Path $extractDir -Directory | Select-Object -First 1
+            if ($innerDir) {
+                Get-ChildItem -Path $innerDir.FullName | Move-Item -Destination $bundledRedis -Force
+            }
+            Remove-Item $extractDir -Recurse -Force
+            Remove-Item $zipPath -Force
+            $redisDownloaded = $true
+            Write-Ok "Redis portable bundled ($($asset.name))"
+            break
+        } catch {
+            Write-Warn "Redis download attempt $redisAttempt failed: $_"
+        }
+    }
+    if (-not $redisDownloaded) {
+        Write-Err "Redis download failed after 3 attempts — any publishable installer must include Redis"
+        exit 1
+    }
+    # Verify redis-server.exe actually landed (guards against corrupt/empty archives)
+    if ($redisDownloaded -and -not (Test-Path $redisBin)) {
+        Write-Err "Redis extraction succeeded but redis-server.exe not found in $bundledRedis"
+        exit 1
     }
 }
 
@@ -266,7 +290,7 @@ Install it with the official bootstrapper:
 
   powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri https://antigravity.google/cli/install.cmd -OutFile `$env:TEMP\antigravity-cli-install.cmd; & `$env:TEMP\antigravity-cli-install.cmd"
 
-Offline Cat Cafe packages intentionally do not vendor agy until Google
+Offline Clowder AI packages intentionally do not vendor agy until Google
 publishes a redistributable native binary contract.
 "@ | Set-Content -Path $agyInstructionsPath -Encoding ascii
 Write-Ok "agy-install-instructions.txt written"
@@ -396,7 +420,7 @@ if (-not $SkipInstaller) {
         if (Test-Path $unofficial) {
             Copy-Item $unofficial $zhIsl
         } else {
-            $url = "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/Unofficial/ChineseSimplified.isl"
+            $url = "https://raw.githubusercontent.com/jrsoftware/issrc/main/Files/Languages/ChineseSimplified.isl"
             Invoke-WebRequest -Uri $url -OutFile $zhIsl -ErrorAction Stop
         }
         Write-Host "  Installed ChineseSimplified.isl" -ForegroundColor Gray
@@ -406,7 +430,7 @@ if (-not $SkipInstaller) {
     if ($LASTEXITCODE -ne 0) { Write-Err "Inno Setup compilation failed"; exit 1 }
     Write-Ok "Installer built"
 
-    $outputExe = Get-ChildItem -Path $distDir -Filter "CatCafe-Setup-*.exe" | Select-Object -First 1
+    $outputExe = Get-ChildItem -Path $distDir -Filter "ClowderAI-Setup-*.exe" | Select-Object -First 1
     Write-Host ""
     Write-Host "  ========================================" -ForegroundColor Green
     Write-Host "  Installer ready!" -ForegroundColor Green
@@ -428,7 +452,7 @@ if (-not $SkipPortableZip) {
     $desktopPkgJson = Get-Content $desktopPkgPath -Raw | ConvertFrom-Json
     $zipVersion = if ($env:CATCAFE_VERSION) { $env:CATCAFE_VERSION } else { $desktopPkgJson.version }
 
-    $stagingName = "CatCafe-$zipVersion"
+    $stagingName = "ClowderAI-$zipVersion"
     $staging = Join-Path $distDir $stagingName
     if (Test-Path $staging) { Remove-Item $staging -Recurse -Force }
     New-Item -ItemType Directory -Path $staging -Force | Out-Null
@@ -498,12 +522,20 @@ if (-not $SkipPortableZip) {
     Copy-ToStaging (Join-Path $ProjectRoot "guides") "guides"
 
     # Plugin manifests/resources — PluginRegistry scans this tree at runtime.
-    Copy-ToStaging (Join-Path $ProjectRoot "plugins") "plugins"
+    # F204 moved plugins from root plugins/ into packages/api/src/plugins/.
+    Copy-ToStaging (Join-Path $ProjectRoot "packages\api\src\plugins") "plugins"
 
     # Agent CLI hook templates
     $hooksSource = Join-Path $ProjectRoot ".claude\hooks\user-level"
     if (Test-Path $hooksSource) {
         Copy-ToStaging $hooksSource ".claude\hooks\user-level"
+    }
+
+    # #1542: canonical Node compaction carrier (packaged only — spawn-time
+    # --settings injection reads it; never installed into project settings).
+    $carrierSource = Join-Path $ProjectRoot ".claude\hooks\f24-compaction.mjs"
+    if (Test-Path $carrierSource) {
+        Copy-ToStaging $carrierSource ".claude\hooks\f24-compaction.mjs"
     }
 
     # Electron app (win-unpacked contents → desktop-dist/)
@@ -512,6 +544,21 @@ if (-not $SkipPortableZip) {
 
     # Desktop assets
     Copy-ToStaging (Join-Path (Join-Path $ProjectRoot "desktop") "assets") "desktop\assets"
+
+    # The portable launcher resolves its config version from desktop/package.json.
+    # Bake the final release version into the staged copy so CATCAFE_VERSION
+    # overrides cannot make the archive name and desktop-config.json disagree.
+    $desktopPkg = Join-Path (Join-Path $ProjectRoot "desktop") "package.json"
+    if (Test-Path $desktopPkg) {
+        $desktopDir = Join-Path $staging "desktop"
+        if (-not (Test-Path $desktopDir)) {
+            New-Item -ItemType Directory -Path $desktopDir -Force | Out-Null
+        }
+        $pkgContent = Get-Content $desktopPkg -Raw | ConvertFrom-Json
+        $pkgContent.version = $zipVersion
+        $json = $pkgContent | ConvertTo-Json -Depth 10
+        [System.IO.File]::WriteAllText((Join-Path $desktopDir "package.json"), $json, (New-Object System.Text.UTF8Encoding $false))
+    }
 
     # CLI tool tarballs
     Copy-ToStaging (Join-Path $ProjectRoot "bundled\cli-tools") "bundled\cli-tools"

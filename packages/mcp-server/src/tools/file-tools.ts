@@ -1,3 +1,5 @@
+import { defineMcpCanonicalFactory } from '../tool-governance-migration.js';
+
 /**
  * File Tools
  * MCP 文件操作工具
@@ -9,6 +11,11 @@ import * as path from 'node:path';
 import { createInterface } from 'node:readline';
 import { z } from 'zod';
 import { ensureDir, isPathAllowed } from '../utils/path-validator.js';
+
+const defineTool = defineMcpCanonicalFactory('file-tools.ts', undefined, {
+  resourceFamily: 'evidence-navigation',
+  authority: 'local-runtime',
+});
 
 /**
  * MCP 工具返回结果类型
@@ -39,14 +46,16 @@ export function successResult(text: string): ToolResult {
 
 // ============ Tool Input Schemas ============
 
-export const readFileInputSchema = {
-  path: z.string().describe('The path to the file to read'),
-};
-
 export const readFileSliceInputSchema = {
   path: z.string().describe('The path to the file to read'),
   startLine: z.number().int().min(1).describe('1-based first line to include'),
   endLine: z.number().int().min(1).optional().describe('1-based final line to include; defaults to a bounded window'),
+  charOffset: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe('Character offset within startLine, for a long-line continuation'),
 };
 
 export const writeFileInputSchema = {
@@ -61,40 +70,10 @@ export const listFilesInputSchema = {
 
 // ============ Tool Handlers ============
 
-/**
- * read_file handler
- * 读取文件内容，带路径验证
- */
-export async function handleReadFile(input: { path: string }): Promise<ToolResult> {
-  const filePath = path.resolve(input.path);
-
-  // 路径验证
-  if (!isPathAllowed(filePath)) {
-    return errorResult(`Access denied: ${filePath} is not within allowed directories`);
-  }
-
-  // 检查文件是否存在
-  if (!fs.existsSync(filePath)) {
-    return errorResult(`File not found: ${filePath}`);
-  }
-
-  // 检查是否为文件
-  const stat = fs.statSync(filePath);
-  if (!stat.isFile()) {
-    return errorResult(`Not a file: ${filePath}`);
-  }
-
-  try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    return successResult(content);
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return errorResult(`Failed to read file: ${message}`);
-  }
-}
-
 const DEFAULT_FILE_SLICE_LINES = 120;
 const MAX_FILE_SLICE_LINES = 400;
+const FILE_SLICE_RESPONSE_MAX_CHARS = 24_000;
+const FILE_SLICE_CONTENT_MAX_CHARS = 20_000;
 const COLLECTION_URI_PREFIX = 'cat-cafe://collection/';
 
 type CollectionManifestRef = {
@@ -119,6 +98,32 @@ function loadCollectionManifestRefs(): CollectionManifestRef[] {
 
 function resolveFileSlicePath(inputPath: string): { filePath: string; displayPath: string } | { error: string } {
   if (!inputPath.startsWith(COLLECTION_URI_PREFIX)) {
+    if (path.isAbsolute(inputPath)) {
+      const filePath = path.resolve(inputPath);
+      return { filePath, displayPath: filePath };
+    }
+    const allowedDirs = (process.env['ALLOWED_WORKSPACE_DIRS'] ?? '')
+      .split(/[:,]/)
+      .map((dir) => dir.trim())
+      .filter(Boolean)
+      .map((dir) => path.resolve(dir));
+    if (allowedDirs.length > 0) {
+      const hits: string[] = [];
+      for (const dir of allowedDirs) {
+        const candidate = path.resolve(dir, inputPath);
+        if (fs.existsSync(candidate)) {
+          hits.push(candidate);
+        }
+      }
+      if (hits.length === 1) {
+        return { filePath: hits[0], displayPath: hits[0] };
+      }
+      if (hits.length > 1) {
+        return {
+          error: `Ambiguous relative path "${inputPath}" matched multiple workspace roots: ${hits.join(', ')}. Use an absolute path.`,
+        };
+      }
+    }
     const filePath = path.resolve(inputPath);
     return { filePath, displayPath: filePath };
   }
@@ -165,6 +170,7 @@ export async function handleReadFileSlice(input: {
   path: string;
   startLine: number;
   endLine?: number;
+  charOffset?: number;
 }): Promise<ToolResult> {
   const resolvedPath = resolveFileSlicePath(input.path);
   if ('error' in resolvedPath) {
@@ -195,6 +201,9 @@ export async function handleReadFileSlice(input: {
 
   const lines: string[] = [];
   let currentLine = 0;
+  let usedContentChars = 0;
+  let nextSlice: { startLine: number; charOffset: number } | undefined;
+  let invalidOffset = false;
   const stream = fs.createReadStream(filePath, { encoding: 'utf-8' });
   const reader = createInterface({ input: stream, crlfDelay: Infinity });
 
@@ -207,19 +216,51 @@ export async function handleReadFileSlice(input: {
         stream.destroy();
         break;
       }
-      lines.push(`${currentLine}: ${line}`);
+      const offset = currentLine === input.startLine ? (input.charOffset ?? 0) : 0;
+      if (offset > line.length) {
+        invalidOffset = true;
+        reader.close();
+        stream.destroy();
+        break;
+      }
+      const prefix = `${currentLine}: `;
+      const available = FILE_SLICE_CONTENT_MAX_CHARS - usedContentChars - prefix.length;
+      if (available <= 0) {
+        nextSlice = { startLine: currentLine, charOffset: offset };
+        reader.close();
+        stream.destroy();
+        break;
+      }
+      const content = line.slice(offset, offset + available);
+      lines.push(`${prefix}${content}`);
+      usedContentChars += prefix.length + content.length;
+      if (offset + content.length < line.length) {
+        nextSlice = { startLine: currentLine, charOffset: offset + content.length };
+        reader.close();
+        stream.destroy();
+        break;
+      }
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return errorResult(`Failed to read file slice: ${message}`);
   }
 
+  if (invalidOffset) return errorResult(`Invalid charOffset for line ${input.startLine}`);
+
   if (lines.length === 0) {
     return errorResult(`Line range starts beyond EOF: ${filePath} has ${currentLine} line(s)`);
   }
 
   const actualEndLine = input.startLine + lines.length - 1;
-  return successResult(`File slice: ${displayPath}:${input.startLine}-${actualEndLine}\n${lines.join('\n')}`);
+  const continuation = nextSlice
+    ? `\nNext slice: cat_cafe_read_file_slice(path=${JSON.stringify(input.path)}, startLine=${nextSlice.startLine}, endLine=${endLine}, charOffset=${nextSlice.charOffset})`
+    : '';
+  const text = `File slice: ${displayPath}:${input.startLine}-${actualEndLine}\n${lines.join('\n')}${continuation}`;
+  if (text.length > FILE_SLICE_RESPONSE_MAX_CHARS) {
+    return errorResult('File slice source path exceeds the bounded response budget; use a shorter permitted path');
+  }
+  return successResult(text);
 }
 
 /**
@@ -319,14 +360,6 @@ export async function handleListFiles(input: { path: string; recursive?: boolean
 
 export const fileTools = [
   {
-    name: 'read_file',
-    description:
-      'Read the contents of a file within allowed directories. ' +
-      'Returns the full file content as text. Rejects paths outside allowed directories.',
-    inputSchema: readFileInputSchema,
-    handler: handleReadFile,
-  },
-  {
     name: 'write_file',
     description:
       'Write content to a file within allowed directories. Creates parent directories if needed. ' +
@@ -346,12 +379,18 @@ export const fileTools = [
 ] as const;
 
 export const fileSliceTools = [
-  {
+  defineTool({
     name: 'cat_cafe_read_file_slice',
     description:
       'Read a bounded line range from a file within allowed directories. ' +
-      'Use after search_evidence returns a sourcePath. Read-only; returns numbered lines and refuses large ranges.',
+      'Use after search_evidence returns a sourcePath. Returns numbered text within a 24k character budget; follow the returned startLine/charOffset for a long-line continuation. Read-only; rejects paths outside allowed directories.',
     inputSchema: readFileSliceInputSchema,
     handler: handleReadFileSlice,
-  },
+    governance: {
+      implementationExport: 'handleReadFileSlice',
+      action: 'read',
+      risk: { level: 'read', openWorld: false },
+      runtimeProfiles: ['full', 'readonly', 'desktop:live-companion'],
+    },
+  }),
 ] as const;

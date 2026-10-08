@@ -6,7 +6,6 @@
  *   node-pty attach → WebSocket → xterm.js (人类侧, read-only)
  */
 
-import { execFile, execFileSync } from 'node:child_process';
 import type { ReadStream } from 'node:fs';
 import { closeSync, constants, createReadStream, openSync, statSync } from 'node:fs';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -14,25 +13,27 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { Interface as ReadlineInterface } from 'node:readline';
 import { createInterface } from 'node:readline';
-import { promisify } from 'node:util';
 import { createModuleLogger } from '../../infrastructure/logger.js';
 import { buildCliDiagnostics } from '../../utils/cli-diagnostics.js';
+import { withCatCliProcessContext } from '../../utils/cli-process-environment.js';
 import { maybeCollectStreamError } from '../../utils/cli-spawn.js';
 import { resolveCliTimeoutMs } from '../../utils/cli-timeout.js';
 import type { CliSpawnOptions } from '../../utils/cli-types.js';
 // parseNDJSON not used directly — we create readline inline for killability.
 import type { SpawnCliOverride } from '../cats/services/types.js';
 import type { AgentPaneRegistry } from './agent-pane-registry.js';
+import { execTmuxClientCommand as execAsync } from './tmux-client-command.js';
+import { paneUtility, shellEscape, writeAgentCommandFile } from './tmux-command-file.js';
 import type { TmuxGateway } from './tmux-gateway.js';
+import type { PaneLease } from './tmux-pane-lease.js';
 
 const log = createModuleLogger('tmux-spawner');
-
-const execAsync = promisify(execFile);
 
 /** Default timeout for first valid NDJSON event after pane spawn (30s). */
 const DEFAULT_FIRST_EVENT_TIMEOUT_MS = 30_000;
 
 export interface TmuxSpawnOptions extends CliSpawnOptions {
+  bindExecutionOwner?: false;
   worktreeId: string;
   invocationId: string;
   /** Override first-event timeout (ms). 0 = disabled. Default: 30s */
@@ -44,11 +45,6 @@ export interface TmuxSpawnResult {
 }
 export interface TmuxSpawnDeps {
   tmuxGateway: TmuxGateway;
-}
-
-/** Escape for single-quoted shell: ' → '"'"' */
-function shellEscape(s: string): string {
-  return `'${s.replace(/'/g, "'\"'\"'")}'`;
 }
 
 /** Build: set -o pipefail; command args | tee $FIFO; echo "EXIT:$?" > $EXIT_FILE */
@@ -64,12 +60,13 @@ function buildPaneCommand(
   // stdin, but a tmux pane has no stdin pipe. Redirect from a 0600 temp file so the
   // prompt reaches codex (content stays off argv/ps — only the file path is visible).
   const stdinRedirect = stdinFilePath != null ? ` < ${shellEscape(stdinFilePath)}` : '';
+  const tee = shellEscape(paneUtility('tee'));
   // pipefail ensures $? reflects the CLI exit code, not tee's
   if (opts.outputMode === 'plainText') {
     const stderrFile = shellEscape(stderrFilePath);
-    return `set -o pipefail; ${parts.join(' ')}${stdinRedirect} 2> ${stderrFile} | tee ${shellEscape(fifoPath)}; echo "EXIT:$?" > ${shellEscape(exitFilePath)}; cat ${stderrFile} >&2`;
+    return `set -o pipefail; ${parts.join(' ')}${stdinRedirect} 2> ${stderrFile} | ${tee} ${shellEscape(fifoPath)}; echo "EXIT:$?" > ${shellEscape(exitFilePath)}; ${shellEscape(paneUtility('cat'))} ${stderrFile} >&2`;
   }
-  return `set -o pipefail; ${parts.join(' ')}${stdinRedirect} 2>&1 | tee ${shellEscape(fifoPath)}; echo "EXIT:$?" > ${shellEscape(exitFilePath)}`;
+  return `set -o pipefail; ${parts.join(' ')}${stdinRedirect} 2>&1 | ${tee} ${shellEscape(fifoPath)}; echo "EXIT:$?" > ${shellEscape(exitFilePath)}`;
 }
 
 /** Read exit code sentinel file with retry (race: FIFO EOF before file write) */
@@ -95,6 +92,7 @@ export async function* spawnCliInTmux(
   options: TmuxSpawnOptions,
   deps: TmuxSpawnDeps,
 ): AsyncGenerator<unknown, TmuxSpawnResult, undefined> {
+  options.signal?.throwIfAborted();
   const { tmuxGateway } = deps;
   const idleTimeoutMs = resolveCliTimeoutMs(options.timeoutMs);
   const firstEventTimeoutMs =
@@ -112,49 +110,46 @@ export async function* spawnCliInTmux(
   //
   // P1 #2 (same review round): the stdin temp file holds the full conversation history,
   // and the main try/finally that removes tmpDir only starts later. Wrap the entire
-  // setup phase so any failure here (mkfifo / createAgentPane / execInPane when tmux is
+  // setup phase so any failure here (FIFO / command file / pane creation when tmux is
   // unavailable) still removes tmpDir — otherwise the prompt is left on disk forever.
   let stdinFilePath: string | undefined;
   let paneId: string;
+  let lease: PaneLease | undefined;
   try {
     if (options.stdinInput != null) {
       const { writeFile } = await import('node:fs/promises');
       stdinFilePath = join(tmpDir, 'stdin');
       await writeFile(stdinFilePath, options.stdinInput, { mode: 0o600 });
     }
-    await execAsync('mkfifo', [fifoPath]);
+    await execAsync('mkfifo', [fifoPath], { signal: options.signal });
 
-    paneId = await tmuxGateway.createAgentPane(options.worktreeId, {
-      ...(options.cwd ? { cwd: options.cwd } : {}),
-    });
-
-    // Inject environment variables into pane shell
-    if (options.env) {
-      for (const [key, value] of Object.entries(options.env)) {
-        if (value !== null && value !== undefined) {
-          await tmuxGateway.execInPane(options.worktreeId, paneId, `export ${key}=${shellEscape(value)}`);
-        }
-      }
-      await new Promise((r) => setTimeout(r, 100));
-    }
-
-    await tmuxGateway.execInPane(
-      options.worktreeId,
-      paneId,
+    const command = await writeAgentCommandFile(
+      tmpDir,
+      options,
       buildPaneCommand(options, fifoPath, exitFilePath, stderrFilePath, stdinFilePath),
     );
-    // Set read-only AFTER command starts (select-pane -d blocks send-keys if set before)
-    await tmuxGateway.setPaneReadOnly(options.worktreeId, paneId, true);
+    lease = await tmuxGateway.createAgentPaneLease(options.worktreeId, {
+      ...(options.cwd ? { cwd: options.cwd } : {}),
+      signal: options.signal,
+      command,
+    });
+    options.signal?.throwIfAborted();
+    paneId = lease.paneId;
+    if (!tmuxGateway.setAgentPaneReadOnly(lease)) throw new Error('Agent pane was replaced during setup');
   } catch (setupErr) {
+    if (lease) tmuxGateway.killAgentPane(lease);
     // Remove tmpDir (incl. the prompt stdin file) before propagating the setup failure.
     await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     throw setupErr;
   }
+  const paneLease = lease;
   yield { __tmuxPaneCreated: true, paneId, worktreeId: options.worktreeId } as unknown;
 
   let timedOut = false;
   let killed = false;
   let gotFirstEvent = false;
+  /** F212 Phase H cloud R5 P2: last terminal signal seen in this stream. */
+  let localFinalTerminal: 'completed' | 'failed' | null = null;
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
   let firstEventTimer: ReturnType<typeof setTimeout> | null = null;
   let stderrPollTimer: ReturnType<typeof setInterval> | null = null;
@@ -186,21 +181,13 @@ export async function* spawnCliInTmux(
     // destroying a ReadStream on a FIFO does not release the fd until the
     // write end is closed. If the tmux process is still writing, the fd
     // stays open and keeps the Node event loop alive.
-    const sock = tmuxGateway.socketName(options.worktreeId);
-    const bin = tmuxGateway.tmuxBin;
-    try {
-      execFileSync(bin, ['-L', sock, 'send-keys', '-t', paneId, 'C-c', ''], { stdio: 'ignore' });
-    } catch {
-      // Pane already dead — skip grace period, go straight to stream cleanup.
+    if (!tmuxGateway.interruptAgentPane(paneLease)) {
+      // A recycled display address carries no authority for this invocation.
       destroyFifoStream();
       return;
     }
     await new Promise((r) => setTimeout(r, 3000));
-    try {
-      execFileSync(bin, ['-L', sock, 'kill-pane', '-t', paneId], { stdio: 'ignore' });
-    } catch {
-      /* pane exited during grace period */
-    }
+    tmuxGateway.killAgentPane(paneLease);
     // Step 3: Now that the write end (tmux pane) is dead, destroy the
     // FIFO ReadStream. The fd will release immediately since no writer remains.
     destroyFifoStream();
@@ -236,6 +223,13 @@ export async function* spawnCliInTmux(
     if (idleTimeoutMs === 0) return;
     if (timeoutTimer) clearTimeout(timeoutTimer);
     timeoutTimer = setTimeout(() => {
+      // F212 post-close hotfix (2026-09-07, Sol F313 + Terra F290 + Astra F309):
+      // The 250 ms stderr poller is not guaranteed to detect writes that land
+      // in the last poll window before this deadline fires. Sync-recheck the
+      // stderr file here before killing — if a plainText stderr byte has
+      // landed, `pollStderrActivity()` calls `recordPlainTextActivity()` →
+      // `resetIdleTimeout()`, rearming a fresh timer.
+      if (pollStderrActivity()) return;
       log.error({ invocationId: options.invocationId, paneId, idleTimeoutMs }, 'Idle timeout fired');
       timedOut = true;
       killPromise ??= killAgent();
@@ -257,17 +251,29 @@ export async function* spawnCliInTmux(
     resetIdleTimeout();
   };
 
-  const pollStderrActivity = (): void => {
-    if (options.outputMode !== 'plainText' || killed) return;
+  /**
+   * Sync-check stderr file for new plainText activity.
+   *
+   * Returns `true` when a fresh write is observed (implies
+   * `recordPlainTextActivity()` was called and any pending deadline has
+   * been rescheduled). Callers rely on the return value to decide whether
+   * a deadline callback should skip its kill path.
+   */
+  const pollStderrActivity = (): boolean => {
+    if (options.outputMode !== 'plainText' || killed) return false;
     try {
       const stat = statSync(stderrFilePath);
       const changed = stat.size > observedStderrSize || stat.mtimeMs > observedStderrMtimeMs;
       observedStderrSize = Math.max(observedStderrSize, stat.size);
       observedStderrMtimeMs = Math.max(observedStderrMtimeMs, stat.mtimeMs);
-      if (changed && stat.size > 0) recordPlainTextActivity();
+      if (changed && stat.size > 0) {
+        recordPlainTextActivity();
+        return true;
+      }
     } catch {
       /* stderr file may not exist before the CLI writes its first stderr byte */
     }
+    return false;
   };
 
   const startPlainTextStderrWatcher = (): void => {
@@ -284,6 +290,14 @@ export async function* spawnCliInTmux(
     if (firstEventTimeoutMs === 0) return;
     firstEventTimer = setTimeout(() => {
       if (gotFirstEvent) return; // Race: event arrived just as timer fired
+      // F212 post-close hotfix (2026-09-07, Sol F313 + Terra F290 + Astra F309):
+      // The 250 ms stderr poller may not have observed a stderr write that
+      // landed in the last poll window before this deadline fired. Sync-
+      // recheck the stderr file once as a last chance — if progress has
+      // landed, `pollStderrActivity()` marks first-event + rearms as needed.
+      // Without this recheck the callback yields a spurious __cliTimeout
+      // even though `stderr.log` already contains the CLI's first line.
+      if (pollStderrActivity()) return;
       log.error(
         { invocationId: options.invocationId, paneId, firstEventTimeoutMs },
         'First event timeout — CLI may have failed to start',
@@ -359,6 +373,21 @@ export async function* spawnCliInTmux(
           // F212 Phase D: collect result error events (type==='result' && subtype!=='success')
           // for cliDiagnostics — they are valid JSON so they never reach nonJsonOutput above.
           maybeCollectStreamError(event, streamErrorTexts, structuredErrorTexts);
+          // F212 Phase H cloud R5 P2 (2026-07-10): track the LAST terminal event locally.
+          // AbortSignal (semanticCompletionSignal) is sticky — once turn.completed fires
+          // in a multi-turn tmux stream, a subsequent turn.failed cannot clear it. Reading
+          // `.aborted === true` at exit-time therefore incorrectly reports "semantically
+          // complete" even when the final terminal was a real failure. Track finalTerminal
+          // locally on the events we see and use it (below at line ~412) instead of the
+          // sticky signal. Codex normal path: turn.completed → localFinalTerminal=completed
+          // → suppress exit=1 quirk. Multi-turn failure path: turn.completed → turn.failed
+          // → localFinalTerminal=failed → surface __cliError. Symmetric fix lands in
+          // spawnCli.ts too — same sticky-signal class.
+          if (event && typeof event === 'object') {
+            const payloadType = (event as { type?: string }).type;
+            if (payloadType === 'turn.completed') localFinalTerminal = 'completed';
+            else if (payloadType === 'turn.failed') localFinalTerminal = 'failed';
+          }
           // Mark first event and switch from first-event timeout to idle timeout.
           if (!gotFirstEvent) {
             gotFirstEvent = true;
@@ -377,6 +406,19 @@ export async function* spawnCliInTmux(
       // When killAgent() destroys the FIFO stream, the active reader throws
       // ERR_STREAM_PREMATURE_CLOSE or ERR_USE_AFTER_CLOSE. This is expected.
       if (!killed) throw streamErr;
+    }
+
+    // FIFO EOF is a terminal output signal: tee has closed its write end and no
+    // further CLI activity can arrive. Retire both output timers before polling
+    // the separately-written exit sentinel, otherwise a successful command can
+    // be reported as timed out during that short finalization race.
+    if (timeoutTimer) {
+      clearTimeout(timeoutTimer);
+      timeoutTimer = null;
+    }
+    if (firstEventTimer) {
+      clearTimeout(firstEventTimer);
+      firstEventTimer = null;
     }
 
     const exitCode = await readExitCode(exitFilePath);
@@ -399,7 +441,17 @@ export async function* spawnCliInTmux(
         command: options.command,
       };
     }
-    if (!killed && exitCode !== null && exitCode !== 0) {
+    // F212 Phase H (Sol Final确权 P1-A 2026-07-10) — unified `finalSemanticDone`
+    // predicate mirroring cli-spawn.ts. Handles all four cells:
+    //   1. sticky signal + turn.completed → localFinalTerminal='completed' → SUPPRESS
+    //   2. sticky + completed then failed → localFinalTerminal='failed' → SURFACE (cloud R5 P2)
+    //   3. sticky + no terminal event → localFinalTerminal=null, sig aborted → SUPPRESS
+    //      (caller-side signal-only contract)
+    //   4. no signal + no terminal → both falsy → SURFACE (unchanged)
+    // Local terminal WINS over sticky abort — chronological failure outranks prior success.
+    const semanticDone = options.semanticCompletionSignal?.aborted === true;
+    const finalSemanticDone = localFinalTerminal === 'completed' || (localFinalTerminal === null && semanticDone);
+    if (!finalSemanticDone && !killed && exitCode !== null && exitCode !== 0) {
       // F212 AC-A1: structured diagnostics on tmux abnormal exit.
       // 云端 codex P2 + 砚砚 round-4: NDJSON mode merges stderr→stdout fifo so stderrFile is empty;
       // non-JSON lines collected from parse-error branch (= stderr noise) carry the actual error text.
@@ -489,8 +541,19 @@ export function createTmuxSpawnOverride(
   agentPaneRegistry?: AgentPaneRegistry,
 ): SpawnCliOverride {
   return async function* tmuxOverride(cliOpts: CliSpawnOptions) {
-    await tmuxGateway.ensureServer(worktreeId);
-    const gen = spawnCliInTmux({ ...cliOpts, worktreeId, invocationId }, { tmuxGateway });
+    if (cliOpts.bindExecutionOwner === true) {
+      throw new Error('tmux transport does not support bindExecutionOwner=true');
+    }
+    const gen = spawnCliInTmux(
+      {
+        ...cliOpts,
+        bindExecutionOwner: false,
+        env: withCatCliProcessContext(cliOpts.env ?? {}),
+        worktreeId,
+        invocationId,
+      },
+      { tmuxGateway },
+    );
 
     let paneId: string | undefined;
     try {

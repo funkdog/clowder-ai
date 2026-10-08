@@ -8,6 +8,36 @@
 import type { MarketplaceEcosystem } from './marketplace.js';
 import type { MountRuleEntry, SkillsSyncState } from './mount-rules.js';
 
+// ─── F249: MCP Sync Types ────────────────────────────────────────
+
+/**
+ * F249: Structured env entry for MCP servers.
+ * Supports ${ENV_VAR} variable references resolved at invoke time.
+ */
+export interface McpEnvEntry {
+  key: string;
+  /** Value or `${ENV_VAR}` reference resolved from process.env at invoke time. */
+  value: string;
+  /** true = Console UI masks the value by default (eye toggle to reveal). */
+  sensitive: boolean;
+}
+
+/**
+ * F249: Per-project MCP sync tracking state.
+ * Stored at capabilities.json#mcpSync per project.
+ */
+export interface McpSyncState {
+  /** SHA-256 hash of global MCP config at last sync. */
+  sourceConfigHash: string;
+  /** ISO 8601 timestamp of last successful sync. */
+  lastSyncedAt: string;
+  /**
+   * MCP IDs whose project-config disabled entry (blockedCats = all cats)
+   * originated from a global cascade, not explicit user action.
+   */
+  cascadeDisabledMcps?: string[];
+}
+
 /** MCP transport type — stdio (default) or remote HTTP (TD104) */
 export type McpTransport = 'stdio' | 'streamableHttp';
 
@@ -15,6 +45,8 @@ export type McpTransport = 'stdio' | 'streamableHttp';
 export interface McpServerDescriptor {
   /** MCP server name (e.g. 'cat-cafe', 'filesystem') */
   name: string;
+  /** Original capability ID used to prove ownership of managed name migrations. */
+  capabilityId?: string;
   /** Transport type (default: 'stdio'). TD104: 'streamableHttp' for URL-based servers. */
   transport?: McpTransport;
   /** Optional local resolver hint for machine-specific stdio servers (e.g. pencil). */
@@ -33,8 +65,8 @@ export interface McpServerDescriptor {
   enabled: boolean;
   /** Optional working directory */
   workingDir?: string;
-  /** Origin: Clowder AI's own MCP or user-configured external */
-  source: 'cat-cafe' | 'external';
+  /** Origin: Clowder AI's own MCP, plugin-provided, or user-configured external */
+  source: 'cat-cafe' | 'external' | 'plugin';
 }
 
 /** Per-cat override for a capability */
@@ -59,12 +91,16 @@ export interface CapabilityEntry {
    * Migration: startup fills this from `enabled` for skill entries that lack it.
    */
   globalEnabled?: boolean;
-  /** Per-cat overrides (only stores differences from global; MCP only — not applicable to skills) */
+  /**
+   * @deprecated Legacy per-cat overrides. Superseded by `blockedCats`.
+   * Migration converts to `blockedCats` at startup; runtime ignores this field.
+   * Kept on the type for legacy config deserialization only.
+   */
   overrides?: CatCapabilityOverride[];
   /** MCP server descriptor (only for type: 'mcp') */
-  mcpServer?: Omit<McpServerDescriptor, 'name' | 'enabled' | 'source'>;
-  /** Source origin */
-  source: 'cat-cafe' | 'external';
+  mcpServer?: Omit<McpServerDescriptor, 'name' | 'capabilityId' | 'enabled' | 'source'>;
+  /** Source origin: cat-cafe = built-in managed, external = user-installed, plugin = plugin-installed */
+  source: 'cat-cafe' | 'external' | 'plugin';
   /**
    * F228: Mount point IDs where this skill is actually mounted in the current project.
    * Only for type: 'skill'. Values are mount point IDs from mountRules (e.g. 'claude', 'codex').
@@ -84,6 +120,31 @@ export interface CapabilityEntry {
   limbNodeId?: string;
   /** F202 Phase 2: Runtime task ID assigned by TaskRunnerV2 (schedule resources only) */
   scheduleTaskId?: string;
+  /**
+   * F249: Blacklist — cat IDs that cannot use this MCP.
+   * Canonical per-cat access field for MCP (supersedes legacy `overrides`).
+   * undefined/absent = all cats can use it. Empty array = all cats can use it.
+   * Contains all cat IDs = fully disabled.
+   * Only meaningful for type: 'mcp'.
+   */
+  blockedCats?: string[];
+  /**
+   * F249: Project-level MCP server config override (full replacement).
+   * When present, this project uses this config instead of the global mcpServer.
+   * Absent = use global mcpServer.
+   * Only meaningful for type: 'mcp' in project-level capabilities.json.
+   */
+  mcpServerOverride?: Omit<McpServerDescriptor, 'name' | 'capabilityId' | 'enabled' | 'source'>;
+  /**
+   * Which external config file this MCP was discovered from.
+   * e.g. "claude-project", "codex-user", "gemini-user", "kimi-project".
+   * Absent for manually added or cat-cafe managed entries.
+   */
+  discoveredFrom?: string;
+  /** F204: Skill source directory (parent of skill subdirs). Stored at registration
+   *  time so mount-health checks don't need to reverse-lookup from plugin manifests.
+   *  Relative to project root. Only for type: 'skill' with pluginId. */
+  skillsSource?: string;
 }
 
 /** Sanitized MCP server details included in the capability board payload. */
@@ -131,13 +192,32 @@ export interface CapabilitiesConfig {
    * Records the last sync hash and timestamp per project.
    */
   skillsSync?: SkillsSyncState;
+  /**
+   * F249: MCP sync tracking per project.
+   * Records the global MCP config hash at last sync.
+   */
+  mcpSync?: McpSyncState;
+  /**
+   * Tracks the last completed external MCP discovery pass.
+   * When absent or < CURRENT_DISCOVERY_VERSION, a one-time import from
+   * external config files (.claude/mcp.json, etc.) runs on next GET.
+   * After import, the version is stamped and subsequent GETs skip discovery.
+   */
+  discoveryVersion?: number;
+}
+
+export interface CapabilitySkillMountHealth {
+  enabledMountPoints: string[];
+  mountedCount: number;
+  requiredCount: number;
+  allMounted: boolean;
 }
 
 /** Capabilities board response — what the GET API returns */
 export interface CapabilityBoardItem {
   id: string;
   type: 'mcp' | 'skill' | 'limb';
-  source: 'cat-cafe' | 'external';
+  source: 'cat-cafe' | 'external' | 'plugin';
   enabled: boolean;
   /** F228: Global enabled for skills (mirrors CapabilityEntry.globalEnabled in board response) */
   globalEnabled?: boolean;
@@ -151,6 +231,8 @@ export interface CapabilityBoardItem {
   category?: string;
   /** Skill mount status per mount point (symlink correctness check) */
   mounts?: Record<string, boolean>;
+  /** Per-skill mount health derived from mount rules + this skill's mountPaths policy. */
+  mountHealth?: CapabilitySkillMountHealth;
   /** Mount point aliases where this skill is intentionally mounted in the selected project. */
   mountPaths?: string[];
   /** MCP tools discovered via probe (only when ?probe=true) */
@@ -167,6 +249,14 @@ export interface CapabilityBoardItem {
   lockVersion?: LockVersion;
   /** F202: Plugin that owns this capability */
   pluginId?: string;
+  /** Skill MCP dependencies with resolved statuses (from SKILL.md requires_mcp). */
+  requiresMcp?: Array<{ id: string; status: 'ready' | 'missing' | 'unresolved' }>;
+  /** F249: Blacklist — cat IDs that cannot use this MCP in this project. */
+  blockedCats?: string[];
+  /** F249: Whether this MCP has a project-level config override. */
+  hasOverride?: boolean;
+  /** Which external config file this MCP was discovered from (e.g. "claude-project"). */
+  discoveredFrom?: string;
 }
 
 /** Lightweight MCP tool info for board display */
@@ -183,6 +273,8 @@ export interface CatFamily {
   name: string;
   /** All catIds belonging to this family */
   catIds: string[];
+  /** Per-cat display labels — catId → "布偶猫(Opus) - catId" */
+  catNames?: Record<string, string>;
 }
 
 /** Skill mount health summary */
@@ -195,6 +287,19 @@ export interface SkillHealthSummary {
   unregistered: string[];
   /** Skills in capabilities.json but not in source dir */
   phantom: string[];
+  /**
+   * F300 2.1: `false` when a skill directory could not be listed (not merely
+   * missing). The per-cat presence and mount fields above were then computed
+   * from a partial scan, and absence of a skill in them is not evidence it is
+   * absent on disk.
+   */
+  scanComplete?: boolean;
+  /**
+   * The paths that exist but could not be read (`CODE:path`), when
+   * `scanComplete` is false — so a cat can say "this is an environment
+   * problem at X", not "you have no such skill".
+   */
+  unreadable?: string[];
 }
 
 /** Full GET /api/capabilities response (F041 re-open: includes family + project metadata) */
@@ -209,7 +314,79 @@ export interface CapabilityBoardResponse {
   skillHealth?: SkillHealthSummary;
   /** F070: Governance health for this project */
   governanceHealth?: GovernanceHealthSummary;
+  /** F249: All cat IDs with display names — frontend uses to render per-cat toggles. */
+  allCats?: Array<{ catId: string; displayName: string }>;
+  /**
+   * F300 Task 2.1: which source state this board was read from. The Console and
+   * a cat reading the same home get the same `revision` and `sourceRefs` even
+   * when what they are shown differs (KD-16 same-source, different-presentation).
+   */
+  envelope?: CapabilityReadEnvelope;
 }
+
+// ─── F300 Task 2.1: capability read service ──────────────────────
+
+/**
+ * The F300 thin envelope (spec §3, AC-0.3) as the capability owner fills it.
+ *
+ * `revision` names the source state, not the presentation: it does not change
+ * with who is reading, whether secrets were shown, or live probe results.
+ */
+export interface CapabilityReadEnvelope {
+  readonly subjectRef: string;
+  readonly ownerRef: 'F041';
+  readonly sourceRefs: readonly string[];
+  readonly revision: string;
+  readonly freshness: {
+    readonly observedAt: number;
+    readonly invalidators: readonly { readonly ownerRef: string; readonly ref: string }[];
+  };
+  readonly visibility: 'member_private' | 'authorized_shared';
+}
+
+/**
+ * Who the board is being read for. A member sees every capability of the home
+ * but only its own per-cat state; other members' toggles and the Console's
+ * navigation aids are not part of its answer.
+ */
+export type CapabilityReadScope = { readonly kind: 'console' } | { readonly kind: 'member'; readonly catId: string };
+
+/**
+ * The capability read, for readers that must not cause writes (cats via MCP).
+ *
+ * Three states, never folded: `absent` is a fact ("this project has no
+ * capability config"), `unknown` is not ("there is one and it could not be
+ * read"). Neither means "no capabilities are available".
+ */
+export type CapabilitySnapshotResponse =
+  | {
+      readonly status: 'present';
+      readonly scope: CapabilityReadScope;
+      readonly envelope: CapabilityReadEnvelope;
+      readonly board: CapabilityBoardResponse;
+    }
+  | {
+      readonly status: 'absent';
+      readonly reason: 'config_missing';
+      readonly scope: CapabilityReadScope;
+      readonly envelope: CapabilityReadEnvelope;
+    }
+  | {
+      readonly status: 'unknown';
+      /**
+       * `config_unreadable`: this project's config. `global_config_unreadable`:
+       * the home config an external project inherits policy from — the board
+       * would otherwise be computed from a stale local copy.
+       */
+      readonly reason: 'config_unreadable' | 'global_config_unreadable';
+      /** Typed only: parser/IO messages can quote config bytes (secrets). */
+      readonly cause: CapabilityConfigUnreadableCause;
+      readonly scope: CapabilityReadScope;
+      readonly envelope: CapabilityReadEnvelope;
+    };
+
+/** Why a capability config could not be read. Never carries file content. */
+export type CapabilityConfigUnreadableCause = 'io_error' | 'parse_error' | 'unsupported_shape';
 
 // ─── F070: Portable Governance Types ──────────────────────────────
 
@@ -247,6 +424,20 @@ export interface GovernanceFinding {
   readonly status: 'present' | 'missing' | 'stale';
 }
 
+export type GovernanceProvider = 'claude' | 'codex' | 'gemini' | 'kimi';
+
+/** F302: exact opt-in materialization chosen by the user. */
+export interface GovernanceSelection {
+  readonly projectGuide?: {
+    readonly thinEntrypoints: readonly ('claude' | 'gemini')[];
+  };
+  readonly projectSkills?: {
+    readonly skillIds: readonly string[];
+    readonly providers: readonly GovernanceProvider[];
+  };
+  readonly docsLifecycle?: boolean;
+}
+
 /** F070: Bootstrap operation report (persisted for audit) */
 export interface BootstrapReport {
   readonly projectPath: string;
@@ -254,12 +445,19 @@ export interface BootstrapReport {
   readonly packVersion: string;
   readonly actions: readonly BootstrapAction[];
   readonly dryRun: boolean;
+  readonly selection: GovernanceSelection;
+  readonly previewChecksum: string;
 }
 
 export interface BootstrapAction {
   readonly file: string;
-  readonly action: 'created' | 'updated' | 'skipped' | 'symlinked';
+  readonly action: 'created' | 'updated' | 'skipped' | 'symlinked' | 'deleted';
   readonly reason: string;
+  readonly group?: 'project-guide' | 'project-skills' | 'docs-lifecycle' | 'legacy-cleanup';
+  /** Generated content only; never captures pre-existing user content. */
+  readonly content?: string;
+  readonly contentHash?: string;
+  readonly symlinkTarget?: string;
 }
 
 /** F070 Phase 2: Structured mission context for external project dispatch */
@@ -335,6 +533,16 @@ export interface McpInstallRequest {
   resolver?: string;
   projectPath?: string;
   ecosystem?: MarketplaceEcosystem;
+  /**
+   * F249: When true, cascade the new MCP entry to all governance-registered projects.
+   * When false/absent, only save to global config with globalEnabled=false.
+   */
+  syncAll?: boolean;
+  /**
+   * F249 §8.3: When true + projectPath present, clear mcpServerOverride to restore global config.
+   * The MCP entry's mcpServer (synced from global) becomes the active config again.
+   */
+  clearOverride?: boolean;
 }
 
 /** POST /api/capabilities/mcp/preview response */
@@ -378,7 +586,7 @@ export interface CapabilityPatchRequest {
   /** Capability type — required to disambiguate same-name MCP/skill entries */
   capabilityType: 'mcp' | 'skill' | 'limb';
   /** Optional source discriminator for same-name capability rows returned by GET. */
-  source?: 'cat-cafe' | 'external';
+  source?: 'cat-cafe' | 'external' | 'plugin';
   /** Optional plugin discriminator for plugin-owned same-name rows returned by GET. */
   pluginId?: string;
   /**

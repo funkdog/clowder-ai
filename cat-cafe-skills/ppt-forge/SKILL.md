@@ -1,10 +1,11 @@
 ---
 name: ppt-forge
+tips_exempt: "2026-09-15 storytelling handoff: clarifies fact gathering and causal layout in the existing slide workflow; the distinct story-preparation capability has its own tip."
 description: >
   PPT 制作全链路：内容分析 → 分页规划 → 低保真 MD → imagegen 精美图。
   架构猫写低保真 MD（ASCII art 结构图 + 视觉指引），imagegen 猫逐页出精美图。
   Use when: 做 PPT、做演示文稿、做 slide、帮朋友做 PPT、画架构图、画技术蓝图。
-  Not for: 纯代码开发（用 worktree/tdd）、纯文档写作（直接写）。
+  Not for: 要求可编辑/native text 的演示文稿或精确数据图表（选择对应原生文稿流程）、纯代码开发、纯文档写作。
   Output: 低保真 MD + AI 原生精美图（raster PNG）。
 ---
 
@@ -18,7 +19,7 @@ description: >
 - **imagegen 猫**（imagegen 猫/云端 Codex）：逐页生成精美 raster PNG
 - **operator**：审稿 + 确认风格
 
-产出是 **AI 原生图片**——视觉质量远高于 HTML/CSS 手工画，且速度快。
+本流程交付 **raster 图片页面**，适合图像风格视觉稿；不据此宣称普遍优于 HTML/CSS，也不承诺原生文本可编辑性。
 
 ## 开局参数（必须声明）
 
@@ -33,10 +34,12 @@ description: >
 
 ## 场景路由
 
+已有确认的内容、分页和风格直接复用；表中的确认只针对仍未明确或发生实质变化的内容，不按每个技术步骤重复征询。
+
 | 触发 | 场景 | 主导 | 详细文档 |
 |------|------|------|---------|
-| operator说"做个 PPT" | **1: 内容分析 + 分页规划** | 架构猫 | [ppt-lofi-authoring.md](../refs/ppt-lofi-authoring.md) |
-| 分页确认 | **2: 低保真 MD 写作** | 架构猫 | [ppt-lofi-authoring.md](../refs/ppt-lofi-authoring.md) |
+| operator说"做个 PPT" | **1: 内容分析 + 分页规划** | 架构猫 | [ppt-lofi-authoring.md](../.cat-cafe-shared-refs/ppt-lofi-authoring.md) |
+| 分页确认 | **2: 低保真 MD 写作** | 架构猫 | [ppt-lofi-authoring.md](../.cat-cafe-shared-refs/ppt-lofi-authoring.md) |
 | 低保真 MD 完成 | **3: operator审稿** | operator | — |
 | 审稿通过 | **4: imagegen 出图** | imagegen 猫/云端 Codex | 逐页生成精美图 |
 | 出图完成 | **5: 交付** | 主执行猫 | 图片打包 + 预览 |
@@ -44,9 +47,13 @@ description: >
 
 ## 场景 1-2: 低保真 MD 写作
 
-> 详细规范：[ppt-lofi-authoring.md](../refs/ppt-lofi-authoring.md)
+成长经历跨多年、人物贡献混在一起，或素材只剩履历与能力口号时，先用 `co-creation-storytelling` 还原事实、各方行动与因果节点，再回到本节安排版面。叙事已锁只改样式/错字时不重启取材；用户已经授权的制作不重复要求确认。
+
+> 详细规范：[ppt-lofi-authoring.md](../.cat-cafe-shared-refs/ppt-lofi-authoring.md)
 
 ### 写作流程
+
+给非技术读者用漫画/PPT解释一个机制、或材料仍像名词清单时，按[叙事清晰度](../.cat-cafe-shared-refs/narrative-clarity.md)先做读者目标与因果节点。可以用示意人物和任务，不能编机制事实；不因漫画形式而转成动画或可点击 Demo。已有清楚蓝图则直接制作，不重复取材与确认。
 
 1. **内容分析**：读完全部原始内容，识别：
    - 核心板块（几个大的独立主题）
@@ -56,7 +63,7 @@ description: >
 
 2. **分页规划**：确定每页的类型和内容分配
    - 页面类型：封面 / 总览 / 详情 / 方法论 / 路线图 / 总结
-   - 先给operator看分页表，确认再动手写
+   - 新分页/范围需要取舍时先给 operator 看；已有确认的分页直接继续
 
 3. **风格锁定**：选择风格 preset，配色方案一次锁定
 
@@ -123,11 +130,11 @@ status: lofi-draft
 
 | 风格 | Ref 文件 | 核心特征 |
 |------|---------|---------|
-| **华为** | [ppt-style-huawei.md](../refs/ppt-style-huawei.md) | 白底+红黑、直角、极致密排、图表化、数据说话 |
+| **华为** | [ppt-style-huawei.md](../.cat-cafe-shared-refs/ppt-style-huawei.md) | 白底+红黑、直角、极致密排、图表化、数据说话 |
 | Apple | 待补 | 黑白+渐变、大圆角、极简、每页一件事 |
 | 阿里 | 待补 | 橙+科技蓝、中圆角、Dashboard 风 |
 
-需要新风格时，参照 [ppt-style-huawei.md](../refs/ppt-style-huawei.md) 格式新建 ref。
+需要新风格时，参照 [ppt-style-huawei.md](../.cat-cafe-shared-refs/ppt-style-huawei.md) 格式新建 ref。
 
 ## 成功案例
 
@@ -149,6 +156,7 @@ status: lofi-draft
 
 ## 和其他 Skill 的关系
 
+- `co-creation-storytelling`：长期真实经历的取材与贡献分镜 — 叙事需要厘清时使用，成稿后回到本技能制作。
 - `image-generation`：通用图片生成 — ppt-forge 是 PPT 专用流程
 - `expert-panel`：多猫分析报告 — ppt-forge 是做 PPT
 - `tech-writing`：写文档 — ppt-forge 做演示文稿（视觉优先）

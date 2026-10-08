@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>当前工作 · 交互草图</title>
+<style>
+*{box-sizing:border-box}body{margin:0;font-family:Inter,-apple-system,"PingFang SC",sans-serif;font-size:14px;line-height:1.55}
+#feedback-demo{--surface-hue:80;--surface-chroma:.01;--canvas:oklch(.99 .005 80);--surface:oklch(.95 .012 80);--sunken:oklch(.92 .015 80);--paper:oklch(.995 .003 80);--ink:oklch(.2 .005 30);--secondary:oklch(.45 .005 30);--muted:oklch(.56 .005 30);--line:oklch(.915 .005 30);--strong-line:oklch(.84 .005 30);--accent:oklch(.55 .14 50);--accent-text:oklch(.45 .14 50);--on-accent:oklch(.985 .005 30);--success:oklch(.55 .12 135);--warning:oklch(.55 .12 45);--cat-bg:oklch(.96 .018 295);color:var(--ink);background:var(--canvas);padding:16px}
+#feedback-demo[data-theme="dark"]{--canvas:oklch(.24 .003 30);--surface:oklch(.28 .004 30);--sunken:oklch(.21 .002 30);--paper:oklch(.32 .005 30);--ink:oklch(.95 .005 30);--secondary:oklch(.75 .005 30);--muted:oklch(.66 .005 30);--line:oklch(.35 .005 30);--strong-line:oklch(.44 .005 30);--accent:oklch(.72 .08 35);--accent-text:oklch(.8 .07 35);--on-accent:oklch(.18 .005 30);--success:oklch(.72 .12 135);--warning:oklch(.75 .12 45);--cat-bg:oklch(.3 .015 295)}
+#feedback-demo button,#feedback-demo select,#feedback-demo textarea{font:inherit;color:inherit}
+#feedback-demo button{cursor:pointer;background:transparent;border:1px solid var(--line);border-radius:8px;padding:5px 10px;min-height:32px}
+#feedback-demo button:hover{background:var(--surface)}#feedback-demo button:focus-visible,#feedback-demo select:focus-visible,#feedback-demo textarea:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#feedback-demo button[aria-pressed="true"],#feedback-demo button[aria-selected="true"]{background:var(--sunken);border-color:var(--strong-line)}
+#feedback-demo button:disabled{cursor:default;opacity:.55}
+#feedback-demo [hidden]{display:none!important}#feedback-demo h1,#feedback-demo h2,#feedback-demo h3,#feedback-demo p{margin:0}
+#feedback-demo h1{font-size:16px;font-weight:500}#feedback-demo h2{font-size:16px;font-weight:500}#feedback-demo h3{font-size:14px;font-weight:500}
+#feedback-demo .small{font-size:12px;color:var(--secondary)}#feedback-demo .muted{color:var(--muted)}#feedback-demo .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+#feedback-demo .demo-label{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;font-size:12px;color:var(--secondary)}
+#feedback-demo .controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--line)}
+#feedback-demo .controls label,#feedback-demo .control-group{display:flex;gap:6px;align-items:center;font-size:12px}
+#feedback-demo select{border:1px solid var(--line);background:var(--paper);border-radius:8px;padding:5px 8px;min-height:32px}
+#feedback-demo .preview{container-type:inline-size;width:100%;max-width:1140px;margin:auto}#feedback-demo .preview.phone{max-width:390px}
+#feedback-demo .frame{height:640px;position:relative;display:grid;grid-template-columns:minmax(0,1fr);border:1px solid var(--strong-line);border-radius:12px;overflow:hidden;background:var(--canvas)}
+#feedback-demo .frame.mode-side[data-open="true"]{grid-template-columns:minmax(0,1fr) 330px}
+#feedback-demo .chat{display:flex;flex-direction:column;min-height:0;min-width:0}
+#feedback-demo .topbar{display:flex;align-items:center;gap:10px;padding:12px 20px;border-bottom:1px solid var(--line);flex-shrink:0}
+#feedback-demo .brand{font-weight:500}#feedback-demo .divider{color:var(--strong-line)}#feedback-demo .thread-name{font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#feedback-demo .workline{padding:10px 20px;display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid var(--line);font-size:12px;color:var(--secondary);flex-shrink:0}
+#feedback-demo .dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--success);margin-right:6px}
+#feedback-demo .conversation{flex:1;overflow:auto;padding:26px 24px;scrollbar-gutter:stable}
+#feedback-demo .message{display:flex;gap:10px;margin-bottom:24px;align-items:flex-start}
+#feedback-demo .message.user{justify-content:flex-end}
+#feedback-demo .avatar{width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;background:var(--surface);border:1px solid var(--line)}
+#feedback-demo .human-avatar{display:flex;align-items:center;justify-content:center;font-size:12px}
+#feedback-demo .message-body{min-width:0;max-width:680px;width:100%}#feedback-demo .message.user .message-body{max-width:78%;width:auto}
+#feedback-demo .message-meta{font-size:12px;color:var(--secondary);margin:0 0 6px}
+#feedback-demo .bubble{padding:12px 14px;border-radius:16px;background:var(--cat-bg);color:var(--ink)}
+#feedback-demo .user .bubble{background:var(--surface)}
+#feedback-demo .process-link{display:flex;align-items:center;gap:8px;width:100%;margin:12px 0 0;text-align:left;background:var(--canvas);font-size:12px}
+#feedback-demo .process-link .label{flex:1;min-width:0}
+#feedback-demo .icon{width:16px;height:16px;flex-shrink:0;display:inline-block;vertical-align:middle;fill:none;stroke:currentColor;stroke-width:1.5}
+#feedback-demo .result-summary{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+#feedback-demo .result-summary .result-label{font-weight:500}
+#feedback-demo .composer{border-top:1px solid var(--line);padding:12px 20px 16px;flex-shrink:0;background:var(--canvas)}
+#feedback-demo .composer-box{display:flex;gap:10px;align-items:flex-end;border:1px solid var(--strong-line);border-radius:12px;background:var(--paper);padding:10px}
+#feedback-demo textarea{display:block;resize:none;min-width:0;flex:1;width:100%;border:0;background:transparent;outline-offset:4px;min-height:52px;line-height:1.5;padding:2px}
+#feedback-demo .send{background:var(--accent);color:var(--on-accent);min-width:48px}
+#feedback-demo .drawer{display:flex;flex-direction:column;min-height:0;min-width:0;border-left:1px solid var(--line);background:var(--paper)}
+#feedback-demo .drawer-head{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:14px 14px 10px;flex-shrink:0}
+#feedback-demo .drawer-sub{padding:0 14px 10px;flex-shrink:0}
+#feedback-demo .tabs{display:flex;gap:4px;padding:0 12px 10px;border-bottom:1px solid var(--line);flex-shrink:0}
+#feedback-demo .tabs button{flex:1;border-color:transparent}
+#feedback-demo .panel-content{padding:16px;overflow:auto;min-height:0;flex:1}
+#feedback-demo .timeline{padding:0;margin:0;list-style:none}
+#feedback-demo .timeline li{position:relative;padding:0 0 18px 20px;border-left:1px solid var(--line);margin-left:6px}
+#feedback-demo .timeline li:last-child{border:0}
+#feedback-demo .timeline li:before{content:"";position:absolute;left:-4px;top:8px;width:7px;height:7px;border-radius:50%;background:var(--muted)}
+#feedback-demo .timeline li.done:before{background:var(--success)}
+#feedback-demo .timeline button{display:block;width:100%;text-align:left;border:0;padding:4px 6px}
+#feedback-demo .timeline button strong{display:block;font-weight:500}
+#feedback-demo .event-meta{font-size:12px;color:var(--secondary);display:block;margin-top:3px}
+#feedback-demo .section-gap{margin-top:18px}
+#feedback-demo .detail-box{padding:12px 0;border-top:1px solid var(--line)}
+#feedback-demo .detail-box:first-child{padding-top:0;border:0}
+#feedback-demo pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--surface);padding:12px;border-radius:8px;font-size:12px;line-height:1.6;margin:8px 0}
+#feedback-demo details{border-bottom:1px solid var(--line);padding:10px 0}
+#feedback-demo summary{cursor:pointer;display:list-item;font-weight:500}
+#feedback-demo .verdict-row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;border-bottom:1px solid var(--line)}
+#feedback-demo .notice{border-left:2px solid var(--warning);padding:8px 12px;background:var(--surface);margin:12px 0}
+#feedback-demo .notice p+button{margin-top:8px}
+#feedback-demo .inline-slot{margin-top:12px}
+#feedback-demo .mode-inline .drawer{position:static;width:auto;height:440px;border:1px solid var(--line);border-radius:10px}
+#feedback-demo .go-back{margin-bottom:12px}
+#feedback-demo .helper{margin-top:10px;font-size:12px;color:var(--secondary)}
+@container(max-width:720px){
+ #feedback-demo .frame.mode-side[data-open="true"]{grid-template-columns:1fr}
+ #feedback-demo .mode-side .drawer{position:absolute;inset:0;border:0;z-index:3}
+ #feedback-demo .conversation{padding:20px 14px}
+ #feedback-demo .topbar,#feedback-demo .workline,#feedback-demo .composer{padding-left:14px;padding-right:14px}
+ #feedback-demo .thread-name{max-width:180px}
+ #feedback-demo .message{gap:8px}
+ #feedback-demo .avatar{width:26px;height:26px}
+ #feedback-demo .workline .context-secondary{display:none}
+}
+@media(max-width:480px){#feedback-demo{padding:8px}#feedback-demo .controls{gap:8px}#feedback-demo .controls label,#feedback-demo .control-group{flex-wrap:wrap}#feedback-demo textarea{font-size:16px}}
+</style>
+</head>
+<body>
+<div id="feedback-demo">
+ <div class="demo-label"><span>交互草图 · 演示数据 · 未连接当前会话</span><button id="toggle-controls" type="button">隐藏演示选项</button></div>
+ <div class="controls" id="dev-controls">
+  <div class="control-group" aria-label="比较展开位置"><span>展开位置</span><button type="button" id="layout-side" aria-pressed="true">右侧查看（建议）</button><button type="button" id="layout-inline" aria-pressed="false">消息内展开</button></div>
+  <label>演示场景<select id="scenario"><option value="running">正在执行</option><option value="done">已完成</option><option value="unavailable">来源暂不可读</option><option value="empty">没有过程记录</option></select></label>
+  <div class="control-group" aria-label="预览宽度"><button type="button" id="size-desktop" aria-pressed="true">桌面</button><button type="button" id="size-phone" aria-pressed="false">手机</button></div>
+  <button type="button" id="theme-switch">深色预览</button>
+ </div>
+ <div class="preview" id="preview">
+  <div class="frame mode-side" data-open="false" id="frame">
+   <main class="chat">
+    <header class="topbar"><span class="brand">Clowder AI</span><span class="divider">/</span><span class="thread-name">空列表状态修复</span></header>
+    <div class="workline"><span id="work-status"><span class="dot"></span>宪宪正在验证修复</span><span class="context-secondary">当前工作 · 跨 2 轮对话</span></div>
+    <div class="conversation" id="conversation">
+     <article class="message user"><div class="message-body"><div class="message-meta">你 · 示例任务</div><div class="bubble">最近会话列表为空时，我分不清是没有记录，还是数据源出了问题。帮我修一下。</div></div><div class="avatar human-avatar" aria-hidden="true">我</div></article>
+     <article class="message assistant"><div class="avatar human-avatar" aria-label="宪宪">宪</div><div class="message-body"><div class="message-meta">宪宪 <span class="muted">· GPT-6</span></div><div class="bubble"><p id="answer">已经找到状态丢失的位置，并补上了区分。现在检查空集合和读取失败两种情况。</p>
+      <button type="button" class="process-link" id="open-process" aria-expanded="false"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 3h10M3 8h7M3 13h10"/><circle cx="1" cy="3" r=".5"/><circle cx="1" cy="8" r=".5"/><circle cx="1" cy="13" r=".5"/></svg><span class="label" id="process-label">正在检查响应 · 已读 1 份 skill</span><span>查看过程 ›</span></button>
+      <div class="result-summary" id="result-summary" hidden><span class="result-label">修复已验证</span><p class="small">空集合和读取失败已区分；真实运行环境尚未验证。</p><button type="button" id="open-feedback">看本次反馈</button></div>
+      <div class="inline-slot" id="inline-slot"></div>
+     </div><p class="small" style="margin-top:8px">过程随本次工作保留，按需展开</p></div></article>
+    </div>
+    <div class="composer"><div class="composer-box"><textarea id="draft" aria-label="消息草稿（演示中不会发送）" placeholder="继续补充…"></textarea><button class="send" type="button" disabled aria-label="发送（草图不发送消息）">发送</button></div><p class="small" style="margin-top:5px">可以输入草稿，打开或收起过程不会清空；本草图不发送消息。</p></div>
+   </main>
+   <aside class="drawer" id="drawer" aria-label="本次工作详情" hidden>
+    <div class="drawer-head"><h2>本次工作</h2><button type="button" id="close-process" aria-label="收起过程并返回对话">收起 ×</button></div>
+    <p class="drawer-sub small">空列表状态修复 · 示例回合</p>
+    <div class="tabs" role="tablist" aria-label="工作详情"><button type="button" role="tab" id="tab-process" aria-selected="true" aria-controls="panel-content">过程</button><button type="button" role="tab" id="tab-input" aria-selected="false" aria-controls="panel-content">本次输入</button><button type="button" role="tab" id="tab-feedback" aria-selected="false" aria-controls="panel-content">反馈</button></div>
+    <section class="panel-content" id="panel-content" role="tabpanel" aria-labelledby="tab-process"></section>
+   </aside>
+  </div>
+ </div>
+ <p class="helper">试试：点“查看过程” → 点读取 skill 的步骤 → 看“本次输入”。上方可比较右侧与消息内展开。数字与内容均为预设演示。</p>
+</div>
+<script>
+(() => {
+ const root=document.getElementById('feedback-demo');
+ const q=id=>root.querySelector('#'+id);
+ const state={layout:'side',scenario:'running',tab:'process',detail:null,open:false,recovered:false};
+ function selected(id,value){q(id).setAttribute('aria-pressed',String(value));}
+ function setOpen(value){state.open=value;q('drawer').hidden=!value;q('frame').dataset.open=String(value);q('open-process').setAttribute('aria-expanded',String(value));if(!value)q('open-process').focus();}
+ function setTab(tab){state.tab=tab;state.detail=null;renderPanel();setOpen(true);}
+ function step(id,title,description,done){return '<li class="'+(done?'done':'')+'"><button type="button" data-step="'+id+'"><strong>'+title+'</strong><span class="event-meta">'+description+'</span></button></li>';}
+ function renderProcess(){
+  if(state.scenario==='empty')return '<h3>没有可核验的过程记录</h3><p class="small section-gap">这轮只有可见答复，无法还原工具调用或 skill 读取。没有记录不等于没有执行。</p>';
+  if(state.detail==='skill')return '<button type="button" class="go-back" id="back-steps">‹ 返回关键步骤</button><h3>已读取 quality-gate 正文</h3><p class="small">不是仅在目录中出现</p><div class="detail-box section-gap"><span class="small">本次读取的规则片段 · 演示版本</span><pre>按当前任务选择验收范围。\n核对尚未提交的候选代码。\n同候选、同入口的有效证据可以复用。</pre></div><p class="small">后续执行了相关路由测试。它是否比不用这份 skill 更好，当前没有对照证据。</p><details><summary>版本与来源</summary><pre>source: quality-gate/SKILL.md\nversion: demo-v2\nread: complete fixture text</pre></details><button class="section-gap" type="button" id="show-input">看这一步关联的输入</button>';
+  if(state.detail==='read')return '<button type="button" class="go-back" id="back-steps">‹ 返回关键步骤</button><h3>读取响应处理代码</h3><p class="small section-gap">定位到空集合分支没有携带数据源状态。</p><pre>response.ts · 示例片段\n返回列表时，同时保留 availability。\n空列表不自动等于“没有历史记录”。</pre><p class="small">这是预设代码阅读事件，没有读取当前仓库。</p>';
+  if(state.detail==='test')return '<button type="button" class="go-back" id="back-steps">‹ 返回关键步骤</button><h3>'+(state.scenario==='done'?'相关验证已通过':'相关验证执行中')+'</h3><p class="small section-gap">观察面：最近会话列表的真实路由入口（演示）。</p><ul><li>没有记录时明确显示“无记录”</li><li>数据源失败时明确显示“暂不可用”</li></ul><div class="notice"><p>未验证：实际部署、真实数据源和 UI 展示。</p></div><p class="small">不是全产品通过，也不代表规则净收益已证明。</p>';
+  return '<ol class="timeline">'+step('goal','确认当前目标','区分无记录与读取失败',true)+step('read','读取相关代码','定位响应中的状态字段',true)+step('skill','读取 quality-gate','正文已读 · 查看所用规则',true)+step('test',state.scenario==='done'?'验证通过':'检查路由行为',state.scenario==='done'?'结果与当前候选对应':'空集合 / 读取失败',state.scenario==='done')+'</ol><p class="small">默认只展示关键节点，原始调用按步骤展开。</p>';
+ }
+ function renderInput(){
+  if(state.scenario==='empty')return '<h3>本轮输入快照不可用</h3><p class="small section-gap">不会用当前文件或模型回忆补成“当时的完整输入”。</p>';
+  if(state.scenario==='unavailable'&&!state.recovered)return '<h3>输入来源暂时不可读</h3><p class="small section-gap">其他步骤仍保留。尚未确认是权限变化还是来源临时不可用。</p><div class="notice"><p>这不影响继续查看已有过程。</p><button type="button" id="retry-input">重新读取（演示）</button></div>';
+  return '<h3>这一轮提交的输入</h3><p class="small">只显示可核验内容；不可见部分明确留空。</p><details open><summary>当前目标</summary><pre>修复最近会话列表：区分没有记录与读取失败。</pre></details><details><summary>先前对话 · 摘要形式</summary><pre>已定位 API 响应缺少状态信息。\n当前任务范围为后端修复，界面效果另验。</pre></details><details><summary>规则与 skill</summary><pre>安全与工作范围约束：保留。\nquality-gate demo-v2：正文已读取。\n其余目录项：未据此声称加载。</pre></details><details><summary>工具输入与返回</summary><pre>read: response.ts\nread: quality-gate/SKILL.md\nrun: 相关路由测试\n（本草图为演示输入，并非当前会话快照）</pre></details><div class="detail-box"><h3>Provider 内部内容</h3><p class="small">不可见 · 不支持完整还原</p></div><div class="detail-box"><h3>敏感材料</h3><p class="small">默认遮蔽，需原来源权限；本草图不含真实秘密。</p></div>';
+ }
+ function renderFeedback(){
+  if(state.scenario!=='done')return '<h3>'+(state.scenario==='empty'?'证据不足，暂不评价':'任务尚未完成')+'</h3><p class="small section-gap">执行中只显示进度和可核验缺口；产物形成后再判断完成情况。</p><div class="notice"><p>当前没有最终分数，也没有 skill 收益结论。</p></div>';
+  return '<h3>修复已验证，部署效果待确认</h3><div class="section-gap"><div class="verdict-row"><span>当前目标</span><span>已验证</span></div><div class="verdict-row"><span>验证范围</span><span>后端路由</span></div><div class="verdict-row"><span>过程观察</span><span>复用已有测试</span></div><div class="verdict-row"><span>skill 净收益</span><span>没有对照，未知</span></div></div><div class="notice"><p>还缺：真实运行环境和界面效果。不会把命令成功当成全部完成。</p></div><button type="button" id="feedback-evidence">查看验证依据</button><details class="section-gap"><summary>为什么没有总分？</summary><p class="small">任务达成、过程代价和 skill 收益是不同判断。这里没有足够依据把它们合成一个分数。</p></details>';
+ }
+ function renderPanel(){
+  ['process','input','feedback'].forEach(tab=>q('tab-'+tab).setAttribute('aria-selected',String(state.tab===tab)));
+  q('panel-content').setAttribute('aria-labelledby','tab-'+state.tab);
+  q('panel-content').innerHTML=state.tab==='input'?renderInput():state.tab==='feedback'?renderFeedback():renderProcess();
+  q('panel-content').scrollTop=0;
+ }
+ function renderScenario(){
+  const done=state.scenario==='done',empty=state.scenario==='empty';
+  q('answer').textContent=done?'已修复。现在空集合会说明“无记录”，数据源读取失败会说明“暂不可用”。相关路由验证通过，真实环境的展示效果还需确认。':empty?'这轮给出了处理建议，但没有可核验的执行过程。可以继续讨论，也可以在后续实际操作中补证。':'已经找到状态丢失的位置，并补上了区分。现在检查空集合和读取失败两种情况。';
+  q('work-status').innerHTML='<span class="dot"></span>'+(done?'当前目标已验证':empty?'本轮无执行记录':'宪宪正在验证修复');
+  q('process-label').textContent=done?'关键过程已保留 · 查看依据':empty?'没有过程记录 · 查看说明':'正在检查响应 · 已读 1 份 skill';
+  q('result-summary').hidden=!done;state.detail=null;state.recovered=false;renderPanel();
+ }
+ function setLayout(layout){
+  state.layout=layout;q('frame').className='frame mode-'+layout;
+  (layout==='inline'?q('inline-slot'):q('frame')).appendChild(q('drawer'));
+  selected('layout-side',layout==='side');selected('layout-inline',layout==='inline');
+ }
+ q('open-process').addEventListener('click',()=>setOpen(!state.open));
+ q('close-process').addEventListener('click',()=>setOpen(false));
+ q('open-feedback').addEventListener('click',()=>setTab('feedback'));
+ ['process','input','feedback'].forEach(tab=>q('tab-'+tab).addEventListener('click',()=>setTab(tab)));
+ q('panel-content').addEventListener('click',event=>{
+  const button=event.target.closest('button');if(!button)return;
+  if(button.dataset.step){if(button.dataset.step==='goal'){setTab('input');}else{state.detail=button.dataset.step;renderPanel();}}
+  if(button.id==='back-steps'){state.detail=null;renderPanel();}
+  if(button.id==='show-input')setTab('input');
+  if(button.id==='retry-input'){state.recovered=true;renderPanel();}
+  if(button.id==='feedback-evidence'){state.tab='process';state.detail='test';renderPanel();}
+ });
+ q('scenario').addEventListener('change',event=>{state.scenario=event.target.value;renderScenario();});
+ q('layout-side').addEventListener('click',()=>setLayout('side'));q('layout-inline').addEventListener('click',()=>setLayout('inline'));
+ q('size-phone').addEventListener('click',()=>{q('preview').classList.add('phone');selected('size-phone',true);selected('size-desktop',false);});
+ q('size-desktop').addEventListener('click',()=>{q('preview').classList.remove('phone');selected('size-phone',false);selected('size-desktop',true);});
+ q('theme-switch').addEventListener('click',()=>{const dark=root.dataset.theme!=='dark';root.dataset.theme=dark?'dark':'light';q('theme-switch').textContent=dark?'浅色预览':'深色预览';});
+ q('toggle-controls').addEventListener('click',()=>{q('dev-controls').hidden=!q('dev-controls').hidden;q('toggle-controls').textContent=q('dev-controls').hidden?'显示演示选项':'隐藏演示选项';});
+ root.addEventListener('keydown',event=>{if(event.key==='Escape'&&state.open)setOpen(false);});
+ renderPanel();
+})();
+</script>
+</body>
+</html>

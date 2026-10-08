@@ -3,17 +3,32 @@
 /**
  * F246: Approval Hub Zustand store.
  *
- * Manages pending approval items across features (F128 thread proposals,
- * F225 session handoff proposals, F193 dispatch proposals). Fetches from
- * the aggregation endpoint and re-fetches on proposal_updated /
+ * Manages pending approval items across registered feature adapters. Fetches
+ * from the aggregation endpoint and re-fetches on proposal_updated /
  * proposal_created socket events (dispatched as CustomEvents by useSocket).
  *
  * Phase B: approve/reject actions for inlineApprovable items (F193).
  */
 
-import type { ApprovalItem } from '@cat-cafe/shared';
+import type {
+  ApprovalHubItem,
+  EntityConflictContext,
+  EntityConflictResolutionRequest,
+  HumanDispositionFeedbackInput,
+  SettledApprovalHubItem,
+} from '@cat-cafe/shared';
 import { create } from 'zustand';
+import { isApprovalItemBatchDecidable } from '@/lib/approval-features';
 import { apiFetch } from '@/utils/api-client';
+import { createApprovalDecisionActions } from './approval-decision-actions';
+import { consumeDecisionAttempt, type DecisionAttempts } from './approval-decision-attempts';
+import {
+  applyConflictFeedback,
+  type DecidingMap,
+  type DecisionErrorBody,
+  decisionErrorMessage,
+  resolveEndpoint,
+} from './approval-decision-http';
 
 /** Result of a batch operation for a single item. */
 interface BatchItemResult {
@@ -23,25 +38,46 @@ interface BatchItemResult {
 }
 
 interface ApprovalHubState {
-  items: ApprovalItem[];
+  items: ApprovalHubItem[];
   count: number;
   isLoading: boolean;
   isOpen: boolean;
   error: string | null;
   /** Map of proposalId → 'approving' | 'rejecting' for optimistic UI feedback */
-  deciding: Record<string, 'approving' | 'rejecting'>;
+  deciding: DecidingMap;
+  /**
+   * F322 S3-2b-2: the latest decision attempt per proposal, as transient raw evidence (see approval-decision-attempts.ts).
+   * Not part of `items`/`count`, not a lifecycle: absence never means success.
+   */
+  decisionAttempts: DecisionAttempts;
+  /** Drop an attempt once a host has read it; a no-op unless it is still the attempt the caller saw. */
+  consumeDecisionAttempt: (proposalId: string, attemptId: number) => void;
   /** AC-D5: Set of selected proposalIds for batch operations */
   selectedIds: Set<string>;
   /** AC-D5: Results of the last batch operation (cleared on next batch) */
   batchResults: BatchItemResult[];
+  /** F246 Phase F: canonical settled lifecycle history items. */
+  settledItems: SettledApprovalHubItem[];
+  settledIsLoading: boolean;
+  settledError: string | null;
   fetchPending: () => Promise<void>;
+  /** F246 Phase F: fetch normalized settled lifecycle history. */
+  fetchSettled: (limit?: number) => Promise<void>;
   open: () => void;
   close: () => void;
   toggle: () => void;
   /** F246 Phase B: approve an inlineApprovable dispatch proposal */
   approveProposal: (proposalId: string) => Promise<void>;
   /** F246 Phase B: reject an inlineApprovable dispatch proposal */
-  rejectProposal: (proposalId: string) => Promise<void>;
+  rejectProposal: (proposalId: string, feedback?: HumanDispositionFeedbackInput) => Promise<boolean>;
+  /** F276: approve an exact subset of the proposal's remaining drafts. */
+  approvePersonMemory: (proposalId: string, selectedDraftIds: string[]) => Promise<void>;
+  /** F276: keep a proposal owner-visible without authorizing recall or materialization. */
+  notNowPersonMemory: (proposalId: string) => Promise<void>;
+  /** F276: cancel an unmaterialized proposal without creating rejection suppression. */
+  withdrawPersonMemory: (proposalId: string) => Promise<void>;
+  /** F260: submit an explicit entity conflict mutation. */
+  resolveEntityConflict: (proposalId: string, resolution: EntityConflictResolutionRequest) => Promise<void>;
   /** AC-D5: toggle selection of a proposal (only inlineApprovable allowed) */
   toggleSelection: (proposalId: string) => void;
   /** AC-D5: select all inlineApprovable items (optionally scoped to visible IDs from filters) */
@@ -61,18 +97,34 @@ export const useApprovalHubStore = create<ApprovalHubState>((set, get) => ({
   isOpen: false,
   error: null,
   deciding: {},
+  decisionAttempts: {},
   selectedIds: new Set<string>(),
   batchResults: [],
+  settledItems: [],
+  settledIsLoading: false,
+  settledError: null,
 
   fetchPending: async () => {
     set({ isLoading: true, error: null });
     try {
       const res = await apiFetch('/api/approval-hub/pending');
       if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
-      const data = (await res.json()) as { items: ApprovalItem[]; count: number };
+      const data = (await res.json()) as { items: ApprovalHubItem[]; count: number };
       set({ items: data.items, count: data.count, isLoading: false });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Unknown error', isLoading: false });
+    }
+  },
+
+  fetchSettled: async (limit = 200) => {
+    set({ settledIsLoading: true, settledError: null });
+    try {
+      const res = await apiFetch(`/api/approval-hub/settled?limit=${limit}`);
+      if (!res.ok) throw new Error(`Failed to fetch: ${res.status}`);
+      const data = (await res.json()) as { items: SettledApprovalHubItem[]; count: number };
+      set({ settledItems: data.items, settledIsLoading: false });
+    } catch (err) {
+      set({ settledError: err instanceof Error ? err.message : 'Unknown error', settledIsLoading: false });
     }
   },
 
@@ -88,57 +140,18 @@ export const useApprovalHubStore = create<ApprovalHubState>((set, get) => ({
     if (!wasOpen) get().fetchPending();
   },
 
-  approveProposal: async (proposalId: string) => {
-    set((s) => ({ deciding: { ...s.deciding, [proposalId]: 'approving' as const } }));
-    try {
-      const res = await apiFetch(`/api/dispatch-proposals/${proposalId}/approve`, { method: 'POST' });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error ?? `Approve failed: ${res.status}`);
-      }
-      // Optimistic remove from items list
-      set((s) => ({
-        items: s.items.filter((i) => i.proposalId !== proposalId),
-        count: Math.max(0, s.count - 1),
-        deciding: { ...s.deciding, [proposalId]: undefined as never },
-      }));
-    } catch (err) {
-      set((s) => ({
-        error: err instanceof Error ? err.message : 'Approve failed',
-        deciding: { ...s.deciding, [proposalId]: undefined as never },
-      }));
-    }
-  },
+  ...createApprovalDecisionActions(set, get),
 
-  rejectProposal: async (proposalId: string) => {
-    set((s) => ({ deciding: { ...s.deciding, [proposalId]: 'rejecting' as const } }));
-    try {
-      const res = await apiFetch(`/api/dispatch-proposals/${proposalId}/reject`, { method: 'POST' });
-      if (!res.ok) {
-        const data = (await res.json().catch(() => ({}))) as { error?: string };
-        throw new Error(data.error ?? `Reject failed: ${res.status}`);
-      }
-      // Optimistic remove from items list
-      set((s) => ({
-        items: s.items.filter((i) => i.proposalId !== proposalId),
-        count: Math.max(0, s.count - 1),
-        deciding: { ...s.deciding, [proposalId]: undefined as never },
-      }));
-    } catch (err) {
-      set((s) => ({
-        error: err instanceof Error ? err.message : 'Reject failed',
-        deciding: { ...s.deciding, [proposalId]: undefined as never },
-      }));
-    }
-  },
+  consumeDecisionAttempt: (proposalId, attemptId) =>
+    set((state) => ({ decisionAttempts: consumeDecisionAttempt(state.decisionAttempts, proposalId, attemptId) })),
 
   // --- AC-D5: Batch operations ---
 
   toggleSelection: (proposalId: string) => {
     set((s) => {
-      // Only allow selecting inlineApprovable items
+      // Recovery items are single-action resumes and must never enter approve/reject batches.
       const item = s.items.find((i) => i.proposalId === proposalId);
-      if (!item?.inlineApprovable) return s;
+      if (!item || !isApprovalItemBatchDecidable(item)) return s;
       const next = new Set(s.selectedIds);
       if (next.has(proposalId)) {
         next.delete(proposalId);
@@ -155,7 +168,7 @@ export const useApprovalHubStore = create<ApprovalHubState>((set, get) => ({
       return {
         selectedIds: new Set(
           s.items
-            .filter((i) => i.inlineApprovable && (!visibleSet || visibleSet.has(i.proposalId)))
+            .filter((i) => isApprovalItemBatchDecidable(i) && (!visibleSet || visibleSet.has(i.proposalId)))
             .map((i) => i.proposalId),
         ),
       };
@@ -166,7 +179,7 @@ export const useApprovalHubStore = create<ApprovalHubState>((set, get) => ({
 
   batchApprove: async () => {
     const { selectedIds, items } = get();
-    const targets = items.filter((i) => selectedIds.has(i.proposalId) && i.inlineApprovable);
+    const targets = items.filter((i) => selectedIds.has(i.proposalId) && isApprovalItemBatchDecidable(i));
     if (targets.length === 0) return [];
 
     const results: BatchItemResult[] = [];
@@ -181,10 +194,20 @@ export const useApprovalHubStore = create<ApprovalHubState>((set, get) => ({
     // Execute sequentially to avoid overwhelming the server
     for (const t of targets) {
       try {
-        const res = await apiFetch(`/api/dispatch-proposals/${t.proposalId}/approve`, { method: 'POST' });
+        const res = await apiFetch(resolveEndpoint(t.sourceFeatureId, t.proposalId, 'approve'), { method: 'POST' });
         if (!res.ok) {
-          const data = (await res.json().catch(() => ({}))) as { error?: string };
-          results.push({ proposalId: t.proposalId, success: false, error: data.error ?? `${res.status}` });
+          const data = (await res.json().catch(() => ({}))) as DecisionErrorBody;
+          if (data.conflict) {
+            const message = decisionErrorMessage(data, `${res.status}`);
+            set((state) => ({
+              items: applyConflictFeedback(state.items, t.proposalId, data.conflict as EntityConflictContext, message),
+            }));
+          }
+          results.push({
+            proposalId: t.proposalId,
+            success: false,
+            error: decisionErrorMessage(data, `${res.status}`),
+          });
         } else {
           results.push({ proposalId: t.proposalId, success: true });
         }
@@ -215,7 +238,7 @@ export const useApprovalHubStore = create<ApprovalHubState>((set, get) => ({
 
   batchReject: async () => {
     const { selectedIds, items } = get();
-    const targets = items.filter((i) => selectedIds.has(i.proposalId) && i.inlineApprovable);
+    const targets = items.filter((i) => selectedIds.has(i.proposalId) && isApprovalItemBatchDecidable(i));
     if (targets.length === 0) return [];
 
     const results: BatchItemResult[] = [];
@@ -226,10 +249,14 @@ export const useApprovalHubStore = create<ApprovalHubState>((set, get) => ({
 
     for (const t of targets) {
       try {
-        const res = await apiFetch(`/api/dispatch-proposals/${t.proposalId}/reject`, { method: 'POST' });
+        const res = await apiFetch(resolveEndpoint(t.sourceFeatureId, t.proposalId, 'reject'), { method: 'POST' });
         if (!res.ok) {
-          const data = (await res.json().catch(() => ({}))) as { error?: string };
-          results.push({ proposalId: t.proposalId, success: false, error: data.error ?? `${res.status}` });
+          const data = (await res.json().catch(() => ({}))) as DecisionErrorBody;
+          results.push({
+            proposalId: t.proposalId,
+            success: false,
+            error: decisionErrorMessage(data, `${res.status}`),
+          });
         } else {
           results.push({ proposalId: t.proposalId, success: true });
         }

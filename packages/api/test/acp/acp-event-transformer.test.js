@@ -13,6 +13,22 @@ const catId = 'gemini';
 const metadata = { provider: 'google', model: 'gemini-2.5-pro' };
 
 describe('transformAcpEvent', () => {
+  it('usage_update normalizes authoritative ACP context usage', () => {
+    const update = {
+      sessionId: 's1',
+      update: {
+        sessionUpdate: 'usage_update',
+        used: 85_000,
+        size: 100_000,
+      },
+    };
+    const result = transformAcpEvent(update, catId, metadata);
+    assert.equal(result.type, 'agent_loop');
+    assert.equal(result.metadata.usage.contextUsedTokens, 85_000);
+    assert.equal(result.metadata.usage.lastTurnInputTokens, 85_000);
+    assert.equal(result.metadata.usage.contextWindowSize, 100_000);
+  });
+
   it('agent_message_chunk → text', () => {
     const update = {
       sessionId: 's1',
@@ -422,6 +438,24 @@ describe('transformAcpEvent', () => {
     const parsed = JSON.parse(result.content);
     assert.equal(parsed.type, 'plan');
     assert.equal(parsed.text, 'Step 1: Read file\nStep 2: Edit');
+  });
+
+  it('plan with empty/whitespace/missing text → null (#1203)', () => {
+    // The frontend has no plan formatter — empty plans used to leak as raw
+    // `{"type":"plan","text":""}` JSON bubbles in chat.
+    for (const text of ['', '   ', '\n\t ']) {
+      const update = {
+        sessionId: 's1',
+        update: { sessionUpdate: 'plan', content: { type: 'text', text } },
+      };
+      assert.equal(
+        transformAcpEvent(update, catId, metadata),
+        null,
+        `empty plan text ${JSON.stringify(text)} must be dropped`,
+      );
+    }
+    const noContent = { sessionId: 's1', update: { sessionUpdate: 'plan' } };
+    assert.equal(transformAcpEvent(noContent, catId, metadata), null, 'plan without content must be dropped');
   });
 
   it('user_message_chunk → null (skip echo)', () => {

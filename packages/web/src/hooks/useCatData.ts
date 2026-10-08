@@ -5,7 +5,9 @@
  * Fetches once per session, caches module-level. All consumers share same data.
  */
 
+import type { BuiltinCloudIdentityProtection } from '@cat-cafe/shared';
 import { useEffect, useMemo, useState } from 'react';
+import { formatCatDisplayName } from '@/lib/cat-display-name';
 import { UNKNOWN_CAT_COLOR } from '@/lib/color-defaults';
 import { refreshMentionData } from '@/lib/mention-highlight';
 import { sortCatsByOrder } from '@/lib/sort-cats-by-order';
@@ -29,9 +31,18 @@ export interface CatData {
     outputFormat?: string;
     defaultArgs?: string[];
     effort?: string;
+    /** F291: requested Codex OAuth service tier. Absent = inherit Codex user config. */
+    serviceTier?: 'standard' | 'fast';
+    /** F254 D2: Codex carrier override (openai only). Absent = follow server env. */
+    carrier?: 'exec_json' | 'app_server';
   };
   commandArgs?: string[];
   cliConfigArgs?: string[];
+  /** F254 D2: effective carrier truth for openai cats (per-cat > env > default), resolved server-side. */
+  codexCarrier?: {
+    effective: 'exec_json' | 'app_server';
+    source: 'per-cat' | 'env' | 'default';
+  };
   /** clowder-ai#340 P5: Model provider name (renamed from ocProviderName). */
   provider?: string;
   /** F161: ACP transport config. Presence means this member runs through ACP instead of legacy CLI. */
@@ -49,12 +60,24 @@ export interface CatData {
       idleTtlMs?: number;
     };
   };
-  contextBudget?: {
-    maxPromptTokens: number;
-    maxContextTokens: number;
-    maxMessages: number;
-    maxContentLengthPerMsg: number;
-  };
+  /** clowder-ai#1208: explicit context window cap. undefined=Auto, positive int=Manual. */
+  contextWindow?: number;
+  /** clowder-ai#1208 Items 4+6: resolved context capacity for Hub display. */
+  resolvedContext?: {
+    windowTokens?: number;
+    inputCeilingTokens?: number;
+    source?: string;
+    provenance?: string;
+    actionable?: boolean;
+    /** #1208 Item 6: client context capability reason for Hub display. */
+    capabilityReason?: string;
+    reportsRuntimeWindow?: boolean;
+    authoritativeUsage?: boolean;
+    usageTelemetry?: 'available' | 'conditional' | 'unavailable';
+    nativeWindowControl?: boolean;
+    nativeCompressionControl?: boolean;
+    observesCompression?: boolean;
+  } | null;
   avatar: string;
   roleDescription: string;
   personality: string;
@@ -62,6 +85,10 @@ export interface CatData {
   caution?: string | null;
   strengths?: string[];
   sessionChain?: boolean;
+  /** #712: MCP support toggle — when false, disables all MCP for this cat. */
+  mcpSupport?: boolean;
+  /** F247: immutable transport identity for the built-in ChatGPT Pro cloud member. */
+  identityProtection?: BuiltinCloudIdentityProtection;
   /** F32-b P4: Human-readable variant label (e.g. "4.5", "Sonnet") */
   variantLabel?: string;
   /** F32-b P4: Whether this is the default variant for its breed */
@@ -179,9 +206,20 @@ async function refreshCatsNow(): Promise<FetchResult> {
 
 // ── Hook ────────────────────────────────────────────────
 
-export function useCatData() {
+interface UseCatDataOptions {
+  /**
+   * Subscribe to the shared registry without starting a request.
+   *
+   * Leaf presentation components use this mode because the Console shell already
+   * owns registry loading. It keeps name projection reactive without turning each
+   * label into an independent data-fetch boundary.
+   */
+  fetch?: boolean;
+}
+
+export function useCatData({ fetch: shouldFetch = true }: UseCatDataOptions = {}) {
   const [cats, setCats] = useState<CatData[]>(() => _cached ?? []);
-  const [isLoading, setIsLoading] = useState(!_cached);
+  const [isLoading, setIsLoading] = useState(shouldFetch && !_cached);
   const [hasFetched, setHasFetched] = useState(!!_cached);
   const [retryCount, setRetryCount] = useState(0);
 
@@ -197,6 +235,11 @@ export function useCatData() {
   }, []);
 
   useEffect(() => {
+    if (!shouldFetch) {
+      setCats(_cached ?? []);
+      setIsLoading(false);
+      return;
+    }
     if (_cached) {
       setCats(_cached);
       setIsLoading(false);
@@ -232,7 +275,7 @@ export function useCatData() {
       cancelled = true;
       clearTimeout(retryTimer);
     };
-  }, [retryCount]);
+  }, [retryCount, shouldFetch]);
 
   const refresh = useMemo(
     () => async () => {
@@ -269,7 +312,7 @@ export function useCatData() {
 
 /** Format cat name with optional variant label for multi-variant disambiguation */
 export function formatCatName(cat: { displayName: string; variantLabel?: string }): string {
-  return cat.variantLabel ? `${cat.displayName}（${cat.variantLabel}）` : cat.displayName;
+  return formatCatDisplayName(cat);
 }
 
 /** Get cached cats synchronously (for non-hook contexts). Returns empty if not loaded. */

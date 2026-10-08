@@ -1,56 +1,24 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { isStalePencilProbe, PENCIL_PROBE_RULE, pencilOwnedDescendants } from './lib/pencil-codex-probe-policy.mjs';
+import { enrichPencilProbes, revalidatePencilFinding } from './lib/pencil-codex-probes.mjs';
+import { isCatCafeCommand, STALE_DEV_PROCESS_RULES } from './lib/stale-dev-process-rules.mjs';
+
+export {
+  matchAgentBrowserMcpWrapper,
+  matchPinchtabMcpWrapper,
+  matchPlaywrightMcpWrapper,
+} from './lib/stale-dev-process-rules.mjs';
 
 const HOUR = 60 * 60;
 const KILL_GRACE_MS = 2000;
+const MAX_REPORTED_COMMAND_LENGTH = 500;
 
-// 6379=default / 6099=fork runtime sanctuary / 6398=worktree dev /
-// 6399=runtime sanctuary / 6401=user-redis persistent data.
-// These are NEVER orphans to clean — excluding them is the primary safety guard for the
-// orphan-isolated-redis rule below (CAFE-INCIDENT-20260527).
-const PROTECTED_REDIS_PORTS = new Set([6379, 6099, 6398, 6399, 6401]);
-
-const RULES = [
-  {
-    id: 'orphan-isolated-redis',
-    minAgeSeconds: 10 * 60,
-    // Unmanaged isolated test Redis reparented to init (parent gate/test died) on a
-    // non-sanctuary port. ppid===1 means the parent is gone, so this is a true orphan;
-    // the port exclusion guarantees we never touch sanctuary ports.
-    match: (p) => {
-      if (p.ppid !== 1) return false;
-      const m = p.command.match(/(?:^|\/)redis-server\s+\S*:(\d{2,5})\b/);
-      if (!m) return false;
-      return !PROTECTED_REDIS_PORTS.has(Number(m[1]));
-    },
-    reason: 'orphaned unmanaged isolated Redis (reparented to init, non-sanctuary port)',
-  },
-  {
-    id: 'cat-cafe-node-test-watch',
-    minAgeSeconds: HOUR,
-    match: (p) =>
-      p.ppid === 1 && p.command.includes('--test-timeout=0') && /test\/cli-spawn-[\w-]+\.test\.js/.test(p.command),
-    reason: 'orphaned Node test/watch process',
-  },
-  {
-    id: 'agent-browser-cli',
-    minAgeSeconds: HOUR,
-    match: (p) => p.ppid === 1 && /\/agent-browser(?:-[\w]+)*$/.test(p.command.trim()),
-    reason: 'orphaned agent-browser CLI',
-  },
-  {
-    id: 'catcafe-test-tmux',
-    minAgeSeconds: HOUR,
-    match: (p) => p.ppid === 1 && /tmux\b.*\bcatcafe-test-agent-spawn-/.test(p.command),
-    reason: 'orphaned Clowder AI test tmux session',
-  },
-  {
-    id: 'orphan-alpha-start',
-    minAgeSeconds: 12 * HOUR,
-    match: (p) => p.ppid === 1 && /\bpnpm\b.*\balpha:start\b/.test(p.command),
-    reason: 'orphaned alpha:start process',
-  },
-];
+export function formatCommandForReport(command) {
+  return command.length <= MAX_REPORTED_COMMAND_LENGTH
+    ? command
+    : `${command.slice(0, MAX_REPORTED_COMMAND_LENGTH - 3)}...`;
+}
 
 export function parseElapsedSeconds(raw) {
   const value = raw.trim();
@@ -90,19 +58,48 @@ export function parsePsOutput(psOutput) {
     .filter(Boolean);
 }
 
-export function findStaleDevProcesses(processes, { ownPid = process.pid } = {}) {
+export function findStaleDevProcesses(
+  processes,
+  { ownPid = process.pid, nowMs = Date.now(), pencilOnly = false } = {},
+) {
   const findings = [];
+  const protectedPencilHelpers = pencilOwnedDescendants(processes);
   for (const proc of processes) {
-    if (proc.pid === ownPid) continue;
+    if (proc.pid === ownPid || protectedPencilHelpers.has(proc.pid)) continue;
     if (proc.elapsedSeconds === undefined) continue;
-    for (const rule of RULES) {
-      if (proc.elapsedSeconds < rule.minAgeSeconds) continue;
-      if (!rule.match(proc)) continue;
-      findings.push({ ...proc, ruleId: rule.id, reason: rule.reason });
-      break;
+    if (isStalePencilProbe(proc, processes, nowMs)) {
+      findings.push({
+        ...proc,
+        ruleId: PENCIL_PROBE_RULE,
+        reason: 'Pencil SDK login probe has no progress for over one hour',
+      });
+      continue;
     }
+    const rule =
+      !pencilOnly &&
+      STALE_DEV_PROCESS_RULES.find(
+        (candidate) => proc.elapsedSeconds >= candidate.minAgeSeconds && candidate.match(proc),
+      );
+    if (rule) findings.push({ ...proc, ruleId: rule.id, reason: rule.reason });
   }
   return findings;
+}
+
+export function findLongLivedDevProcesses(processes, { ownPid = process.pid } = {}) {
+  return processes
+    .filter(
+      (proc) =>
+        proc.pid !== ownPid &&
+        proc.elapsedSeconds !== undefined &&
+        proc.elapsedSeconds >= 8 * HOUR &&
+        (isCatCafeCommand(proc.command) || /(?:^|\s)--filter(?:=|\s+)@cat-cafe\/web(?:\s|$)/.test(proc.command)) &&
+        /(?:^|\s)(?:\S*\/)?next(?:\/dist\/bin\/next)?\s+dev(?:\s|$)/.test(proc.command),
+    )
+    .map((proc) => ({
+      ...proc,
+      ruleId: 'long-lived-cat-cafe-next-dev',
+      reason: 'long-lived Clowder AI Next dev watcher; inspect managed preview ownership before stopping',
+    }));
 }
 
 function listProcesses() {
@@ -112,10 +109,9 @@ function listProcesses() {
   });
 }
 
-function printFindings(findings) {
+function printFindings(findings, advisories = []) {
   if (findings.length === 0) {
-    console.log('[stale-dev-processes] no stale Clowder AI dev processes found');
-    return;
+    console.log('[stale-dev-processes] no cleanup-safe stale Clowder AI dev processes found');
   }
   for (const item of findings) {
     console.log(
@@ -126,7 +122,20 @@ function printFindings(findings) {
         `rss=${item.rssKb}KB`,
         `rule=${item.ruleId}`,
         `reason="${item.reason}"`,
-        `cmd=${item.command}`,
+        `cmd=${formatCommandForReport(item.command)}`,
+      ].join(' '),
+    );
+  }
+  for (const item of advisories) {
+    console.log(
+      [
+        `[stale-dev-processes] advisory pid=${item.pid}`,
+        `ppid=${item.ppid}`,
+        `etime=${item.elapsed}`,
+        `rss=${item.rssKb}KB`,
+        `rule=${item.ruleId}`,
+        `reason="${item.reason}"`,
+        `cmd=${formatCommandForReport(item.command)}`,
       ].join(' '),
     );
   }
@@ -148,28 +157,43 @@ export function processExists(pid) {
   }
 }
 
+function sendSignal(item, signal, killFn) {
+  try {
+    killFn(item.pid, signal);
+    return { status: 'sent' };
+  } catch (error) {
+    if (error?.code === 'ESRCH') return { status: 'gone' };
+    return { status: 'failed', failure: { pid: item.pid, signal, err: error } };
+  }
+}
+
+function recordSignalOutcome(result, outcome, signal) {
+  if (outcome.status === 'sent') result[signal === 'SIGTERM' ? 'sigtermSent' : 'sigkillSent']++;
+  else if (outcome.status === 'gone') result.alreadyGone++;
+  else result.failed.push(outcome.failure);
+}
+
 export async function terminateFindings(
   findings,
-  { killFn = process.kill.bind(process), existsFn = processExists, sleepFn = sleep, graceMs = KILL_GRACE_MS } = {},
+  {
+    killFn = process.kill.bind(process),
+    existsFn = processExists,
+    sleepFn = sleep,
+    graceMs = KILL_GRACE_MS,
+    revalidatePencilFn = revalidatePencilFinding,
+  } = {},
 ) {
-  let sigtermSent = 0;
-  let sigkillSent = 0;
-  let alreadyGone = 0;
-  const failed = [];
+  const result = { sigtermSent: 0, sigkillSent: 0, alreadyGone: 0, skippedChanged: 0, failed: [] };
   const pending = [];
 
   for (const item of findings) {
-    try {
-      killFn(item.pid, 'SIGTERM');
-      sigtermSent++;
-      pending.push(item);
-    } catch (err) {
-      if (err && typeof err === 'object' && 'code' in err && err.code === 'ESRCH') {
-        alreadyGone++;
-      } else {
-        failed.push({ pid: item.pid, signal: 'SIGTERM', err });
-      }
+    if (item.ruleId === PENCIL_PROBE_RULE && !revalidatePencilFn(item)) {
+      result.skippedChanged++;
+      continue;
     }
+    const outcome = sendSignal(item, 'SIGTERM', killFn);
+    recordSignalOutcome(result, outcome, 'SIGTERM');
+    if (outcome.status === 'sent') pending.push(item);
   }
 
   if (pending.length > 0) {
@@ -178,28 +202,24 @@ export async function terminateFindings(
 
   for (const item of pending) {
     if (!existsFn(item.pid)) {
-      alreadyGone++;
+      result.alreadyGone++;
       continue;
     }
-    try {
-      killFn(item.pid, 'SIGKILL');
-      sigkillSent++;
-    } catch (err) {
-      if (err && typeof err === 'object' && 'code' in err && err.code === 'ESRCH') {
-        alreadyGone++;
-      } else {
-        failed.push({ pid: item.pid, signal: 'SIGKILL', err });
-      }
+    if (item.ruleId === PENCIL_PROBE_RULE) {
+      result.failed.push({ pid: item.pid, signal: 'SIGTERM', err: 'probe remains alive; no force-kill escalation' });
+      continue;
     }
+    const outcome = sendSignal(item, 'SIGKILL', killFn);
+    recordSignalOutcome(result, outcome, 'SIGKILL');
   }
 
-  return { sigtermSent, sigkillSent, alreadyGone, failed };
+  return result;
 }
 
 async function killFindings(findings) {
   const result = await terminateFindings(findings);
   console.log(
-    `[stale-dev-processes] sigterm=${result.sigtermSent} sigkill=${result.sigkillSent} gone=${result.alreadyGone} failed=${result.failed.length}`,
+    `[stale-dev-processes] sigterm=${result.sigtermSent} sigkill=${result.sigkillSent} gone=${result.alreadyGone} skippedChanged=${result.skippedChanged} failed=${result.failed.length}`,
   );
   if (result.failed.length > 0) {
     process.exitCode = 1;
@@ -211,9 +231,12 @@ async function killFindings(findings) {
 
 export async function main(argv = process.argv.slice(2)) {
   const run = argv.includes('--run');
+  const pencilOnly = argv.includes('--pencil-only');
   const psOutput = listProcesses();
-  const findings = findStaleDevProcesses(parsePsOutput(psOutput));
-  printFindings(findings);
+  const processes = enrichPencilProbes(parsePsOutput(psOutput));
+  const findings = findStaleDevProcesses(processes, { pencilOnly });
+  const advisories = pencilOnly ? [] : findLongLivedDevProcesses(processes);
+  printFindings(findings, advisories);
   if (run) await killFindings(findings);
 }
 

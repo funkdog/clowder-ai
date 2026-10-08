@@ -20,6 +20,7 @@ function mockExecFile(pages) {
   const calls = [];
   const fn = async (_file, args, opts) => {
     calls.push({ args, opts });
+    if (/\/comments\/\d+$/.test(args[1])) throw new Error('HTTP 404 Not Found');
     const pageData = pages[callCount++] ?? [];
     const stdout = pageData.map((item) => JSON.stringify(item)).join('\n');
     return { stdout: stdout || '' };
@@ -123,6 +124,7 @@ describe('fetchPaginated', () => {
       const items = await fetchPaginated('/repos/o/r/issues/1/comments', { execFileAsync: fn });
 
       assert.equal(items.length, 1);
+      assert.equal(calls()[0].opts.windowsHide, true);
       assert.equal(calls()[0].opts.env.GITHUB_TOKEN, undefined);
       assert.equal(calls()[0].opts.env.GH_TOKEN, undefined);
       assert.equal(process.env.GITHUB_TOKEN, 'ambient-token-that-gh-must-not-see');

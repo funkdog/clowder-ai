@@ -83,7 +83,18 @@ describe('ThreadSidebar ✨ organize flow', () => {
   });
 
   function findOrganizeButton(container: HTMLElement) {
-    return Array.from(container.querySelectorAll('button')).find((b) => b.getAttribute('title') === '猫猫帮你分类');
+    return Array.from(container.querySelectorAll('button')).find((b) =>
+      b.getAttribute('title')?.startsWith('猫猫帮你分类'),
+    );
+  }
+
+  function labelPatchCalls(): Array<[string, string[]]> {
+    return mockApiFetch.mock.calls.flatMap(([path, init]) => {
+      if (typeof path !== 'string' || !path.startsWith('/api/threads/') || init?.method !== 'PATCH') return [];
+      const body = JSON.parse(String(init.body)) as { labels?: string[] };
+      if (!body.labels) return [];
+      return [[path.slice('/api/threads/'.length), body.labels] as [string, string[]]];
+    });
   }
 
   it('✨ button opens organizer modal, pre-fills from SUGGESTIONS_JSON, and apply sends filtered payload', async () => {
@@ -120,7 +131,7 @@ describe('ThreadSidebar ✨ organize flow', () => {
         }
         return jsonOk({ messages: [] });
       }
-      if (path === '/api/threads') {
+      if (path === '/api/threads?view=sidebar') {
         return jsonOk({ threads: [...uncatThreads, catThread, ORGANIZER_THREAD] });
       }
       return defaultSidebarApiMock(path);
@@ -172,10 +183,8 @@ describe('ThreadSidebar ✨ organize flow', () => {
     });
     await harness.flush();
 
-    const updateFn = mockStore.updateThreadLabels as ReturnType<typeof vi.fn>;
-    expect(updateFn).toHaveBeenCalledTimes(2);
-
-    const calls = updateFn.mock.calls.map((c) => [c[0] as string, c[1] as string[]]);
+    const calls = labelPatchCalls();
+    expect(calls).toHaveLength(2);
     calls.sort((a, b) => (a[0] as string).localeCompare(b[0] as string));
     expect(calls).toEqual([
       ['t1', ['lbl-a']],
@@ -214,7 +223,7 @@ describe('ThreadSidebar ✨ organize flow', () => {
         if (pollCount <= 2) return jsonOk({ messages: [noJsonMessage] });
         return jsonOk({ messages: [noJsonMessage, jsonMessage] });
       }
-      if (path === '/api/threads') return jsonOk({ threads: [...uncatThreads, ORGANIZER_THREAD] });
+      if (path === '/api/threads?view=sidebar') return jsonOk({ threads: [...uncatThreads, ORGANIZER_THREAD] });
       return defaultSidebarApiMock(path);
     });
 
@@ -300,7 +309,7 @@ describe('ThreadSidebar ✨ organize flow', () => {
         if (pollCount >= 2) return jsonOk({ messages: [catMessage] });
         return jsonOk({ messages: [] });
       }
-      if (path === '/api/threads') return jsonOk({ threads: [...uncatThreads, ORGANIZER_THREAD] });
+      if (path === '/api/threads?view=sidebar') return jsonOk({ threads: [...uncatThreads, ORGANIZER_THREAD] });
       return defaultSidebarApiMock(path);
     });
 
@@ -346,9 +355,8 @@ describe('ThreadSidebar ✨ organize flow', () => {
     expect(createLabelMock).toHaveBeenCalledWith('开发', '#5B8C5A');
     expect(createLabelMock).toHaveBeenCalledWith('闲聊', '#C47F52');
 
-    const updateFn = mockStore.updateThreadLabels as ReturnType<typeof vi.fn>;
-    expect(updateFn).toHaveBeenCalledTimes(2);
-    const calls = updateFn.mock.calls.map((c) => [c[0] as string, c[1] as string[]]);
+    const calls = labelPatchCalls();
+    expect(calls).toHaveLength(2);
     calls.sort((a, b) => (a[0] as string).localeCompare(b[0] as string));
     expect(calls).toEqual([
       ['t1', ['auto-1']],
@@ -410,7 +418,7 @@ describe('ThreadSidebar ✨ organize flow', () => {
         if (pollCount >= 2) return jsonOk({ messages: [catMessage] });
         return jsonOk({ messages: [] });
       }
-      if (path === '/api/threads') return jsonOk({ threads: [...uncatThreads, ORGANIZER_THREAD] });
+      if (path === '/api/threads?view=sidebar') return jsonOk({ threads: [...uncatThreads, ORGANIZER_THREAD] });
       return defaultSidebarApiMock(path);
     });
 
@@ -436,12 +444,10 @@ describe('ThreadSidebar ✨ organize flow', () => {
     }
     expect(harness.container.textContent).toContain('已选 2 个 thread');
 
-    // Find t1's thread row and click the "开发" label to deselect it
-    const threadRows = Array.from(harness.container.querySelectorAll('.border.rounded-lg'));
-    const t1Row = threadRows.find((row) => {
-      const title = row.querySelector('p');
-      return title?.textContent === 'Thread t1';
-    });
+    // Find t1's organizer row and click the "开发" label to deselect it
+    const modal = harness.container.querySelector('[data-testid="thread-organizer-modal"]') as HTMLElement | null;
+    expect(modal).toBeTruthy();
+    const t1Row = modal!.querySelector('[data-thread-id="t1"]');
     expect(t1Row).toBeTruthy();
     const devBtnInT1 = Array.from(t1Row!.querySelectorAll('button')).find((b) => b.textContent?.includes('开发'));
     expect(devBtnInT1).toBeTruthy();
@@ -466,9 +472,7 @@ describe('ThreadSidebar ✨ organize flow', () => {
     expect(createLabelMock).toHaveBeenCalledTimes(1);
     expect(createLabelMock).toHaveBeenCalledWith('闲聊', '#C47F52');
 
-    const updateFn = mockStore.updateThreadLabels as ReturnType<typeof vi.fn>;
-    expect(updateFn).toHaveBeenCalledTimes(1);
-    expect(updateFn).toHaveBeenCalledWith('t2', ['auto-1']);
+    expect(labelPatchCalls()).toEqual([['t2', ['auto-1']]]);
 
     (useLabelStore as unknown as LabelStoreExt).setState({ labels: testData.TEST_LABELS });
   });
@@ -483,9 +487,6 @@ describe('ThreadSidebar ✨ organize flow', () => {
 
     const uncatThreads = [makeThread('t1'), makeThread('t2')];
     mockStore.threads = [...uncatThreads];
-    const updateFn = mockStore.updateThreadLabels as ReturnType<typeof vi.fn>;
-    updateFn.mockClear();
-
     let labelIdCounter = 0;
     const createLabelMock = vi.fn().mockImplementation(async (name: string, color: string) => {
       const label = {
@@ -502,13 +503,8 @@ describe('ThreadSidebar ✨ organize flow', () => {
     });
     (useLabelStore as unknown as LabelStoreExt).setState({ createLabel: createLabelMock });
 
-    // First apply: t1 fails, t2 succeeds
-    let applyCallCount = 0;
-    updateFn.mockImplementation((threadId: string) => {
-      applyCallCount++;
-      if (threadId === 't1' && applyCallCount <= 2) return Promise.reject(new Error('network'));
-      return Promise.resolve(undefined);
-    });
+    // First apply: t1 fails, t2 succeeds.
+    let failT1Once = true;
 
     const suggestionsJson = JSON.stringify({
       newLabels: [
@@ -534,7 +530,11 @@ describe('ThreadSidebar ✨ organize flow', () => {
         if (pollCount >= 2) return jsonOk({ messages: [catMessage] });
         return jsonOk({ messages: [] });
       }
-      if (path === '/api/threads') return jsonOk({ threads: [...uncatThreads, ORGANIZER_THREAD] });
+      if (path === '/api/threads/t1' && init?.method === 'PATCH' && failT1Once) {
+        failT1Once = false;
+        return textFail(500, 'network');
+      }
+      if (path === '/api/threads?view=sidebar') return jsonOk({ threads: [...uncatThreads, ORGANIZER_THREAD] });
       return defaultSidebarApiMock(path);
     });
 
@@ -580,8 +580,7 @@ describe('ThreadSidebar ✨ organize flow', () => {
     );
     expect(retryBtn).toBeTruthy();
 
-    // Let retry succeed for all
-    updateFn.mockResolvedValue(undefined);
+    const callsBeforeRetry = labelPatchCalls().length;
 
     await act(async () => {
       retryBtn!.click();
@@ -591,10 +590,10 @@ describe('ThreadSidebar ✨ organize flow', () => {
     // Labels should NOT be created again (still 2 total)
     expect(createLabelMock).toHaveBeenCalledTimes(2);
 
-    // Retry must have called updateThreadLabels with real label IDs (auto-*), not pending:*
-    const retryCalls = updateFn.mock.calls.slice(2);
+    // Retry must PATCH real label IDs (auto-*), not pending:*.
+    const retryCalls = labelPatchCalls().slice(callsBeforeRetry);
     expect(retryCalls.length).toBeGreaterThan(0);
-    const retryCallMap = new Map(retryCalls.map((c: unknown[]) => [c[0] as string, c[1] as string[]]));
+    const retryCallMap = new Map(retryCalls);
     expect(retryCallMap.has('t1')).toBe(true);
     const t1Labels = retryCallMap.get('t1')!;
     expect(t1Labels[0]).toMatch(/^auto-/);
@@ -613,7 +612,7 @@ describe('ThreadSidebar ✨ organize flow', () => {
       if (path === '/api/messages' && init?.method === 'POST') {
         return textFail(500, 'send failed');
       }
-      if (path === '/api/threads') {
+      if (path === '/api/threads?view=sidebar') {
         return jsonOk({ threads: [makeThread('t1'), ORGANIZER_THREAD] });
       }
       return defaultSidebarApiMock(path);

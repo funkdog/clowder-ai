@@ -46,6 +46,7 @@
  */
 
 import { getBubbleInvocationId } from '@/debug/bubbleIdentity';
+import { retainPublicationOrigin, retainRichPublicationOrigins } from './bubble-publication-origins';
 import type { ChatMessage } from './chat-types';
 
 interface ProjectionInput {
@@ -169,6 +170,7 @@ function projectGroup(records: ChatMessage[]): ChatMessage {
   // cloud R2 P2 (codex): merge contentBlocks across records — stream may have
   // image/structured blocks that callback doesn't, dropping them = data loss.
   const contentBlocks: NonNullable<ChatMessage['contentBlocks']> = [];
+  const publicationOrigins: NonNullable<ChatMessage['projectionPublicationOrigins']> = {};
   let mentionsUser = false;
 
   for (const r of sorted) {
@@ -181,16 +183,22 @@ function projectGroup(records: ChatMessage[]): ChatMessage {
     if (r.thinking && r.thinking.trim().length > 0) thinkingParts.push(r.thinking);
     if (r.mentionsUser) mentionsUser = true;
     for (const ev of r.toolEvents ?? []) {
-      if (seenToolIds.has(ev.id)) continue;
-      seenToolIds.add(ev.id);
+      const toolEventKey = `${ev.type}:${ev.id}`;
+      if (seenToolIds.has(toolEventKey)) continue;
+      seenToolIds.add(toolEventKey);
       toolEvents.push(ev);
     }
     for (const b of r.extra?.rich?.blocks ?? []) {
       if (seenBlockIds.has(b.id)) continue;
       seenBlockIds.add(b.id);
       richBlocks.push(b);
+      retainRichPublicationOrigins(publicationOrigins, r, b);
     }
-    for (const block of r.contentBlocks ?? []) {
+    for (const [index, block] of (r.contentBlocks ?? []).entries()) {
+      retainPublicationOrigin(publicationOrigins, { kind: 'content-block', index: contentBlocks.length }, r, {
+        kind: 'content-block',
+        index,
+      });
       contentBlocks.push(block);
     }
   }
@@ -231,9 +239,14 @@ function projectGroup(records: ChatMessage[]): ChatMessage {
       : undefined;
   const projectedContent = contentParts.length > 0 ? contentParts.join('\n\n') : (staleR21SpeechContent ?? '');
 
+  const projectionSourceMessageIds = [
+    ...new Set(sorted.flatMap((record) => record.projectionSourceMessageIds ?? [record.id])),
+  ];
   const projected: ChatMessage = {
     ...base,
     id: canonicalId,
+    projectionSourceMessageIds,
+    ...(Object.keys(publicationOrigins).length ? { projectionPublicationOrigins: publicationOrigins } : {}),
     type: 'assistant',
     catId: first.catId,
     content: projectedContent,

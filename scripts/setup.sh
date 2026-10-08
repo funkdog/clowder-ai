@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ============================================================
-# Clowder AI / Clowder AI — Interactive Setup
+# Clowder AI — Interactive Setup
 # 猫猫咖啡交互式安装向导
 #
 # Usage: ./scripts/setup.sh [--install-missing] [--npm-registry=URL] [--pip-index-url=URL] [--pip-extra-index-url=URL] [--hf-endpoint=URL]
@@ -283,6 +283,49 @@ else
 fi
 echo ""
 
+# ── Resolve ASR default model (after all interactive prompts) ──
+# MLX requires BOTH arm64 hardware AND arm64 Python (#1061).
+# We source the CANONICAL Python resolver (python-resolve.sh) and run the
+# complete no-download probe chain -- the same resolution order the
+# installer uses. This runs after the user committed to features, so no
+# wasted work; and before .env generation, so the model is determined
+# when we write it.
+#
+# Probe order mirrors resolve_python_312 exactly (minus _install_project_python
+# which downloads):
+#   1. _try_system_pythons  (python3.13, python3.12, python3, ...)
+#   2. _try_uv              (if user has uv)
+#   3. _try_pyenv           (if user has pyenv)
+#   4. _try_brew            (macOS Homebrew)
+#   5. _try_project_python  (cached ~/.cat-cafe/python/)
+#   6. _try_legacy_project_python (pre-move cache at ~/.cat-cafe/python)
+# If none finds 3.12+, installer will download via _pbs_target_triple
+# (sysctl-based → arm64 on Apple Silicon).
+if [ "$ENABLE_ASR" = true ]; then
+    _setup_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    ASR_DEFAULT_MODEL="large-v3-turbo"  # safe default
+    if [ "$(uname -s)" = "Darwin" ] && sysctl -n hw.optional.arm64 2>/dev/null | grep -q '^1$'; then
+        # Apple Silicon -- resolve Python to match installer's truth source.
+        source "$_setup_script_dir/services/python-resolve.sh"
+        if _try_system_pythons 2>/dev/null; then
+            _py_arch="$RESOLVED_PYTHON_ARCH"
+        elif _try_uv 2>/dev/null || _try_pyenv 2>/dev/null || _try_brew 2>/dev/null; then
+            _py_arch="$RESOLVED_PYTHON_ARCH"
+        elif _try_project_python 2>/dev/null || _try_legacy_project_python 2>/dev/null; then
+            # Cached project-local Python (may be x86_64 from a prior
+            # Rosetta install). Installer will reuse this, not bootstrap.
+            _py_arch="$RESOLVED_PYTHON_ARCH"
+        else
+            # No Python 3.12+ anywhere. Installer will download via
+            # _pbs_target_triple (sysctl-based → arm64 on Apple Silicon).
+            _py_arch="arm64"
+        fi
+        if [ "$_py_arch" = "arm64" ] || [ "$_py_arch" = "aarch64" ]; then
+            ASR_DEFAULT_MODEL="mlx-community/Qwen3-ASR-1.7B-8bit"
+        fi
+    fi
+fi
+
 # ── Step 4: Generate .env ───────────────────────────────────
 
 echo -e "${CYAN}[4/5] Generating .env / 生成配置文件...${NC}"
@@ -317,6 +360,7 @@ if [ "$ENABLE_ASR" = true ]; then
 
 # ── Voice Input (ASR) 语音输入 ───────────────────────────────
 ASR_ENABLED=1
+WHISPER_MODEL=${ASR_DEFAULT_MODEL}
 WHISPER_URL=http://localhost:9876
 NEXT_PUBLIC_WHISPER_URL=http://localhost:9876
 ENVEOF
@@ -334,7 +378,6 @@ if [ "$ENABLE_TTS" = true ]; then
 # ── Voice Output (TTS) 语音输出 ──────────────────────────────
 TTS_ENABLED=1
 TTS_URL=http://localhost:9879
-TTS_CACHE_DIR=./data/tts-cache
 ENVEOF
 else
     cat >> "$ENV_FILE" <<ENVEOF
@@ -386,16 +429,16 @@ echo -e "  ${GREEN}✓${NC} $ENV_FILE generated"
 install_sidecar_venvs() {
     local venv_base="${HOME}/.cat-cafe"
 
-    # ASR venv
-    local asr_venv="$venv_base/asr-venv"
-    if [ ! -d "$asr_venv" ]; then
-        echo "  Creating ASR venv: $asr_venv ..."
-        python3 -m venv "$asr_venv"
-    else
-        echo "  Updating ASR venv: $asr_venv ..."
-    fi
-    "$asr_venv/bin/pip" install --quiet -U pip
-    "$asr_venv/bin/pip" install --quiet mlx-audio fastapi uvicorn python-multipart
+    # ASR venv — unified whisper-stt service (#863).
+    # Delegates to whisper-install.sh so deps, venv path, and model preload
+    # all go through the same pipeline as the UI-triggered install.
+    # Uses ASR_DEFAULT_MODEL (set during feature selection) so the installer
+    # and the generated .env use the exact same model value.
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    echo "  Installing ASR service (whisper-stt) via unified installer..."
+    WHISPER_MODEL="${ASR_DEFAULT_MODEL}" \
+      bash "$script_dir/services/whisper-install.sh"
 
     # TTS venv
     local tts_venv="$venv_base/tts-venv"
@@ -406,7 +449,7 @@ install_sidecar_venvs() {
         echo "  Updating TTS venv: $tts_venv ..."
     fi
     "$tts_venv/bin/pip" install --quiet -U pip
-    "$tts_venv/bin/pip" install --quiet mlx-audio 'misaki[zh]' fastapi uvicorn 'httpx[socks]' num2words spacy phonemizer
+    "$tts_venv/bin/pip" install --quiet 'mlx-audio>=0.4.7' 'misaki[zh]' fastapi uvicorn 'httpx[socks]' num2words spacy phonemizer
 
     # LLM post-processing venv
     local llm_venv="$venv_base/llm-venv"
@@ -469,8 +512,8 @@ if [ "$HAS_REDIS" = true ]; then
     echo "    2. Start: pnpm start"
     echo "       启动: pnpm start"
 else
-    echo "    2. Start (no Redis): pnpm start --memory"
-    echo "       启动（无 Redis）: pnpm start --memory"
+    echo "    2. Start (no Redis): pnpm start -- --memory"
+    echo "       启动（无 Redis）: pnpm start -- --memory"
 fi
 echo ""
 echo "    3. Open http://localhost:3003"

@@ -7,33 +7,93 @@
  * Import from '@cat-cafe/shared/utils' instead.
  */
 
+// F246 Phase I: shared Approval Hub producer metadata (API + Web single source).
+export * from './approval-producer-catalog.js';
 // Export avatar size limits (shared between API route bodyLimit and frontend size gate)
 export * from './avatar-limits.js';
+// Export capability tips telemetry pipeline schemas (F268)
+export * from './capability-tip-telemetry.js';
 // Export capability tips contract (F244 waiting-state Knowledge Feed projection)
 export * from './capability-tips.js';
 // Export shared CLI effort helpers
 export * from './cli-effort.js';
+export * from './cli-tool-label.js';
+// F291: OAuth Codex Standard/Fast semantic contract
+export * from './codex-speed.js';
+export * from './collective-participation-scope.js';
+export * from './collective-work-assignment.js';
 // Export command parser + core commands (F142 Phase B)
 export { parseCommand } from './command-parser.js';
-export type { CodexPetState, PetStateProjection } from './concierge/pet-skin-projection.js';
-// Export PetSkinContract projection (F229 Phase E0 + E1)
+export * from './concierge/companion-identity.js';
+export type {
+  AutonomousPetState,
+  CodexPetState,
+  PetBehaviorOutput,
+  PetStateProjection,
+} from './concierge/pet-skin-projection.js';
+// Export PetSkinContract projection (F229 Phase E0 + E1 + E4)
 export {
   PET_STATE_PROJECTION_V0,
   PET_STATE_PROJECTION_V1,
   projectToPetState,
 } from './concierge/pet-skin-projection.js';
+// #1343: Context window catalog (API Auto-mode fallback + Web draft preview)
+export * from './context-window-catalog.js';
 export { CORE_COMMANDS } from './core-commands.js';
+// Export Eval Hub metric reference normalization (F248 B3)
+export * from './eval-metric-ref.js';
+// First-party WebSocket Stop intent contract (API + Web single source).
+export * from './explicit-stop-intent.js';
+// Export shared text helpers
+export * from './markdown-readable-text.js';
+export type { MessageSearchInput, MessageSearchResponse, MessageSearchResult } from './message-search.js';
+// Browser Preview Gateway request identity shared by API and Web.
+export * from './preview-gateway.js';
+export * from './preview-visible-page-admission.js';
+export * from './provider-semantic-projection.js';
+// Export recall-result sidecar contract (producer → parser → persistence → UI)
+export * from './recall-outcome.js';
 // Dossier profile parser: import from '@cat-cafe/shared/dossier' (F208 KD-10)
 // NOT re-exported here — uses Node.js fs, same pattern as Redis utils.
 // Export registry (CatRegistry, catIdSchema, assertKnownCatId)
 export * from './registry/index.js';
+export * from './runtime-question-retirement.js';
 // Export all schemas
 export * from './schemas/index.js';
 // Export shared source-code extension helpers (F232 artifact classification + preview)
 export * from './source-code-extensions.js';
-// Export shared text helpers
 export * from './text-utils.js';
+export * from './types/artifact-review.js';
+export * from './types/artifact-review-drawing.js';
+// F255 runtime schemas are exported directly while their source remains grouped
+// with shared types; API and MCP must validate the same owner-free settlement shape.
+export * from './types/auto-dream.js';
+export * from './types/collective-appearance-bridge.js';
+export * from './types/collective-collaboration.js';
+export * from './types/collective-context-bridge.js';
+export * from './types/collective-members.js';
+export * from './types/collective-participation.js';
+export * from './types/collective-work.js';
+export * from './types/collective-work-acceptance.js';
+export * from './types/collective-work-matter.js';
+export * from './types/collective-work-policy.js';
+export * from './types/content-modification.js';
+export * from './types/content-modification-control.js';
+export * from './types/content-modification-view.js';
+export * from './types/deployment-wait.js';
+export * from './types/evolution-media-source.js';
+// F167 direct carriers expose only action identities backed by terminal producers.
+export * from './types/executable-action-successor.js';
+// F300: refs-only home-state contract (self facet + side-effect assessment).
+export * from './types/home-state.js';
 // Export all types
 export * from './types/index.js';
+// F314: one accepted-source contract shared by API persistence and MCP producers.
+export * from './types/local-review.js';
+export * from './types/media-publication-source.js';
+// F287 bounded opportunity/cue contract (kept explicit for API/MCP consumers).
+export * from './types/memory-cue.js';
+export * from './types/message-publication-landing.js';
+export * from './types/workspace-content-review.js';
 // Export subject key utilities (#320)
 export * from './utils/subject-key.js';

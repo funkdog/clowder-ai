@@ -12,7 +12,10 @@ type TestMessage = {
   isStreaming?: boolean;
   timestamp: number;
   toolEvents?: Array<{ id: string; type: string; label: string; timestamp: number }>;
-  extra?: { stream?: { invocationId: string } };
+  extra?: {
+    stream?: { invocationId: string; turnInvocationId?: string };
+    rich?: { v: 1; blocks: Array<{ id: string; kind: string; data: Record<string, unknown> }> };
+  };
 };
 
 const mockAddMessage = vi.fn();
@@ -31,6 +34,11 @@ const mockClearAllActiveInvocations = vi.fn();
 const mockSetCatInvocation = vi.fn();
 const mockSetMessageUsage = vi.fn();
 const mockRequestStreamCatchUp = vi.fn();
+const mockReplaceMessageId = vi.fn((fromId: string, toId: string) => {
+  storeState.messages = storeState.messages.map((message) =>
+    message.id === fromId ? { ...message, id: toId } : message,
+  );
+});
 
 const mockAddMessageToThread = vi.fn();
 const mockClearThreadActiveInvocation = vi.fn();
@@ -59,6 +67,7 @@ const storeState = {
   setCatInvocation: mockSetCatInvocation,
   setMessageUsage: mockSetMessageUsage,
   requestStreamCatchUp: mockRequestStreamCatchUp,
+  replaceMessageId: mockReplaceMessageId,
 
   addMessageToThread: mockAddMessageToThread,
   replaceMessages: mockReplaceMessages,
@@ -119,6 +128,7 @@ describe('useAgentMessages stream catch-up (Bug C safety net)', () => {
     mockSetCatInvocation.mockClear();
     mockSetMessageUsage.mockClear();
     mockRequestStreamCatchUp.mockClear();
+    mockReplaceMessageId.mockClear();
 
     mockAddMessageToThread.mockClear();
     mockClearThreadActiveInvocation.mockClear();
@@ -198,6 +208,60 @@ describe('useAgentMessages stream catch-up (Bug C safety net)', () => {
     expect(mockRequestStreamCatchUp).not.toHaveBeenCalled();
   });
 
+  it('rekeys a just-finished rich stream bubble to the persisted message ID before export', () => {
+    const invocationId = 'inv-live-export';
+    const liveMessageId = `msg-${invocationId}-codex-sol`;
+    const persistedMessageId = '0001787627568323-000165-cbd75f35';
+    storeState.messages = [
+      {
+        id: liveMessageId,
+        type: 'assistant',
+        catId: 'codex-sol',
+        content: 'response body',
+        origin: 'stream',
+        isStreaming: true,
+        timestamp: Date.now(),
+        extra: {
+          stream: { invocationId },
+          rich: {
+            v: 1,
+            blocks: [{ id: 'widget-1', kind: 'html_widget', data: { title: 'responsive artifact' } }],
+          },
+        },
+      },
+    ];
+    storeState.activeInvocations = { [invocationId]: { catId: 'codex-sol' } };
+
+    act(() => {
+      root.render(React.createElement(Harness));
+    });
+
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'done',
+        catId: 'codex-sol',
+        threadId: 'thread-1',
+        invocationId,
+        messageId: persistedMessageId,
+        isFinal: true,
+      });
+    });
+
+    expect(mockReplaceMessageId).toHaveBeenCalledWith(liveMessageId, persistedMessageId);
+    expect(storeState.messages).toEqual([
+      expect.objectContaining({
+        id: persistedMessageId,
+        content: 'response body',
+        extra: expect.objectContaining({
+          rich: expect.objectContaining({
+            blocks: [expect.objectContaining({ id: 'widget-1', kind: 'html_widget' })],
+          }),
+        }),
+      }),
+    ]);
+    expect(mockRequestStreamCatchUp).not.toHaveBeenCalled();
+  });
+
   it('requests catch-up when done(isFinal) only has an empty CLI/tool bubble', () => {
     storeState.messages = [
       {
@@ -227,6 +291,55 @@ describe('useAgentMessages stream catch-up (Bug C safety net)', () => {
     });
 
     expect(mockRequestStreamCatchUp).toHaveBeenCalledWith('thread-1');
+  });
+
+  it('requests catch-up when final done leaves a still-streaming same-parent local tool-only residue', () => {
+    storeState.messages = [
+      {
+        id: 'msg-turn-main-codex',
+        type: 'assistant',
+        catId: 'codex',
+        content: 'final text bubble that received the assistant speech',
+        origin: 'stream',
+        isStreaming: true,
+        timestamp: Date.now(),
+        toolEvents: [
+          { id: 'tool-main-1', type: 'tool_use', label: 'codex -> command_execution', timestamp: Date.now() },
+        ],
+        extra: { stream: { invocationId: 'parent-inv', turnInvocationId: 'turn-main' } },
+      },
+      {
+        id: 'msg-turn-residue-codex',
+        type: 'assistant',
+        catId: 'codex',
+        content: '',
+        origin: 'stream',
+        isStreaming: true,
+        timestamp: Date.now() + 1,
+        toolEvents: [
+          { id: 'tool-residue-1', type: 'tool_use', label: 'codex -> command_execution', timestamp: Date.now() + 1 },
+        ],
+        extra: { stream: { invocationId: 'parent-inv', turnInvocationId: 'turn-residue' } },
+      },
+    ];
+
+    act(() => {
+      root.render(React.createElement(Harness));
+    });
+
+    act(() => {
+      captured?.handleAgentMessage({
+        type: 'done',
+        catId: 'codex',
+        invocationId: 'parent-inv',
+        turnInvocationId: 'turn-main',
+        isFinal: true,
+        threadId: 'thread-1',
+      });
+    });
+
+    expect(mockRequestStreamCatchUp).toHaveBeenCalledWith('thread-1');
+    expect(storeState.messages.find((message) => message.id === 'msg-turn-residue-codex')?.isStreaming).toBe(false);
   });
 
   it('does NOT request catch-up when non-final done has an empty CLI/tool bubble', () => {

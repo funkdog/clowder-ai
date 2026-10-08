@@ -1,12 +1,12 @@
+import { resolveEffectiveOpenCodeModel } from '../../../../../config/opencode-model.js';
 import {
   deriveOpenCodeApiType,
   OC_API_KEY_ENV,
   OC_BASE_URL_ENV,
   type OpenCodeRuntimeConfigDebugSummary,
-  parseOpenCodeModel,
   summarizeOpenCodeRuntimeConfigForDebug,
-  writeOpenCodeRuntimeConfig,
 } from './opencode-config-template.js';
+import { writeOpenCodeRuntimeConfig } from './opencode-config-writer.js';
 
 export interface OpenCodeAcpSpawnAccount {
   id: string;
@@ -14,6 +14,7 @@ export interface OpenCodeAcpSpawnAccount {
   apiKey?: string;
   baseUrl?: string;
   models?: readonly string[];
+  modelAliases?: Readonly<Record<string, string>>;
 }
 
 export interface OpenCodeAcpSpawnConfigOptions {
@@ -40,35 +41,6 @@ function isOpenCodeAcpTarget(clientId: string): boolean {
   return clientId === 'opencode';
 }
 
-function resolveEffectiveOpenCodeModel(
-  providerName: string | null | undefined,
-  defaultModel: string | null | undefined,
-): { providerName: string; model: string } | null {
-  const modelProviderName = providerName?.trim() || undefined;
-  const trimmedDefaultModel = defaultModel?.trim() || undefined;
-  if (!trimmedDefaultModel) return null;
-
-  const parsed = parseOpenCodeModel(trimmedDefaultModel);
-  if (parsed) {
-    if (modelProviderName && parsed.providerName !== modelProviderName) {
-      return {
-        providerName: modelProviderName,
-        model: `${modelProviderName}/${trimmedDefaultModel}`,
-      };
-    }
-    return {
-      providerName: modelProviderName ?? parsed.providerName,
-      model: trimmedDefaultModel,
-    };
-  }
-
-  if (!modelProviderName) return null;
-  return {
-    providerName: modelProviderName,
-    model: `${modelProviderName}/${trimmedDefaultModel}`,
-  };
-}
-
 /**
  * Build the spawn-scoped OpenCode runtime config used by `opencode acp`.
  *
@@ -76,9 +48,9 @@ function resolveEffectiveOpenCodeModel(
  * intentionally excludes per-invocation instructions/MCP and only pins provider,
  * model, and credentials at process spawn time.
  */
-export function prepareOpenCodeAcpSpawnConfig(
+export async function prepareOpenCodeAcpSpawnConfig(
   options: OpenCodeAcpSpawnConfigOptions,
-): PreparedOpenCodeAcpSpawnConfig | null {
+): Promise<PreparedOpenCodeAcpSpawnConfig | null> {
   if (!isOpenCodeAcpTarget(options.clientId)) return null;
 
   const effective = resolveEffectiveOpenCodeModel(options.providerName, options.defaultModel);
@@ -92,13 +64,14 @@ export function prepareOpenCodeAcpSpawnConfig(
   const runtimeConfigOptions = {
     providerName: effective.providerName,
     models: account?.models?.length ? account.models : [effective.model],
+    ...(account?.modelAliases ? { modelAliases: account.modelAliases } : {}),
     defaultModel: effective.model,
     apiType: deriveOpenCodeApiType(effective.providerName),
     hasBaseUrl: Boolean(account?.baseUrl),
     omitProviderAuth: account?.authType !== 'api_key',
   } as const;
 
-  const configPath = writeOpenCodeRuntimeConfig(
+  const configPath = await writeOpenCodeRuntimeConfig(
     options.projectRoot,
     options.profileId,
     'acp-pool',

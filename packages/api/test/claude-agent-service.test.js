@@ -5,12 +5,23 @@
 
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { mock, test } from 'node:test';
 import { ensureFakeCliOnPath } from './helpers/fake-cli-path.js';
+import { emitProcessExit, waitForMockProcessReady } from './helpers/mock-process-lifecycle.js';
+import { emitEvents as emitClaudeEvents } from './helpers/provider-archive-test-helpers.js';
 
 const { ClaudeAgentService, pickGitBashPathFromWhere, resolveDefaultClaudeMcpServerPath } = await import(
   '../dist/domains/cats/services/agents/providers/ClaudeAgentService.js'
@@ -73,23 +84,6 @@ function createMockSpawnFn(proc) {
   return mock.fn(() => proc);
 }
 
-function emitProcessExit(proc, code, signal = null) {
-  process.nextTick(() => {
-    proc._emitter.emit('exit', code, signal);
-  });
-}
-
-/** Write NDJSON events to mock process stdout, then end with exit 0 */
-function emitClaudeEvents(proc, events) {
-  for (const event of events) {
-    proc.stdout.write(`${JSON.stringify(event)}\n`);
-  }
-  proc.stdout.once('finish', () => {
-    emitProcessExit(proc, 0, null);
-  });
-  proc.stdout.end();
-}
-
 /** Fake L0 compiler: records the call + writes content to outPath. */
 function buildFakeL0Compiler(content = 'COMPILED-L0-FOR-CAT') {
   const fn = async ({ catId, outPath }) => {
@@ -103,6 +97,15 @@ function buildFakeL0Compiler(content = 'COMPILED-L0-FOR-CAT') {
 
 function createClaudeAgentService(options = {}) {
   return new ClaudeAgentService({ l0CompilerFn: buildFakeL0Compiler(), ...options });
+}
+
+function writeCapabilitiesConfig(projectRoot, capabilities) {
+  mkdirSync(join(projectRoot, '.cat-cafe'), { recursive: true });
+  writeFileSync(
+    join(projectRoot, '.cat-cafe', 'capabilities.json'),
+    JSON.stringify({ version: 1, capabilities }),
+    'utf8',
+  );
 }
 
 // --- Test cases ---
@@ -119,7 +122,7 @@ test('F203 AC-C5: -p carrier passes --system-prompt-file with compiled L0 path',
   });
 
   const promise = collect(service.invoke('hi'));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   assert.equal(l0CompilerFn.calls.length, 1);
@@ -147,7 +150,7 @@ test('F203 AC-C5: -p carrier removes compiled L0 temp dir after success', async 
   });
 
   const promise = collect(service.invoke('hi'));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const l0Path = l0CompilerFn.calls[0].outPath;
@@ -193,7 +196,7 @@ test('#840: long systemPrompt is passed via --append-system-prompt-file, not inl
   const longPayload = `## pack briefing\n${'C:\\Users\\Administrator\\claude\\projects\\D--clowder-ai-packages-api\\memory\\MEMORY.md\n'.repeat(500)}`;
 
   const promise = collect(service.invoke('hi', { systemPrompt: longPayload }));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -231,7 +234,7 @@ test('#840: append-system-prompt temp file is removed after successful invocatio
   });
 
   const promise = collect(service.invoke('hi', { systemPrompt: 'short pack' }));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -253,7 +256,7 @@ test('#840: empty systemPrompt does not produce any append-system-prompt flag', 
   });
 
   const promise = collect(service.invoke('hi'));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -362,7 +365,7 @@ test('F203 AC-C5: -p carrier removes compiled L0 temp dir after CLI failure', as
   const promise = collect(service.invoke('crash'));
   proc.stderr.write('Error: authentication failed\n');
   proc.stdout.end();
-  emitProcessExit(proc, 1, null);
+  await emitProcessExit(proc, 1, null);
   await promise;
 
   const l0Path = l0CompilerFn.calls[0].outPath;
@@ -392,7 +395,7 @@ test('F203 AC-C5: cliConfigArgs cannot override reserved Claude system prompt fl
       ],
     }),
   );
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -415,7 +418,7 @@ test('yields session_init, text, and done on basic success', async () => {
 
   const promise = collect(service.invoke('Hello'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'init', session_id: 'sess-abc' },
     { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi!' }] } },
     { type: 'result', subtype: 'success', session_id: 'sess-abc' },
@@ -438,7 +441,7 @@ test('handles tool_use content blocks', async () => {
 
   const promise = collect(service.invoke('read file'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'init', session_id: 's1' },
     {
       type: 'assistant',
@@ -470,7 +473,7 @@ test('handles mixed text and tool_use in single assistant message', async () => 
 
   const promise = collect(service.invoke('do stuff'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     {
       type: 'assistant',
       message: {
@@ -502,7 +505,7 @@ test('passes --resume flag when sessionId is provided', async () => {
   const service = createClaudeAgentService({ spawnFn });
 
   const promise = collect(service.invoke('continue', { sessionId: 'resume-123' }));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -516,7 +519,7 @@ test('does not include --resume when no sessionId', async () => {
   const service = createClaudeAgentService({ spawnFn });
 
   const promise = collect(service.invoke('hello'));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -529,7 +532,7 @@ test('passes cwd from workingDirectory option', async () => {
   const service = createClaudeAgentService({ spawnFn });
 
   const promise = collect(service.invoke('hi', { workingDirectory: '/my/project' }));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const spawnOpts = spawnFn.mock.calls[0].arguments[2];
@@ -556,7 +559,7 @@ test('preserves inherited Anthropic credentials when no profile mode override is
         },
       }),
     );
-    emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+    await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
     await promise;
 
     const spawnOpts = spawnFn.mock.calls[0].arguments[2];
@@ -591,7 +594,7 @@ test('F062: subscription profile clears inherited ANTHROPIC env vars', async () 
         },
       }),
     );
-    emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+    await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
     await promise;
 
     const spawnOpts = spawnFn.mock.calls[0].arguments[2];
@@ -624,7 +627,7 @@ test('#883: subscription profile clears ANTHROPIC_AUTH_TOKEN to prevent proxy be
         },
       }),
     );
-    emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+    await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
     await promise;
 
     const spawnOpts = spawnFn.mock.calls[0].arguments[2];
@@ -655,7 +658,7 @@ test('#883: subscription deny-list survives accountEnv merge (proxy token in acc
       },
     }),
   );
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const spawnOpts = spawnFn.mock.calls[0].arguments[2];
@@ -694,7 +697,7 @@ test('F062: api_key profile injects ANTHROPIC_API_KEY and ANTHROPIC_BASE_URL', a
         },
       }),
     );
-    emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+    await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
     await promise;
 
     const spawnOpts = spawnFn.mock.calls[0].arguments[2];
@@ -745,12 +748,41 @@ test('yields error on result/error event', async () => {
 
   const promise = collect(service.invoke('bad'));
 
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'error', errors: ['rate limited', 'try again'] }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'error', errors: ['rate limited', 'try again'] }]);
 
   const msgs = await promise;
   const errMsg = msgs.find((m) => m.type === 'error');
   assert.ok(errMsg);
   assert.equal(errMsg.error, 'rate limited; try again');
+});
+
+test('synthetic assistant provider payload yields structured error and no cat text', async () => {
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({ spawnFn });
+  const providerError = 'API Error: upstream response — P1: provider-supplied diagnostic';
+
+  const promise = collect(service.invoke('provider error'));
+
+  await emitClaudeEvents(proc, [
+    {
+      type: 'assistant',
+      message: {
+        id: 'msg-synthetic-provider-error',
+        model: '<synthetic>',
+        content: [{ type: 'text', text: providerError }],
+      },
+    },
+  ]);
+
+  const msgs = await promise;
+  const errors = msgs.filter((message) => message.type === 'error');
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].error, providerError);
+  assert.equal(
+    msgs.some((message) => message.type === 'text'),
+    false,
+  );
 });
 
 test('yields error on CLI non-zero exit', async () => {
@@ -764,7 +796,7 @@ test('yields error on CLI non-zero exit', async () => {
 
   proc.stderr.write('Error: authentication failed\n');
   proc.stdout.end();
-  emitProcessExit(proc, 1, null);
+  await emitProcessExit(proc, 1, null);
 
   const msgs = await promise;
   const errMsg = msgs.find((m) => m.type === 'error');
@@ -787,7 +819,7 @@ test('yields actionable rescue hint on invalid thinking signature resume failure
     'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: Invalid `signature` in `thinking` block"}}\n',
   );
   proc.stdout.end();
-  emitProcessExit(proc, 1, null);
+  await emitProcessExit(proc, 1, null);
 
   const msgs = await promise;
   const errMsg = msgs.find((m) => m.type === 'error');
@@ -815,7 +847,7 @@ test('does not duplicate error when result/error is followed by non-zero exit', 
   );
   proc.stderr.write('rate limited\n');
   proc.stdout.end();
-  emitProcessExit(proc, 1, null);
+  await emitProcessExit(proc, 1, null);
 
   const msgs = await promise;
   const errors = msgs.filter((m) => m.type === 'error');
@@ -833,7 +865,7 @@ test('includes exit signal in CLI error message when no exit code (stderr saniti
 
   proc.stderr.write('killed by supervisor\n');
   proc.stdout.end();
-  emitProcessExit(proc, null, 'SIGKILL');
+  await emitProcessExit(proc, null, 'SIGKILL');
 
   const msgs = await promise;
   const errMsg = msgs.find((m) => m.type === 'error');
@@ -852,13 +884,12 @@ test('yields error on spawn ENOENT', async () => {
 
   const promise = collect(service.invoke('hi'));
 
-  process.nextTick(() => {
-    const err = new Error('spawn claude ENOENT');
-    err.code = 'ENOENT';
-    proc._emitter.emit('error', err);
-    proc.stdout.end();
-    emitProcessExit(proc, null, null);
-  });
+  await waitForMockProcessReady(proc);
+  const err = new Error('spawn claude ENOENT');
+  err.code = 'ENOENT';
+  proc._emitter.emit('error', err);
+  proc.stdout.end();
+  await emitProcessExit(proc, null, null);
 
   const msgs = await promise;
   const errMsg = msgs.find((m) => m.type === 'error');
@@ -873,7 +904,7 @@ test('ignores system/hook and unknown event types', async () => {
 
   const promise = collect(service.invoke('test'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'hook', hookId: 'h1' },
     { type: 'system', subtype: 'init', session_id: 'sid' },
     { type: 'unknown_type', data: 'something' },
@@ -901,7 +932,7 @@ test('all messages have catId opus', async () => {
 
   const promise = collect(service.invoke('check'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'init', session_id: 's1' },
     { type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } },
     { type: 'result', subtype: 'success' },
@@ -920,7 +951,7 @@ test('passes correct model flag (default and custom)', async () => {
   const service1 = createClaudeAgentService({ spawnFn: spawnFn1 });
 
   const p1 = collect(service1.invoke('hi'));
-  emitClaudeEvents(proc1, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc1, [{ type: 'result', subtype: 'success' }]);
   await p1;
 
   const args1 = spawnFn1.mock.calls[0].arguments[1];
@@ -935,7 +966,7 @@ test('passes correct model flag (default and custom)', async () => {
   const service2 = createClaudeAgentService({ spawnFn: spawnFn2, model: 'haiku' });
 
   const p2 = collect(service2.invoke('hi'));
-  emitClaudeEvents(proc2, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc2, [{ type: 'result', subtype: 'success' }]);
   await p2;
 
   const args2 = spawnFn2.mock.calls[0].arguments[1];
@@ -955,7 +986,7 @@ test('F32-b P1 regression: env var CAT_*_MODEL overrides default when model not 
     const service = createClaudeAgentService({ catId: 'opus', spawnFn });
 
     const p = collect(service.invoke('hi'));
-    emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+    await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
     await p;
 
     const args = spawnFn.mock.calls[0].arguments[1];
@@ -978,7 +1009,7 @@ test('passes --include-partial-messages flag for incremental stream-json output'
   const service = createClaudeAgentService({ spawnFn });
 
   const promise = collect(service.invoke('stream please'));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -992,7 +1023,7 @@ test('streams text deltas from stream_event without duplicating final assistant 
 
   const promise = collect(service.invoke('delta test'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'init', session_id: 'sid' },
     {
       type: 'stream_event',
@@ -1038,7 +1069,7 @@ test('does not pass --allowedTools — all tools available by default', async ()
   const service = createClaudeAgentService({ spawnFn });
 
   const promise = collect(service.invoke('hi'));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -1104,6 +1135,278 @@ test('returns undefined when no default MCP server candidate exists', () => {
   }
 });
 
+test('#712: merges user .mcp.json servers as base layer — managed entries take precedence', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'cat-cafe-claude-mcp-merge-'));
+  const mcpDistDir = join(root, 'packages', 'mcp-server', 'dist');
+  const projectDir = mkdtempSync(join(tmpdir(), 'cat-cafe-claude-project-'));
+  const previousAllowedWorkspaceDirs = process.env.ALLOWED_WORKSPACE_DIRS;
+  mkdirSync(mcpDistDir, { recursive: true });
+  writeFileSync(join(mcpDistDir, 'index.js'), '// stub', 'utf8');
+  for (const entry of ['collab.js', 'memory.js', 'signals.js', 'limb.js', 'finance.js']) {
+    writeFileSync(join(mcpDistDir, entry), '// stub', 'utf8');
+  }
+  // User .mcp.json with a custom server and a stale managed server
+  writeFileSync(
+    join(projectDir, '.mcp.json'),
+    JSON.stringify({
+      mcpServers: {
+        filesystem: { command: 'npx', args: ['-y', '@mcp/fs'] },
+        github: { type: 'http', url: 'https://api.githubcopilot.com/mcp/' },
+        'cat-cafe-collab': { command: 'echo', args: ['stale-should-be-ignored'] },
+      },
+    }),
+    'utf8',
+  );
+
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({
+    spawnFn,
+    model: 'claude-test-model',
+    mcpServerPath: join(mcpDistDir, 'index.js'),
+  });
+
+  try {
+    delete process.env.ALLOWED_WORKSPACE_DIRS;
+    const promise = collect(
+      service.invoke('hello', {
+        workingDirectory: projectDir,
+        callbackEnv: {
+          CAT_CAFE_API_URL: 'http://localhost:3004',
+          CAT_CAFE_INVOCATION_ID: 'inv-merge',
+          CAT_CAFE_CALLBACK_TOKEN: 'token-merge',
+        },
+      }),
+    );
+    await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+    await promise;
+
+    const args = spawnFn.mock.calls[0].arguments[1];
+    const mcpConfigIdx = args.indexOf('--mcp-config');
+    assert.ok(mcpConfigIdx >= 0, '--mcp-config should be present');
+    assert.ok(args.includes('--strict-mcp-config'), '--strict-mcp-config should be present');
+
+    const parsed = JSON.parse(args[mcpConfigIdx + 1]);
+    // User-owned server should be merged in
+    assert.ok(parsed.mcpServers.filesystem, 'user-owned filesystem should be merged');
+    assert.deepEqual(parsed.mcpServers.filesystem.args, ['-y', '@mcp/fs']);
+    assert.equal(parsed.mcpServers.github, undefined, 'retired GitHub MCP must not be merged');
+    // Managed split servers should be present
+    assert.ok(parsed.mcpServers['cat-cafe-collab'], 'managed cat-cafe-collab should be present');
+    // Stale user copy should NOT override managed entry
+    assert.notEqual(parsed.mcpServers['cat-cafe-collab'].command, 'echo', 'stale user entry must not override managed');
+    assert.equal(
+      parsed.mcpServers['cat-cafe-collab'].command,
+      process.execPath,
+      'managed entry should use the runtime Node executable',
+    );
+    assert.equal(
+      parsed.mcpServers['cat-cafe-collab'].env.ALLOWED_WORKSPACE_DIRS,
+      projectDir,
+      'managed split servers must receive the invocation workspace root',
+    );
+  } finally {
+    if (previousAllowedWorkspaceDirs === undefined) delete process.env.ALLOWED_WORKSPACE_DIRS;
+    else process.env.ALLOWED_WORKSPACE_DIRS = previousAllowedWorkspaceDirs;
+    rmSync(root, { recursive: true, force: true });
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test('#712: Claude reads capabilities from runtime root while cwd is user project', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-claude-runtime-root-'));
+  const mcpDistDir = join(runtimeRoot, 'packages', 'mcp-server', 'dist');
+  const projectDir = mkdtempSync(join(tmpdir(), 'cat-cafe-claude-cap-root-'));
+  mkdirSync(mcpDistDir, { recursive: true });
+  for (const entry of ['index.js', 'collab.js', 'memory.js', 'signals.js', 'limb.js', 'finance.js']) {
+    writeFileSync(join(mcpDistDir, entry), '// stub', 'utf8');
+  }
+  writeCapabilitiesConfig(runtimeRoot, [
+    {
+      id: 'cat-cafe-collab',
+      type: 'mcp',
+      globalEnabled: false,
+      source: 'cat-cafe',
+      mcpServer: { command: 'node', args: [] },
+    },
+    {
+      id: 'cat-cafe-memory',
+      type: 'mcp',
+      globalEnabled: true,
+      source: 'cat-cafe',
+      mcpServer: { command: 'node', args: [] },
+    },
+  ]);
+
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({
+    spawnFn,
+    model: 'claude-test-model',
+    mcpServerPath: join(mcpDistDir, 'index.js'),
+  });
+
+  try {
+    const promise = collect(
+      service.invoke('hello', {
+        workingDirectory: projectDir,
+        callbackEnv: {
+          CAT_CAFE_API_URL: 'http://localhost:3004',
+          CAT_CAFE_INVOCATION_ID: 'inv-cap-root',
+          CAT_CAFE_CALLBACK_TOKEN: 'token-cap-root',
+          CAT_CAFE_CAT_ID: 'opus',
+        },
+      }),
+    );
+    await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+    await promise;
+
+    const args = spawnFn.mock.calls[0].arguments[1];
+    const parsed = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
+    assert.equal(parsed.mcpServers['cat-cafe-collab'], undefined, 'disabled runtime capability must not be injected');
+    assert.ok(parsed.mcpServers['cat-cafe-memory'], 'enabled runtime capability must be injected');
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true });
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test('Claude MCP config resolves Pencil with the current editor host identifier', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-claude-pencil-runtime-'));
+  const mcpDistDir = join(runtimeRoot, 'packages', 'mcp-server', 'dist');
+  const projectDir = mkdtempSync(join(tmpdir(), 'cat-cafe-claude-pencil-project-'));
+  const pencilBin = join(projectDir, 'mock-pencil-mcp-server');
+  const previousPencilBin = process.env.PENCIL_MCP_BIN;
+  const previousPencilApp = process.env.PENCIL_MCP_APP;
+  mkdirSync(mcpDistDir, { recursive: true });
+  for (const entry of ['index.js', 'collab.js', 'memory.js', 'signals.js', 'limb.js', 'finance.js']) {
+    writeFileSync(join(mcpDistDir, entry), '// stub', 'utf8');
+  }
+  writeFileSync(pencilBin, '#!/bin/sh\necho "mock pencil"', 'utf8');
+  chmodSync(pencilBin, 0o755);
+  writeCapabilitiesConfig(runtimeRoot, [
+    {
+      id: 'pencil',
+      type: 'mcp',
+      globalEnabled: true,
+      source: 'external',
+      mcpServer: { resolver: 'pencil', command: '', args: [] },
+    },
+  ]);
+
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({
+    catId: 'fable-5',
+    spawnFn,
+    model: 'claude-test-model',
+    mcpServerPath: join(mcpDistDir, 'index.js'),
+  });
+
+  try {
+    process.env.PENCIL_MCP_BIN = pencilBin;
+    process.env.PENCIL_MCP_APP = 'vscode';
+    const promise = collect(
+      service.invoke('hello pencil', {
+        workingDirectory: projectDir,
+        callbackEnv: {
+          CAT_CAFE_API_URL: 'http://localhost:3004',
+          CAT_CAFE_INVOCATION_ID: 'inv-claude-pencil',
+          CAT_CAFE_CALLBACK_TOKEN: 'token-claude-pencil',
+          CAT_CAFE_CAT_ID: 'fable-5',
+        },
+      }),
+    );
+    await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+    await promise;
+
+    const args = spawnFn.mock.calls[0].arguments[1];
+    const parsed = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
+    assert.deepEqual(parsed.mcpServers.pencil, {
+      command: pencilBin,
+      args: ['--app', 'visual_studio_code'],
+    });
+  } finally {
+    if (previousPencilBin === undefined) delete process.env.PENCIL_MCP_BIN;
+    else process.env.PENCIL_MCP_BIN = previousPencilBin;
+    if (previousPencilApp === undefined) delete process.env.PENCIL_MCP_APP;
+    else process.env.PENCIL_MCP_APP = previousPencilApp;
+    rmSync(runtimeRoot, { recursive: true, force: true });
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
+test('#712: Claude merge excludes disabled capability-managed user entries', async () => {
+  const runtimeRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-claude-disabled-merge-runtime-'));
+  const mcpDistDir = join(runtimeRoot, 'packages', 'mcp-server', 'dist');
+  const projectDir = mkdtempSync(join(tmpdir(), 'cat-cafe-claude-disabled-merge-project-'));
+  mkdirSync(mcpDistDir, { recursive: true });
+  for (const entry of ['index.js', 'collab.js', 'memory.js', 'signals.js', 'limb.js', 'finance.js']) {
+    writeFileSync(join(mcpDistDir, entry), '// stub', 'utf8');
+  }
+  writeCapabilitiesConfig(runtimeRoot, [
+    {
+      id: 'filesystem',
+      type: 'mcp',
+      globalEnabled: false,
+      source: 'external',
+      mcpServer: { command: 'npx', args: ['-y', '@mcp/fs'] },
+    },
+    {
+      id: 'cat-cafe-memory',
+      type: 'mcp',
+      globalEnabled: true,
+      source: 'cat-cafe',
+      mcpServer: { command: 'node', args: [] },
+    },
+  ]);
+  writeFileSync(
+    join(projectDir, '.mcp.json'),
+    JSON.stringify({
+      mcpServers: {
+        filesystem: { command: 'npx', args: ['-y', '@mcp/fs-stale'] },
+        'cat-cafe': { command: 'node', args: ['legacy-monolith.js'] },
+        'my-tool': { command: 'node', args: ['tool.js'] },
+      },
+    }),
+    'utf8',
+  );
+
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({
+    spawnFn,
+    model: 'claude-test-model',
+    mcpServerPath: join(mcpDistDir, 'index.js'),
+  });
+
+  try {
+    const promise = collect(
+      service.invoke('hello', {
+        workingDirectory: projectDir,
+        callbackEnv: {
+          CAT_CAFE_API_URL: 'http://localhost:3004',
+          CAT_CAFE_INVOCATION_ID: 'inv-disabled-merge',
+          CAT_CAFE_CALLBACK_TOKEN: 'token-disabled-merge',
+          CAT_CAFE_CAT_ID: 'opus',
+        },
+      }),
+    );
+    await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+    await promise;
+
+    const args = spawnFn.mock.calls[0].arguments[1];
+    const parsed = JSON.parse(args[args.indexOf('--mcp-config') + 1]);
+    assert.equal(parsed.mcpServers.filesystem, undefined, 'disabled capability must not be re-added from .mcp.json');
+    assert.equal(parsed.mcpServers['cat-cafe'], undefined, 'legacy monolith alias must not be re-added from .mcp.json');
+    assert.ok(parsed.mcpServers['my-tool'], 'unmanaged user server should still be merged');
+    assert.ok(parsed.mcpServers['cat-cafe-memory'], 'enabled capability should still be injected');
+  } finally {
+    rmSync(runtimeRoot, { recursive: true, force: true });
+    rmSync(projectDir, { recursive: true, force: true });
+  }
+});
+
 test('falls back to default MCP path when CAT_CAFE_MCP_SERVER_PATH is empty', async () => {
   const root = mkdtempSync(join(tmpdir(), 'cat-cafe-mcp-empty-env-'));
   const apiCwd = join(root, 'packages', 'api');
@@ -1111,6 +1414,10 @@ test('falls back to default MCP path when CAT_CAFE_MCP_SERVER_PATH is empty', as
   mkdirSync(apiCwd, { recursive: true });
   mkdirSync(mcpDistDir, { recursive: true });
   writeFileSync(join(mcpDistDir, 'index.js'), 'export {};', 'utf8');
+  // #712: Create split entrypoint stubs so the fallback path resolves them
+  for (const entry of ['collab.js', 'memory.js', 'signals.js', 'limb.js', 'finance.js']) {
+    writeFileSync(join(mcpDistDir, entry), 'export {};', 'utf8');
+  }
 
   const previousCwd = process.cwd();
   const previousEnv = process.env.CAT_CAFE_MCP_SERVER_PATH;
@@ -1121,7 +1428,7 @@ test('falls back to default MCP path when CAT_CAFE_MCP_SERVER_PATH is empty', as
     process.chdir(apiCwd);
     process.env.CAT_CAFE_MCP_SERVER_PATH = '';
 
-    const service = createClaudeAgentService({ spawnFn });
+    const service = createClaudeAgentService({ spawnFn, model: 'claude-test-model' });
     const promise = collect(
       service.invoke('hello', {
         callbackEnv: {
@@ -1131,14 +1438,20 @@ test('falls back to default MCP path when CAT_CAFE_MCP_SERVER_PATH is empty', as
         },
       }),
     );
-    emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+    await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
     await promise;
 
     const args = spawnFn.mock.calls[0].arguments[1];
     const mcpConfigIdx = args.indexOf('--mcp-config');
     assert.ok(mcpConfigIdx >= 0, '--mcp-config should be present when fallback resolves');
     const parsed = JSON.parse(args[mcpConfigIdx + 1]);
-    assert.equal(realpathSync(parsed.mcpServers['cat-cafe'].args[0]), realpathSync(join(mcpDistDir, 'index.js')));
+    // #712: Split servers instead of monolith cat-cafe
+    assert.ok(parsed.mcpServers['cat-cafe-collab'], 'split server cat-cafe-collab expected');
+    assert.equal(parsed.mcpServers['cat-cafe'], undefined, 'monolith must not be injected');
+    assert.equal(
+      realpathSync(parsed.mcpServers['cat-cafe-collab'].args[0]),
+      realpathSync(join(mcpDistDir, 'collab.js')),
+    );
   } finally {
     process.chdir(previousCwd);
     if (previousEnv === undefined) {
@@ -1157,7 +1470,7 @@ test('F8: result/success extracts usage into done metadata', async () => {
 
   const promise = collect(service.invoke('Hello'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'init', session_id: 'sess-usage' },
     { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi!' }] } },
     {
@@ -1190,7 +1503,7 @@ test('F24: extracts contextWindowSize from result.modelUsage (camelCase)', async
 
   const promise = collect(service.invoke('Context window test'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     {
       type: 'result',
       subtype: 'success',
@@ -1220,7 +1533,7 @@ test('F24: extracts contextWindowSize from result.model_usage (snake_case)', asy
 
   const promise = collect(service.invoke('snake case test'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     {
       type: 'result',
       subtype: 'success',
@@ -1246,7 +1559,7 @@ test('F8: normalises inputTokens to include cache tokens (Claude API → total)'
 
   const promise = collect(service.invoke('cache test'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     {
       type: 'result',
       subtype: 'success',
@@ -1281,7 +1594,7 @@ test('F24-fix: lastTurnInputTokens extracted from last message_start usage', asy
 
   const promise = collect(service.invoke('multi-turn'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'init', session_id: 'sid-ctx' },
     // Turn 1: message_start with usage
     {
@@ -1350,7 +1663,7 @@ test('F24-fix: lastTurnInputTokens is undefined when no message_start has usage'
 
   const promise = collect(service.invoke('no-stream'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'assistant', message: { content: [{ type: 'text', text: 'Hi!' }] } },
     {
       type: 'result',
@@ -1379,7 +1692,7 @@ test('F24-fix: lastTurnInputTokens resets when final message_start has no usage 
 
   const promise = collect(service.invoke('stale-test'));
 
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'init', session_id: 'sid-stale' },
     // Turn 1: message_start WITH usage (sets lastTurnInputTokens = 3000)
     {
@@ -1450,7 +1763,7 @@ test('third-party model (glm-5): omits --model flag and injects ANTHROPIC_MODEL 
       },
     }),
   );
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -1479,7 +1792,7 @@ test('native Anthropic model (claude-sonnet-4-6): keeps --model flag, no ANTHROP
       },
     }),
   );
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -1499,7 +1812,7 @@ test('native Anthropic model keeps --effort value adjacent when --model is inser
   const service = createClaudeAgentService({ catId: 'opus', spawnFn, model: 'claude-opus-4-6' });
 
   const promise = collect(service.invoke('hello'));
-  emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
   await promise;
 
   const args = spawnFn.mock.calls[0].arguments[1];
@@ -1518,6 +1831,21 @@ test('native Anthropic model keeps --effort value adjacent when --model is inser
   assert.equal(args[modelIdx + 1], 'claude-opus-4-6');
 });
 
+test('F262 applies a compatible thread reasoning effort override to Claude argv', async () => {
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({ catId: 'opus', spawnFn, model: 'claude-opus-4-6' });
+
+  const promise = collect(service.invoke('hello', { reasoningEffortOverride: 'low' }));
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await promise;
+
+  const args = spawnFn.mock.calls[0].arguments[1];
+  const effortIdx = args.indexOf('--effort');
+  assert.ok(effortIdx >= 0);
+  assert.equal(args[effortIdx + 1], 'low');
+});
+
 // F212 Phase G (AC-G4, clowder-ai#875 sibling sweep): ClaudeAgentService no-text branch
 // should mirror OpenCode AC-G3 fix — eventCount > 0 && textEventCount === 0 yields
 // silent_completion diagnostic notice. LL-069 sibling-sweep regression guard.
@@ -1532,7 +1860,7 @@ test('AC-G4: Claude eventCount>0 + textEvents=0 → yields silent_completion sys
   const promise = collect(service.invoke('Test silent', { invocationId: 'inv-claude-silent' }));
   proc.stderr.write('Warning: Claude stderr without text output\n');
   // Emit a system event (counts toward eventCount) but no assistant/text event
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'init', session_id: 'ses_claudefake' },
     { type: 'result', subtype: 'success' },
   ]);
@@ -1585,7 +1913,7 @@ test('AC-G4 R1 P1: Claude assistant tool_use block + result success → does NOT
   });
   const promise = collect(service.invoke('Use tools'));
   // Assistant event with tool_use content block (F215 AC-B3 pure-tool-use pattern)
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'init', session_id: 'ses_toolonly' },
     {
       type: 'assistant',
@@ -1622,7 +1950,7 @@ test('AC-G4 cloud P2: Claude result is_error:true surfaces tool_call_parse_faile
     model: 'claude-opus-4-7',
   });
   const promise = collect(service.invoke('Malformed tool call', { invocationId: 'inv-claude-a2' }));
-  emitClaudeEvents(proc, [
+  await emitClaudeEvents(proc, [
     { type: 'system', subtype: 'init', session_id: 'ses_result_error' },
     {
       type: 'result',
@@ -1646,4 +1974,169 @@ test('AC-G4 cloud P2: Claude result is_error:true surfaces tool_call_parse_faile
     !messages.some((m) => m.type === 'system_info' && m.metadata?.cliDiagnostics?.reasonCode === 'silent_completion'),
     'silent_completion MUST NOT fire when Claude result carries is_error:true',
   );
+});
+
+// ── #1542: managed compaction launch-plan injection (P1 guards) ──────────────
+
+const { buildClaudeCompactionLaunchPlan } = await import(
+  '../dist/domains/cats/services/agents/providers/claude-compaction-launch-plan.js'
+);
+
+function managedLaunchPlanFixture() {
+  const root = mkdtempSync(join(tmpdir(), 'f296-managed-plan-'));
+  mkdirSync(join(root, '.claude', 'hooks'), { recursive: true });
+  writeFileSync(
+    join(root, '.claude', 'hooks', 'f24-compaction.mjs'),
+    [
+      '// fixture canonical Node carrier',
+      'fetch("/api/sessions/seal"',
+      'CAT_CAFE_INVOCATION_ID CAT_CAFE_CALLBACK_TOKEN',
+      'X-Invocation-Id X-Callback-Token X-Clowder-Compaction-Carrier',
+    ].join('\n'),
+  );
+  const plan = buildClaudeCompactionLaunchPlan({ installRoot: root });
+  assert.equal(plan.ready, true);
+  return plan;
+}
+
+function capturingSpawnFn(proc, capture) {
+  const inner = createMockSpawnFn(proc);
+  return mock.fn((...callArgs) => {
+    capture(callArgs);
+    return inner(...callArgs);
+  });
+}
+
+test('#1542: managed launch plan injects exactly one --settings derived from the plan, then cleans up', async () => {
+  const proc = createMockProcess();
+  let capturedSettings = null;
+  const spawnFn = capturingSpawnFn(proc, (callArgs) => {
+    const args = callArgs[1];
+    const idx = args.indexOf('--settings');
+    if (idx >= 0) capturedSettings = JSON.parse(readFileSync(args[idx + 1], 'utf8'));
+  });
+  const service = createClaudeAgentService({ spawnFn, model: 'claude-test-model' });
+
+  const promise = collect(
+    service.invoke('hello', {
+      callbackEnv: {
+        CAT_CAFE_API_URL: 'http://localhost:3004',
+        CAT_CAFE_INVOCATION_ID: 'inv-plan',
+        CAT_CAFE_CALLBACK_TOKEN: 'token-plan',
+        CAT_CAFE_ANTHROPIC_PROFILE_MODE: 'api_key',
+        CAT_CAFE_ANTHROPIC_API_KEY: 'sk-test',
+      },
+      compactionLaunchPlan: managedLaunchPlanFixture(),
+    }),
+  );
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await promise;
+
+  const args = spawnFn.mock.calls[0].arguments[1];
+  assert.equal(args.filter((arg) => arg === '--settings').length, 1, 'exactly one --settings flag');
+  assert.ok(capturedSettings, 'settings document captured at spawn time');
+  assert.ok(capturedSettings.hooks.PreCompact[0].hooks[0].command.includes('f24-compaction.mjs'));
+  assert.ok(capturedSettings.hooks.PreCompact[0].hooks[0].command.includes(' pre'));
+  assert.ok(capturedSettings.hooks.SessionStart[0].hooks[0].command.includes(' post'));
+  const settingsPath = args[args.indexOf('--settings') + 1];
+  assert.ok(!existsSync(settingsPath), 'temp settings file removed after invocation');
+});
+
+test('#1542 P1: a user-supplied --settings is composed with the managed plan, never dropped or duplicated', async () => {
+  const userSettingsPath = join(tmpdir(), `f296-user-settings-${Date.now()}.json`);
+  writeFileSync(
+    userSettingsPath,
+    JSON.stringify({
+      spinnerTipsEnabled: true,
+      hooks: { PreCompact: [{ matcher: 'manual', hooks: [{ type: 'command', command: 'echo user-hook' }] }] },
+    }),
+  );
+
+  const proc = createMockProcess();
+  let capturedSettings = null;
+  const spawnFn = capturingSpawnFn(proc, (callArgs) => {
+    const args = callArgs[1];
+    const idx = args.indexOf('--settings');
+    if (idx >= 0) capturedSettings = JSON.parse(readFileSync(args[idx + 1], 'utf8'));
+  });
+  const service = createClaudeAgentService({ spawnFn, model: 'claude-test-model' });
+
+  const promise = collect(
+    service.invoke('hello', {
+      callbackEnv: {
+        CAT_CAFE_API_URL: 'http://localhost:3004',
+        CAT_CAFE_INVOCATION_ID: 'inv-plan-user',
+        CAT_CAFE_CALLBACK_TOKEN: 'token-plan-user',
+        CAT_CAFE_ANTHROPIC_PROFILE_MODE: 'api_key',
+        CAT_CAFE_ANTHROPIC_API_KEY: 'sk-test',
+      },
+      cliConfigArgs: ['--settings', userSettingsPath],
+      compactionLaunchPlan: managedLaunchPlanFixture(),
+    }),
+  );
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await promise;
+
+  const args = spawnFn.mock.calls[0].arguments[1];
+  assert.equal(args.filter((arg) => arg === '--settings').length, 1, 'user flag replaced by one composed document');
+  assert.ok(!args.includes(userSettingsPath), 'the user path itself must not reach the CLI as a second flag');
+  assert.equal(capturedSettings.spinnerTipsEnabled, true, 'user settings preserved');
+  assert.equal(capturedSettings.hooks.PreCompact.length, 2, 'user hook + managed hook both present');
+  rmSync(userSettingsPath, { force: true });
+});
+
+test('#1542: user --settings passes through untouched when no managed plan is ready', async () => {
+  const userSettingsPath = join(tmpdir(), `f296-user-solo-${Date.now()}.json`);
+  writeFileSync(userSettingsPath, JSON.stringify({ spinnerTipsEnabled: false }));
+
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({ spawnFn, model: 'claude-test-model' });
+
+  const promise = collect(
+    service.invoke('hello', {
+      callbackEnv: {
+        CAT_CAFE_API_URL: 'http://localhost:3004',
+        CAT_CAFE_INVOCATION_ID: 'inv-solo',
+        CAT_CAFE_CALLBACK_TOKEN: 'token-solo',
+        CAT_CAFE_ANTHROPIC_PROFILE_MODE: 'api_key',
+        CAT_CAFE_ANTHROPIC_API_KEY: 'sk-test',
+      },
+      cliConfigArgs: ['--settings', userSettingsPath],
+    }),
+  );
+  await emitClaudeEvents(proc, [{ type: 'result', subtype: 'success' }]);
+  await promise;
+
+  const args = spawnFn.mock.calls[0].arguments[1];
+  assert.equal(args.filter((arg) => arg === '--settings').length, 1);
+  assert.equal(args[args.indexOf('--settings') + 1], userSettingsPath);
+  rmSync(userSettingsPath, { force: true });
+});
+
+test('#1542: an invalid user --settings fails closed instead of silently dropping the managed carrier', async () => {
+  const proc = createMockProcess();
+  const spawnFn = createMockSpawnFn(proc);
+  const service = createClaudeAgentService({ spawnFn, model: 'claude-test-model' });
+
+  const messages = [];
+  const promise = (async () => {
+    for await (const message of service.invoke('hello', {
+      callbackEnv: {
+        CAT_CAFE_API_URL: 'http://localhost:3004',
+        CAT_CAFE_INVOCATION_ID: 'inv-bad',
+        CAT_CAFE_CALLBACK_TOKEN: 'token-bad',
+        CAT_CAFE_ANTHROPIC_PROFILE_MODE: 'api_key',
+        CAT_CAFE_ANTHROPIC_API_KEY: 'sk-test',
+      },
+      cliConfigArgs: ['--settings', '/nonexistent-user-settings.json'],
+      compactionLaunchPlan: managedLaunchPlanFixture(),
+    })) {
+      messages.push(message);
+    }
+  })();
+  await promise;
+
+  assert.match(String(messages.find((m) => m.type === 'error')?.error), /cli_config_args_settings_invalid/);
+  assert.equal(spawnFn.mock.calls.length, 0, 'fail closed: the CLI must not spawn with a broken settings contract');
 });

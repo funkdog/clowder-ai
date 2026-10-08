@@ -1,3 +1,4 @@
+import type { ExpansionFunnelMeta, ExpansionHintTargetRef } from '@cat-cafe/shared';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 import {
@@ -7,13 +8,18 @@ import {
   evaluateConfigWarnings,
   type FunctionalStatus,
 } from '../domains/memory/evidence-status-signals.js';
+import {
+  blockedExpansionHealth,
+  failedExpansionHealth,
+  successfulExpansionHealth,
+} from '../domains/memory/expansion-health.js';
 import { F163ExperimentLogger } from '../domains/memory/f163-experiment-logger.js';
 import {
   applySalienceRerank,
   computeVariantId,
   freezeFlags,
   getOrAssignCohort,
-  rankToConfidence,
+  rankToMatchRank,
   type SalienceTaskContext,
 } from '../domains/memory/f163-types.js';
 import type {
@@ -26,7 +32,9 @@ import type {
   SearchOptions,
 } from '../domains/memory/interfaces.js';
 import type { LibraryCatalog } from '../domains/memory/LibraryCatalog.js';
+import type { MessageSearchService } from '../domains/memory/MessageSearchService.js';
 import type { RebuildJobTracker } from '../domains/memory/RebuildJobTracker.js';
+import { resolveDirectLocalAuthorizationUserId } from '../utils/request-identity.js';
 import { buildThreadCrossPostSuggestion, extractThreadIdFromEvidenceResult } from './cross-thread-affordance.js';
 import {
   type BoostSource,
@@ -34,10 +42,14 @@ import {
   mapKindToSourceType,
   sanitizeEvidenceDrillDown,
 } from './evidence-helpers.js';
+import { boundTopkSearchResponse } from './evidence-topk-budget.js';
+import { executeMessageSearch, messageSearchQuerySchema, toMessageSearchInput } from './message-search-handler.js';
 
 /** Accepted query parameters — Phase D: scope/mode/depth added */
 const searchSchema = z.object({
-  q: z.string().min(1),
+  q: z.string().min(1).max(2_000),
+  resultUnit: z.enum(['document', 'message']).optional(),
+  messageSort: z.enum(['time', 'relevance']).optional(),
   limit: z.coerce.number().int().min(1).max(20).optional(),
   scope: z.enum(['docs', 'memory', 'threads', 'sessions', 'all']).optional(),
   mode: z.enum(['lexical', 'semantic', 'hybrid']).optional(),
@@ -55,11 +67,15 @@ const searchSchema = z.object({
   currentThreadId: z.string().optional(),
   /** F200 HW-1: search intent — topk (default) or coverage (exhaustive multi-scope) */
   intent: z.enum(['topk', 'coverage']).optional(),
+  /** F263: explicit continuation offset for a budget-truncated coverage response. */
+  coverage_offset: z.coerce.number().int().min(0).max(49).optional(),
+  /** F256 Phase B: opt-out of expansion hints in topk results (default: true) */
+  include_expansion: z.enum(['true', 'false', '1', '0']).optional(),
 });
 
 export type {
-  EvidenceConfidence,
   EvidenceFreshness,
+  EvidenceMatchRank,
   EvidenceReimportTrigger,
   EvidenceSourceType,
 } from './evidence-helpers.js';
@@ -86,12 +102,42 @@ export interface EvidenceSearchResponse {
     durationMs: number;
   }>;
   deprecationWarnings?: string[];
+  /** F263 R11: proof that an exact thread filter was enforced at the response boundary. */
+  filterExecution?: {
+    requestedThreadId: string;
+    executedThreadId: string;
+    outcome: 'matched' | 'authoritative_empty' | 'degraded_empty';
+  };
+  /** F256 Phase B: expansion hints — related directions surfaced from topk results */
+  expansionHints?: Array<{
+    anchor: string;
+    title: string;
+    kind: string;
+    sourcePath?: string;
+    targetRef: ExpansionHintTargetRef;
+    provenance: { source: string; via: string; edgeStrength: string };
+  }>;
+  /** F256 Wave 1b: versioned expansion health funnel for the natural top-k cohort. */
+  expansionMeta?: ExpansionFunnelMeta;
+  response?: {
+    budgetChars: number;
+    serializedChars: number;
+    truncated: boolean;
+    omittedEntityMatches: number;
+    omittedPassages: number;
+    omittedExpansionHints: number;
+    detailContinuation: 'unavailable';
+  };
 }
 
 export interface EvidenceRoutesOptions {
+  messageSearchService?: MessageSearchService;
   docsRoot?: string;
+  /** F256 Phase C: repo root for L0 convention graph adapter (reads compiler file) */
+  repoRoot?: string;
   evidenceStore: IEvidenceStore;
   embeddingService?: Pick<IEmbeddingService, 'isReady'>;
+  getEmbeddingService?: () => Pick<IEmbeddingService, 'isReady'> | undefined;
   indexBuilder?: IIndexBuilder;
   knowledgeResolver?: IKnowledgeResolver;
   rebuildJobTracker?: RebuildJobTracker;
@@ -103,12 +149,54 @@ export interface EvidenceRoutesOptions {
   catalog?: Pick<LibraryCatalog, 'list' | 'getRoutable'>;
 }
 
+interface VectorCountDb {
+  prepare: (sql: string) => { get: () => Record<string, unknown> };
+}
+
+function readPersistedVectorCount(
+  db: VectorCountDb,
+  virtualTableSql: string,
+  backingRowidsSql: string,
+): { count: number; virtualTableReadable: boolean } {
+  try {
+    const row = db.prepare(virtualTableSql).get() as { c: number };
+    return { count: row.c, virtualTableReadable: true };
+  } catch {
+    // sqlite-vec virtual tables cannot be queried until the extension is
+    // loaded, but their shadow rowid tables remain ordinary SQLite tables.
+    // Count those persisted rows so status never turns "unavailable" into
+    // the much scarier and incorrect "the vector index is empty".
+    try {
+      const row = db.prepare(backingRowidsSql).get() as { c: number };
+      return { count: row.c, virtualTableReadable: false };
+    } catch {
+      return { count: 0, virtualTableReadable: false };
+    }
+  }
+}
+
 export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (app, opts) => {
   app.get('/api/evidence/search', async (request, reply) => {
     const parseResult = searchSchema.safeParse(request.query);
     if (!parseResult.success) {
       reply.status(400);
       return { error: 'Invalid query parameters', details: parseResult.error.issues };
+    }
+
+    if (parseResult.data.resultUnit === 'message') {
+      const messageQuery = messageSearchQuerySchema.safeParse(request.query);
+      if (!messageQuery.success)
+        return reply
+          .status(400)
+          .send({ error: 'Invalid message search parameters', details: messageQuery.error.issues });
+      const userId = resolveDirectLocalAuthorizationUserId(request);
+      if (!userId) return reply.status(401).send({ error: 'Message search identity required' });
+      return executeMessageSearch(
+        opts.messageSearchService,
+        toMessageSearchInput(messageQuery.data),
+        { userId, viewer: { type: 'user' } },
+        reply,
+      );
     }
 
     const {
@@ -129,27 +217,90 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
       recentArtifactRefs: rawArtifactRefs,
       currentThreadId,
       intent,
+      coverage_offset: coverageOffset,
+      include_expansion: rawIncludeExpansion,
     } = parseResult.data;
 
+    // F256 Phase C: Lazy-init L0 convention graph adapter (shared by coverage + topk).
+    // Created once per request if needed; reads the L0 compiler file from repo root.
+    let _l0Adapter: import('../domains/memory/L0ConventionGraphAdapter.js').L0ConventionGraphAdapter | undefined;
+    async function getL0Adapter() {
+      if (_l0Adapter !== undefined) return _l0Adapter;
+      try {
+        const { L0ConventionGraphAdapter } = await import('../domains/memory/L0ConventionGraphAdapter.js');
+        _l0Adapter = new L0ConventionGraphAdapter(opts.repoRoot ?? process.cwd());
+        return _l0Adapter;
+      } catch {
+        return null;
+      }
+    }
+
     // F200 HW-1: intent=coverage → CoverageSearchService bypass (separate pipeline)
-    // Wiring gaps (by design for HW-1 v1, documented in plan §Task 6):
-    //   - conventionGraph: no production ConventionGraphAdapter yet (F242 soft dep).
-    //     Service gracefully degrades with `degraded: [{source: 'convention-graph', ...}]`.
-    //   - onCoverageEvent: telemetry callback not wired; persistence deferred to HW-1 Phase 2.
-    //     catId/invocationId in CoverageSearchEvent are placeholder empty strings until then.
     if (intent === 'coverage') {
+      if (scope && !['docs', 'threads', 'all'].includes(scope)) {
+        reply.status(400);
+        return { error: `Unsupported coverage scope: ${scope}. Use docs, threads, or all.` };
+      }
+      const coverageAbort = new AbortController();
+      const abortOnDisconnect = () => {
+        coverageAbort.abort(new DOMException('Coverage HTTP client disconnected', 'AbortError'));
+      };
+      request.raw.once('aborted', abortOnDisconnect);
+      reply.raw.once('close', abortOnDisconnect);
       try {
         const { CoverageSearchService } = await import('../domains/memory/CoverageSearchService.js');
-        const coverageService = new CoverageSearchService(opts.evidenceStore);
-        const coverageResult = await coverageService.search(q);
+        const l0Adapter = await getL0Adapter();
+        const coverageService = new CoverageSearchService(opts.evidenceStore, l0Adapter, {
+          signal: coverageAbort.signal,
+          onCoverageStageEvent: (event) => {
+            request.log.info(
+              { serviceArea: 'evidence-coverage', coverageStage: event },
+              'Coverage search stage completed',
+            );
+          },
+          onCoverageEvent: (event) => {
+            request.log.info(
+              {
+                serviceArea: 'evidence-coverage',
+                coverageId: event.coverageId,
+                totalHits: event.totalHits,
+                directHits: event.directHits,
+                indirectHits: event.indirectHits,
+                conventionGraphUsed: event.conventionGraphUsed,
+              },
+              'Coverage search completed',
+            );
+          },
+        });
+        const coverageResult = await coverageService.search(q, {
+          scope: scope as 'docs' | 'threads' | 'all' | undefined,
+          mode,
+          limit,
+          offset: coverageOffset,
+        });
         return coverageResult;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         reply.status(500);
         return { error: 'Coverage search failed', details: message };
+      } finally {
+        request.raw.removeListener('aborted', abortOnDisconnect);
+        reply.raw.removeListener('close', abortOnDisconnect);
       }
     }
 
+    const searchAbort = new AbortController();
+    const searchDeadlineAt = Date.now() + 15_000;
+    const searchTimeout = setTimeout(
+      () => searchAbort.abort(new DOMException('Evidence search deadline exceeded', 'TimeoutError')),
+      15_000,
+    );
+    const abortTopk = () => {
+      if (!reply.raw.writableEnded)
+        searchAbort.abort(new DOMException('Evidence HTTP client disconnected', 'AbortError'));
+    };
+    request.raw.once('aborted', abortTopk);
+    reply.raw.once('close', abortTopk);
     const effectiveLimit = limit ?? 5;
     // F163: freeze flags once per request, compute variant ID
     const f163Flags = freezeFlags();
@@ -168,6 +319,18 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
         ?.split(',')
         .map((s) => s.trim())
         .filter(Boolean);
+      const requestUserId = resolveDirectLocalAuthorizationUserId(request);
+      const requestedCollectionIds = new Set(parsedCollections ?? []);
+      const authorizedCollections = opts.catalog
+        ?.list()
+        .filter(
+          (manifest) =>
+            requestedCollectionIds.has(manifest.id) &&
+            (manifest.sensitivity === 'private' || manifest.sensitivity === 'restricted') &&
+            manifest.ownerUserId != null &&
+            manifest.ownerUserId === requestUserId,
+        )
+        .map((manifest) => manifest.id);
       const explain = rawExplain != null;
       const searchOpts: SearchOptions = {
         limit: effectiveLimit,
@@ -180,28 +343,80 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
         threadId,
         dimension,
         collections: parsedCollections,
+        authorizedCollections: authorizedCollections ?? [],
         explain,
+        includePullOnly: true,
+        signal: searchAbort.signal,
+        deadlineAt: searchDeadlineAt,
       };
       let searchMeta: SearchExecutionMeta = { degraded: false };
       // F-4: Use KnowledgeResolver for federated project + global search
       const resolveResult = opts.knowledgeResolver ? await opts.knowledgeResolver.resolve(q, searchOpts) : null;
-      let items: EvidenceItem[];
+      let retrievedItems: EvidenceItem[];
       if (resolveResult) {
-        items = resolveResult.results;
+        retrievedItems = resolveResult.results;
         searchMeta = resolveResult.meta ?? missingResolverMeta(searchOpts);
       } else {
         if (opts.evidenceStore.searchWithMeta) {
           const execution = await opts.evidenceStore.searchWithMeta(q, searchOpts);
-          items = execution.items;
+          retrievedItems = execution.items;
           searchMeta = execution.meta;
         } else {
-          items = await opts.evidenceStore.search(q, searchOpts);
+          retrievedItems = await opts.evidenceStore.search(q, searchOpts);
           searchMeta = missingResolverMeta(searchOpts);
         }
       }
+      // F263 R11: threadId is a hard result boundary, not a best-effort hint to
+      // whichever resolver/provider happens to execute the query. Enforce the
+      // invariant again at the common response boundary so an unfiltered
+      // provider can only produce an authoritative empty result, never a
+      // cross-thread leak.
+      const expectedThreadAnchor = threadId ? `thread-${threadId}` : undefined;
+      const items = expectedThreadAnchor
+        ? retrievedItems.filter((item) => item.anchor === expectedThreadAnchor)
+        : retrievedItems;
       const resolvedSources = resolveResult?.sources;
       // Tag per-result source when dimension is explicit (single-source)
       const singleSource = resolvedSources && resolvedSources.length === 1 ? resolvedSources[0] : undefined;
+
+      // F256 Phase B+D: expansion hints for topk results (opt-out via include_expansion=false).
+      // F263 R11 exact-thread filters remain a hard boundary: expanding them
+      // with unscoped related directions would leak evidence from other scopes.
+      const wantExpansion = rawIncludeExpansion !== 'false' && rawIncludeExpansion !== '0';
+      let expansionHints: import('../domains/memory/TopkExpansionService.js').ExpansionHint[] | undefined;
+      let expansionMeta: ExpansionFunnelMeta;
+      if (!wantExpansion) {
+        expansionMeta = blockedExpansionHealth('opt_out');
+      } else if (threadId) {
+        expansionMeta = blockedExpansionHealth('exact_thread_filter');
+      } else if (items.length === 0) {
+        expansionMeta = blockedExpansionHealth('no_results');
+      } else if (!opts.evidenceStore.searchWithMeta) {
+        expansionMeta = blockedExpansionHealth('store_unsupported');
+      } else {
+        try {
+          const { TopkExpansionService } = await import('../domains/memory/TopkExpansionService.js');
+          const l0Adapter = await getL0Adapter();
+          const expansionService = new TopkExpansionService(
+            {
+              searchWithMeta: (query, options) =>
+                opts.evidenceStore.searchWithMeta!(query, {
+                  ...options,
+                  signal: searchAbort.signal,
+                  deadlineAt: searchDeadlineAt,
+                }),
+            },
+            l0Adapter,
+          );
+          const expandResult = await expansionService.expandWithMeta(items, q);
+          expansionHints = expandResult.hints;
+          expansionMeta = successfulExpansionHealth(expandResult.funnel, expandResult.hints);
+        } catch {
+          // Search remains fail-open, but the health funnel must not make the
+          // failed stage disappear.
+          expansionMeta = failedExpansionHealth();
+        }
+      }
 
       // Phase F: assemble task context for salience gating (no-op when absent)
       const salienceCtx: SalienceTaskContext = {
@@ -246,10 +461,13 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
           title: item.title,
           anchor: item.anchor,
           snippet: item.summary ?? '',
-          confidence: rankToConfidence(index),
+          matchRank: rankToMatchRank(index),
+          ...(item.retrievalScore != null ? { retrievalScore: item.retrievalScore } : {}),
           sourceType: mapKindToSourceType(item.kind),
           boostSource: effectiveBoostSource,
+          ...(item.status ? { status: item.status } : {}),
           ...(item.authority ? { authority: item.authority } : {}),
+          ...(item.updatedAt ? { updatedAt: item.updatedAt } : {}),
           ...(item.sourcePath ? { sourcePath: item.sourcePath } : {}),
           ...(singleSource ? { source: singleSource } : {}),
           ...(item.passages ? { passages: item.passages } : {}),
@@ -272,21 +490,33 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
       // P1-5: log search to f163_logs for experiment evidence chain
       if (anyF163Active && db) {
         try {
+          // F192: server-side origin detection — eval domain threads (thread_eval_*)
+          // are diagnostic/cron searches that must not contaminate f188 health metrics.
+          // Trust boundary: reads from x-cat-cafe-thread-id header (set by MCP server
+          // from process.env['CAT_CAFE_THREAD_ID'], not from public query params).
+          // The query param currentThreadId is for UX hints only (cross-thread suggestions).
+          const trustedThreadId = (request.headers['x-cat-cafe-thread-id'] as string | undefined)?.trim();
+          const searchOrigin = trustedThreadId?.startsWith('thread_eval_') ? 'eval' : 'user';
           const logger = new F163ExperimentLogger(db);
-          logger.logSearch(variantId, f163Flags, {
-            query: q,
-            resultCount: results.length,
-            limit: effectiveLimit,
-            scope,
-            dimension,
-            collections: parsedCollections,
-            topKPerCollection: Object.fromEntries(
-              (resolveResult?.collectionGroups ?? []).map((g) => [
-                g.collectionId,
-                { count: g.items.length, anchors: g.items.map((i) => i.anchor) },
-              ]),
-            ),
-          });
+          logger.logSearch(
+            variantId,
+            f163Flags,
+            {
+              query: q,
+              resultCount: results.length,
+              limit: effectiveLimit,
+              scope,
+              dimension,
+              collections: parsedCollections,
+              topKPerCollection: Object.fromEntries(
+                (resolveResult?.collectionGroups ?? []).map((g) => [
+                  g.collectionId,
+                  { count: g.items.length, anchors: g.items.map((i) => i.anchor) },
+                ]),
+              ),
+            },
+            { origin: searchOrigin },
+          );
           // Phase F: salience rerank shadow diff (AC-F6) — logs in both shadow and on
           if (salienceResult) {
             logger.logSalienceRerank(variantId, f163Flags, {
@@ -312,8 +542,17 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
         itemCount: g.items.length,
         durationMs: g.durationMs,
       }));
+      const filterOutcome: NonNullable<EvidenceSearchResponse['filterExecution']>['outcome'] =
+        results.length > 0 ? 'matched' : searchMeta.degraded ? 'degraded_empty' : 'authoritative_empty';
+      const filterExecution = threadId
+        ? {
+            requestedThreadId: threadId,
+            executedThreadId: threadId,
+            outcome: filterOutcome,
+          }
+        : undefined;
 
-      return {
+      return boundTopkSearchResponse({
         results,
         degraded: searchMeta.degraded,
         variantId,
@@ -322,7 +561,10 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
         ...(injectionSources && injectionSources.length > 0 ? { injectionSources } : {}),
         ...(responseGroups && responseGroups.length > 0 ? { collectionGroups: responseGroups } : {}),
         ...(resolveResult?.deprecationWarnings ? { deprecationWarnings: resolveResult.deprecationWarnings } : {}),
-      } satisfies Partial<EvidenceSearchResponse>;
+        ...(expansionHints && expansionHints.length > 0 ? { expansionHints } : {}),
+        ...(expansionMeta ? { expansionMeta } : {}),
+        ...(filterExecution ? { filterExecution } : {}),
+      } satisfies EvidenceSearchResponse);
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       const errStack = err instanceof Error ? err.stack : undefined;
@@ -347,7 +589,21 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
         degraded: true,
         degradeReason: 'evidence_store_error',
         variantId,
+        expansionMeta: blockedExpansionHealth('search_error'),
+        ...(threadId
+          ? {
+              filterExecution: {
+                requestedThreadId: threadId,
+                executedThreadId: threadId,
+                outcome: 'degraded_empty' as const,
+              },
+            }
+          : {}),
       } satisfies Partial<EvidenceSearchResponse>;
+    } finally {
+      clearTimeout(searchTimeout);
+      request.raw.removeListener('aborted', abortTopk);
+      reply.raw.removeListener('close', abortTopk);
     }
   });
 
@@ -378,8 +634,13 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
         db.prepare("SELECT count(*) AS c FROM evidence_docs WHERE kind = 'thread'").get() as { c: number }
       ).c;
       const edgeCount = (db.prepare('SELECT count(*) AS c FROM edges').get() as { c: number }).c;
-      // Prefer the explicit rebuild stamp written by IndexBuilder; fall back to
-      // MAX(evidence_docs.updated_at) for old databases that predate the stamp.
+      // Document freshness is not an indexing clock. Current IndexBuilder does not write a rebuild stamp.
+      const lastDocumentUpdated = (
+        db.prepare('SELECT max(updated_at) AS t FROM evidence_docs').get() as {
+          t: string | null;
+        }
+      ).t;
+      // Preserve the legacy field for existing consumers, including manually stamped databases.
       let lastUpdated: string | null = null;
       try {
         const stampRow = db.prepare("SELECT value FROM embedding_meta WHERE key = 'last_rebuild_at'").get() as
@@ -390,7 +651,7 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
         /* embedding_meta may not exist in very old schemas */
       }
       if (!lastUpdated) {
-        lastUpdated = (db.prepare('SELECT max(updated_at) AS t FROM evidence_docs').get() as { t: string | null }).t;
+        lastUpdated = lastDocumentUpdated;
       }
 
       // Passages count (may not exist in older schemas)
@@ -405,15 +666,14 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
       // embedding warm-up (passage_vectors < passages means semantic recall is still warming up;
       // passage_fts is complete). `supported` distinguishes "warming up" from "vectors not available
       // at all" (embed off / sqlite-vec missing), so the UI never shows a warm-up that never finishes.
-      let passageVectorCount = 0;
-      let passageVectorsSupported = false;
-      const passageEmbeddingReady = opts.embeddingService?.isReady() === true;
-      try {
-        passageVectorCount = (db.prepare('SELECT count(*) AS c FROM passage_vectors').get() as { c: number }).c;
-        passageVectorsSupported = passageEmbeddingReady;
-      } catch {
-        /* vec0 table may not exist (sqlite-vec unavailable / embedding off) → unsupported, not warming */
-      }
+      const passageEmbeddingReady = (opts.getEmbeddingService?.() ?? opts.embeddingService)?.isReady() === true;
+      const passageVectors = readPersistedVectorCount(
+        db,
+        'SELECT count(*) AS c FROM passage_vectors',
+        'SELECT count(*) AS c FROM passage_vectors_rowids',
+      );
+      const passageVectorCount = passageVectors.count;
+      const passageVectorsSupported = passageVectors.virtualTableReadable && passageEmbeddingReady;
 
       // Embedding model from embedding_meta (VectorStore.initMeta writes embedding_model_id)
       let embeddingModel: string | null = null;
@@ -426,15 +686,11 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
         /* table may not exist */
       }
 
-      // Vector index size. If the table query throws, sqlite-vec wasn't
-      // loaded — already blocked at the install dialog via the matrix
-      // 'unsupported' branch, so we just defensively return 0 here.
-      let vectorsCount = 0;
-      try {
-        vectorsCount = (db.prepare('SELECT count(*) AS c FROM evidence_vectors').get() as { c: number }).c;
-      } catch {
-        /* vec0 virtual table missing — install dialog blocked this case */
-      }
+      const vectorsCount = readPersistedVectorCount(
+        db,
+        'SELECT count(*) AS c FROM evidence_vectors',
+        'SELECT count(*) AS c FROM evidence_vectors_rowids',
+      ).count;
 
       // F188 Phase K (AC-K2): build signals → evaluate config warnings →
       // derive functionalStatus. Pure compute, no extra DB / fs cost beyond
@@ -470,9 +726,11 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
         passages_count: passageCount,
         passage_vectors_count: passageVectorCount,
         passage_vectors_supported: passageVectorsSupported,
+        passage_warmup_active: opts.indexBuilder?.isPassageWarmupActive() ?? false,
         edges_count: edgeCount,
         vectors_count: vectorsCount,
         last_rebuild_at: lastUpdated,
+        last_document_updated_at: lastDocumentUpdated,
         embedding_model: embeddingModel,
         // F188 Phase K (AC-K1/K3): config health surface.
         functionalStatus,
@@ -550,6 +808,25 @@ export const evidenceRoutes: FastifyPluginAsync<EvidenceRoutesOptions> = async (
       reply.status(500);
       return { error: 'reindex failed', message: String(err) };
     }
+  });
+
+  // Passage embedding warmup trigger — re-starts background embedding for passages
+  // that don't have vectors yet. Safe to call repeatedly (skips already-embedded).
+  app.post('/api/evidence/warmup', async (request, reply) => {
+    // Use the same direct-IP guard as /reindex and /rebuild — isDirectLoopbackRequest
+    // was overly strict here (rejects when any proxy-forwarding header is present,
+    // even though the request genuinely originates from localhost).
+    const ip = request.ip;
+    if (ip !== '127.0.0.1' && ip !== '::1' && ip !== '::ffff:127.0.0.1') {
+      reply.status(403);
+      return { error: 'Forbidden: localhost only' };
+    }
+    if (!opts.indexBuilder) {
+      reply.status(503);
+      return { error: 'warmup not available' };
+    }
+    opts.indexBuilder.startPassageEmbeddingWarmup();
+    return { ok: true };
   });
 
   // F188 Phase A: Full rebuild endpoint (AC-A1)

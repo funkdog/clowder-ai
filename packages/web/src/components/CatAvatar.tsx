@@ -2,6 +2,7 @@
 
 import { type ReactNode, useState } from 'react';
 import { useCatData } from '@/hooks/useCatData';
+import { resolveCatDisplayName } from '@/lib/cat-display-name';
 import { hexToRgba } from '@/lib/color-utils';
 import { PawIcon } from './icons/PawIcon';
 
@@ -34,6 +35,12 @@ interface CatAvatarProps {
   callbackAuthPopover?: ReactNode;
   /** F174 D2b-2 AC-D7: click handler for the dot (typically opens D2b-3). */
   onCallbackAuthClick?: () => void;
+  /**
+   * The ring around the face. `cat` (default) is the cat-coloured 2px ring every avatar has always had. `none` is for a
+   * surface that is already the cat's colour (the F322 nameplate), where the ring would mark the same colour twice. A
+   * failed state still shows its ring (an error is not decoration), and a clickable avatar shows the accent ring on hover.
+   */
+  ring?: 'cat' | 'none';
 }
 
 export function CatAvatar({
@@ -45,14 +52,19 @@ export function CatAvatar({
   callbackAuthLabel,
   callbackAuthPopover,
   onCallbackAuthClick,
+  ring = 'cat',
 }: CatAvatarProps) {
-  const [imgError, setImgError] = useState(false);
+  const [failedAvatarSrc, setFailedAvatarSrc] = useState<string | null>(null);
   const [popoverOpen, setPopoverOpen] = useState(false);
   const { getCatById } = useCatData();
   const cat = getCatById(catId);
+  const catName = resolveCatDisplayName(catId, getCatById);
+  const avatarSrc = cat?.avatar || `/avatars/${catId}.png`;
+  const imgError = failedAvatarSrc === avatarSrc;
 
   const isStreaming = status === 'streaming';
   const isError = status === 'error';
+  const showRing = ring !== 'none' || isError;
   const ringColor = cat?.color.primary ?? 'var(--console-cat-fallback)';
   const glowShadow = isStreaming && cat ? `0 0 10px ${hexToRgba(ringColor, 0.5)}` : undefined;
 
@@ -66,15 +78,21 @@ export function CatAvatar({
   return (
     <div className="relative flex-shrink-0" style={{ width: size, height: size }}>
       <Wrapper
-        {...(onClick ? { type: 'button' as const, onClick, 'aria-label': `${cat?.displayName ?? catId}` } : {})}
-        className={`rounded-full ring-2 overflow-hidden bg-cafe-surface-elevated flex items-center justify-center transition-shadow duration-300 ${
+        {...(onClick ? { type: 'button' as const, onClick, 'aria-label': catName } : {})}
+        className={`rounded-full ${showRing ? 'ring-2' : ''} overflow-hidden bg-cafe-surface-elevated flex items-center justify-center transition-shadow duration-300 ${
           isStreaming ? 'animate-pulse' : ''
-        } ${onClick ? 'cursor-pointer hover:ring-[var(--cafe-accent)] transition-[box-shadow,--tw-ring-color]' : ''}`}
+        } ${onClick ? `cursor-pointer ${showRing ? '' : 'hover:ring-2 '}hover:ring-[var(--cafe-accent)] transition-[box-shadow,--tw-ring-color]` : ''}`}
         style={{
           width: size,
           height: size,
-          ['--tw-ring-color' as string]: isError ? 'var(--semantic-critical)' : ringColor,
-          boxShadow: glowShadow,
+          ...(showRing ? { ['--tw-ring-color' as string]: isError ? 'var(--semantic-critical)' : ringColor } : {}),
+          /* An inline box-shadow replaces the whole stack, including the one Tailwind's ring utilities build from these
+           * variables. With no ring the hover ring is the only affordance a clickable avatar has, so while streaming the
+           * glow is composed after the ring variables instead of over them. The default avatar keeps the glow alone. */
+          boxShadow:
+            ring === 'none' && glowShadow
+              ? `var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), ${glowShadow}`
+              : glowShadow,
         }}
       >
         {imgError ? (
@@ -82,12 +100,12 @@ export function CatAvatar({
         ) : (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={cat?.avatar ?? `/avatars/${catId}.png`}
-            alt={cat?.displayName ?? catId}
+            src={avatarSrc}
+            alt={catName}
             width={size}
             height={size}
             className="object-cover"
-            onError={() => setImgError(true)}
+            onError={() => setFailedAvatarSrc(avatarSrc)}
           />
         )}
       </Wrapper>

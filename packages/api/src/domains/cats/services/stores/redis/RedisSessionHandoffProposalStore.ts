@@ -13,63 +13,43 @@
  * 默认无 TTL（持久化）。自动过期会 404 旧卡 + 残留 session/catthread zset 成员 + 抹掉审批轨迹。
  */
 
-import type { CatId, HandoffProposalStatus, SessionHandoffProposal } from '@cat-cafe/shared';
-import { generateProposalId } from '@cat-cafe/shared';
+import type {
+  ApprovalEnvelope,
+  ApprovalPublication,
+  CatId,
+  HumanDispositionLedgerEntry,
+  SessionHandoffProposal,
+} from '@cat-cafe/shared';
+import {
+  assertApprovalEnvelopeIdentity,
+  buildHumanDispositionLedgerReceipt,
+  generateProposalId,
+  humanDispositionLedgerEntrySchema,
+} from '@cat-cafe/shared';
 import type { RedisClient } from '@cat-cafe/shared/utils';
+import type {
+  RejectSessionHandoffInput,
+  SessionHandoffDispositionEntryLookup,
+  SessionHandoffRejectionResult,
+} from '../ports/SessionHandoffDisposition.js';
+import { sessionHandoffProposalIdFromSourceRef } from '../ports/SessionHandoffDisposition.js';
 import type {
   CreateHandoffProposalInput,
   HandoffCheckpointPatch,
   ISessionHandoffProposalStore,
 } from '../ports/SessionHandoffProposalStore.js';
+import { abortRedisStaged, commitRedisApprovalEnvelope } from './RedisApprovalPublication.js';
+import { rejectSessionHandoffWithDisposition } from './RedisSessionHandoffDisposition.js';
+import { hydrateSessionHandoffProposal, serializeSessionHandoffProposal } from './RedisSessionHandoffProposalCodec.js';
+import { CAS_AND_SETTLE_LUA, CAS_STATUS_LUA, RELEASE_DEDUP_LUA } from './redis-handoff-lua-scripts.js';
+import { HandoffKeys } from './session-handoff-keys.js';
 
 const ACTIVE_STATUSES: ReadonlySet<string> = new Set(['pending', 'approving']);
-
-const HandoffKeys = {
-  detail: (id: string) => `handoff-proposal:${id}`,
-  session: (sessionId: string) => `handoff-proposals:session:${sessionId}`,
-  catThread: (userId: string, catId: string, threadId: string) =>
-    `handoff-proposals:catthread:${userId}:${catId}:${threadId}`,
-  /** F246 Approval Hub: per-user index for listPendingByUser (score=createdAt). */
-  user: (userId: string) => `handoff-proposals:user:${userId}`,
-  dedup: (userId: string, clientRequestId: string) => `handoff-proposal-dedup:${userId}:${clientRequestId}`,
-};
 
 /** TTL for the transport-retry dedup index. This is a transient idempotency guard (NOT the
  * user-visible proposal state which stays TTL=0 per LL-048) — bounded well beyond any
  * callbackPost retry window so the key self-cleans without leaking. */
 const DEDUP_TTL_SECONDS = 3600;
-
-/**
- * Compare-and-delete: DEL the dedup key only if it still points at the expected proposalId, so a
- * release never wipes a sibling's reservation that already replaced the key.
- * KEYS[1] = dedup key; ARGV[1] = expectedProposalId.
- */
-const RELEASE_DEDUP_LUA = `
-if redis.call('GET', KEYS[1]) == ARGV[1] then
-  return redis.call('DEL', KEYS[1])
-end
-return 0
-`;
-
-/**
- * CAS Lua: atomically check current status ∈ expected (comma-separated) → HSET field/value pairs.
- * KEYS[1] = detail hash; ARGV[1] = expected statuses ("pending" | "pending,approving");
- * ARGV[2..] = HSET pairs (caller includes new status + updatedAt).
- * Returns 1 on match, 0 otherwise (incl. missing key — HGET returns false).
- */
-const CAS_STATUS_LUA = `
-local current = redis.call('HGET', KEYS[1], 'status')
-if not current then return 0 end
-local matched = false
-for st in string.gmatch(ARGV[1], '[^,]+') do
-  if st == current then matched = true end
-end
-if not matched then return 0 end
-local fields = {}
-for i = 2, #ARGV do fields[#fields + 1] = ARGV[i] end
-if #fields > 0 then redis.call('HSET', KEYS[1], unpack(fields)) end
-return 1
-`;
 
 export class RedisSessionHandoffProposalStore implements ISessionHandoffProposalStore {
   private readonly redis: RedisClient;
@@ -97,6 +77,7 @@ export class RedisSessionHandoffProposalStore implements ISessionHandoffProposal
       sourceThreadId: input.sourceThreadId,
       sourceSessionId: input.sourceSessionId,
       sourceCatId: input.sourceCatId,
+      sourceMessageId: input.sourceMessageId,
       userId: input.userId,
       note: {
         ...input.note,
@@ -106,9 +87,10 @@ export class RedisSessionHandoffProposalStore implements ISessionHandoffProposal
       },
       createdAt: now,
       updatedAt: now,
+      publication: { state: 'staged', stagedAt: now },
     };
     const pipeline = this.redis.multi();
-    pipeline.hset(HandoffKeys.detail(proposalId), ...serialize(proposal));
+    pipeline.hset(HandoffKeys.detail(proposalId), ...serializeSessionHandoffProposal(proposal));
     pipeline.zadd(HandoffKeys.session(proposal.sourceSessionId), String(now), proposalId);
     pipeline.zadd(
       HandoffKeys.catThread(proposal.userId, proposal.sourceCatId, proposal.sourceThreadId),
@@ -123,7 +105,7 @@ export class RedisSessionHandoffProposalStore implements ISessionHandoffProposal
   async get(proposalId: string): Promise<SessionHandoffProposal | null> {
     const data = await this.redis.hgetall(HandoffKeys.detail(proposalId));
     if (!data || !data.proposalId) return null;
-    return hydrate(data);
+    return hydrateSessionHandoffProposal(data);
   }
 
   async claimForApproval(proposalId: string): Promise<SessionHandoffProposal | null> {
@@ -147,19 +129,30 @@ export class RedisSessionHandoffProposalStore implements ISessionHandoffProposal
   }
 
   async finalizeApproval(proposalId: string): Promise<SessionHandoffProposal | null> {
-    const ok = await this.cas(proposalId, 'approving', ['status', 'approved', 'updatedAt', String(Date.now())]);
+    // Pre-read to obtain userId (needed for index key computation in casAndSettle).
+    // The CAS check inside casAndSettle is still atomic — pre-read is only for userId.
+    const existing = await this.get(proposalId);
+    if (!existing || existing.status !== 'approving') return null;
+    const ok = await this.casAndSettle(proposalId, existing.userId, 'approving', 'approved', Date.now());
     if (!ok) return null;
-    const result = await this.get(proposalId);
-    if (result) await this.redis.zrem(HandoffKeys.user(result.userId), proposalId);
-    return result;
+    return this.get(proposalId);
   }
 
-  async markRejected(proposalId: string): Promise<SessionHandoffProposal | null> {
-    const ok = await this.cas(proposalId, 'pending', ['status', 'rejected', 'updatedAt', String(Date.now())]);
-    if (!ok) return null;
-    const result = await this.get(proposalId);
-    if (result) await this.redis.zrem(HandoffKeys.user(result.userId), proposalId);
-    return result;
+  async markRejected(proposalId: string, input: RejectSessionHandoffInput): Promise<SessionHandoffRejectionResult> {
+    return rejectSessionHandoffWithDisposition(this.redis, proposalId, input, (id) => this.get(id));
+  }
+
+  async loadHumanDispositionEntry(
+    input: SessionHandoffDispositionEntryLookup,
+  ): Promise<HumanDispositionLedgerEntry | null> {
+    const proposalId = sessionHandoffProposalIdFromSourceRef(input.receipt.sourceRef);
+    if (!proposalId) return null;
+    const proposal = await this.get(proposalId);
+    if (!proposal || proposal.userId !== input.ownerUserId) return null;
+    const entry = humanDispositionLedgerEntrySchema.safeParse(proposal.humanDispositionLedgerEntry);
+    if (!entry.success) return null;
+    const receipt = buildHumanDispositionLedgerReceipt(entry.data);
+    return JSON.stringify(receipt) === JSON.stringify(input.receipt) ? entry.data : null;
   }
 
   async markExpired(proposalId: string): Promise<SessionHandoffProposal | null> {
@@ -182,7 +175,7 @@ export class RedisSessionHandoffProposalStore implements ISessionHandoffProposal
       if (err || !data || typeof data !== 'object') continue;
       const d = data as Record<string, string>;
       if (!d.proposalId || !ACTIVE_STATUSES.has(d.status)) continue;
-      out.push(hydrate(d));
+      out.push(hydrateSessionHandoffProposal(d));
     }
     return out;
   }
@@ -201,8 +194,28 @@ export class RedisSessionHandoffProposalStore implements ISessionHandoffProposal
       if (err || !data || typeof data !== 'object') continue;
       const d = data as Record<string, string>;
       if (!d.proposalId || d.status !== 'pending') continue;
-      out.push(hydrate(d));
+      out.push(hydrateSessionHandoffProposal(d));
       if (out.length >= limit) break;
+    }
+    return out;
+  }
+
+  async listSettledByUser(userId: string, limit = 100): Promise<SessionHandoffProposal[]> {
+    // Read from settled ZSet (score=updatedAt), newest first (ZREVRANGE).
+    const ids = await this.redis.zrevrange(HandoffKeys.settledUser(userId), 0, limit - 1);
+    if (ids.length === 0) return [];
+    const pipeline = this.redis.pipeline();
+    for (const id of ids) pipeline.hgetall(HandoffKeys.detail(id));
+    const results = await pipeline.exec();
+    if (!results) return [];
+    const out: SessionHandoffProposal[] = [];
+    for (const [err, data] of results) {
+      if (err || !data || typeof data !== 'object') continue;
+      const d = data as Record<string, string>;
+      if (!d.proposalId) continue;
+      // Double-check status in case of stale index membership
+      if (d.status !== 'approved' && d.status !== 'rejected') continue;
+      out.push(hydrateSessionHandoffProposal(d));
     }
     return out;
   }
@@ -213,8 +226,8 @@ export class RedisSessionHandoffProposalStore implements ISessionHandoffProposal
     sourceThreadId: string,
   ): Promise<SessionHandoffProposal | null> {
     const ids = await this.redis.zrevrange(HandoffKeys.catThread(userId, sourceCatId, sourceThreadId), 0, 0);
-    if (ids.length === 0) return null;
-    return this.get(ids[0]!);
+    const id = ids[0];
+    return id ? this.get(id) : null;
   }
 
   async countRecentByCatThread(
@@ -257,6 +270,39 @@ export class RedisSessionHandoffProposalStore implements ISessionHandoffProposal
     await this.redis.eval(RELEASE_DEDUP_LUA, 1, HandoffKeys.dedup(userId, clientRequestId), expectedProposalId);
   }
 
+  async getPublication(proposalId: string): Promise<ApprovalPublication | null> {
+    return (await this.get(proposalId))?.publication ?? null;
+  }
+
+  async commitEnvelope(proposalId: string, envelope: ApprovalEnvelope): Promise<void> {
+    const proposal = await this.get(proposalId);
+    if (!proposal) throw new Error(`proposal not found: ${proposalId}`);
+    assertApprovalEnvelopeIdentity(envelope, {
+      canonicalProposalId: proposal.proposalId,
+      sourceFeatureId: 'F225',
+      ownerUserId: proposal.userId,
+      requesterCatId: proposal.sourceCatId,
+      createdAt: proposal.createdAt,
+    });
+    await commitRedisApprovalEnvelope(this.redis, HandoffKeys.detail(proposalId), envelope);
+  }
+
+  async abortStaged(proposalId: string, _reason: string): Promise<void> {
+    const proposal = await this.get(proposalId);
+    if (!proposal) return;
+    await abortRedisStaged(
+      this.redis,
+      HandoffKeys.detail(proposalId),
+      [
+        HandoffKeys.session(proposal.sourceSessionId),
+        HandoffKeys.catThread(proposal.userId, proposal.sourceCatId, proposal.sourceThreadId),
+        HandoffKeys.user(proposal.userId),
+        HandoffKeys.settledUser(proposal.userId),
+      ],
+      proposalId,
+    );
+  }
+
   private async cas(proposalId: string, expected: string, pairs: string[]): Promise<boolean> {
     const result = (await this.redis.eval(
       CAS_STATUS_LUA,
@@ -267,58 +313,30 @@ export class RedisSessionHandoffProposalStore implements ISessionHandoffProposal
     )) as number;
     return result === 1;
   }
-}
 
-/** proposal → flat hash field/value pairs（note 整体 JSON，checkpoint 字段可选）。 */
-function serialize(p: SessionHandoffProposal): string[] {
-  const fields: string[] = [
-    'kind',
-    p.kind,
-    'proposalId',
-    p.proposalId,
-    'status',
-    p.status,
-    'sourceThreadId',
-    p.sourceThreadId,
-    'sourceSessionId',
-    p.sourceSessionId,
-    'sourceCatId',
-    p.sourceCatId,
-    'userId',
-    p.userId,
-    'note',
-    JSON.stringify(p.note),
-    'createdAt',
-    String(p.createdAt),
-    'updatedAt',
-    String(p.updatedAt),
-  ];
-  if (p.handoffNotePersistedAt !== undefined) fields.push('handoffNotePersistedAt', String(p.handoffNotePersistedAt));
-  if (p.sealedSessionId !== undefined) fields.push('sealedSessionId', p.sealedSessionId);
-  if (p.sealAcceptedAt !== undefined) fields.push('sealAcceptedAt', String(p.sealAcceptedAt));
-  if (p.continuationEntryId !== undefined) fields.push('continuationEntryId', p.continuationEntryId);
-  if (p.cardMessageId !== undefined) fields.push('cardMessageId', p.cardMessageId);
-  return fields;
-}
-
-/** flat hash → proposal（note JSON.parse，数字 parseInt，checkpoint 字段条件加）。 */
-function hydrate(data: Record<string, string>): SessionHandoffProposal {
-  const proposal: SessionHandoffProposal = {
-    kind: 'session_handoff',
-    proposalId: data.proposalId!,
-    status: data.status as HandoffProposalStatus,
-    sourceThreadId: data.sourceThreadId!,
-    sourceSessionId: data.sourceSessionId!,
-    sourceCatId: data.sourceCatId! as CatId,
-    userId: data.userId!,
-    note: JSON.parse(data.note!),
-    createdAt: parseInt(data.createdAt!, 10),
-    updatedAt: parseInt(data.updatedAt!, 10),
-  };
-  if (data.handoffNotePersistedAt) proposal.handoffNotePersistedAt = parseInt(data.handoffNotePersistedAt, 10);
-  if (data.sealedSessionId) proposal.sealedSessionId = data.sealedSessionId;
-  if (data.sealAcceptedAt) proposal.sealAcceptedAt = parseInt(data.sealAcceptedAt, 10);
-  if (data.continuationEntryId) proposal.continuationEntryId = data.continuationEntryId;
-  if (data.cardMessageId) proposal.cardMessageId = data.cardMessageId;
-  return proposal;
+  /**
+   * Atomic CAS + settled-index update via CAS_AND_SETTLE_LUA.
+   * Eliminates the crash window between status transition and ZADD.
+   */
+  private async casAndSettle(
+    proposalId: string,
+    userId: string,
+    expectedStatus: string,
+    newStatus: string,
+    updatedAt: number,
+  ): Promise<boolean> {
+    const result = (await this.redis.eval(
+      CAS_AND_SETTLE_LUA,
+      3,
+      HandoffKeys.detail(proposalId), // KEYS[1]
+      HandoffKeys.user(userId), // KEYS[2]
+      HandoffKeys.settledUser(userId), // KEYS[3]
+      expectedStatus, // ARGV[1]
+      newStatus, // ARGV[2]
+      String(updatedAt), // ARGV[3]
+      proposalId, // ARGV[4]
+      '', // ARGV[5] — approve has no rejection feedback
+    )) as string;
+    return result === 'APPLIED';
+  }
 }

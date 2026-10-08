@@ -1,6 +1,7 @@
 ---
 feature_ids: [F149]
-related_features: [F143, F053, F115, F118, F050]
+tips_exempt: "The September 29 change records F325 reuse of existing ACP infrastructure; it adds no user entry, account setup or runtime operation."
+related_features: [F143, F053, F115, F118, F050, F325]
 topics: [acp, runtime, process-pool, session-lease, gemini, agent-hosting]
 doc_kind: spec
 created: 2026-03-31
@@ -10,6 +11,8 @@ updated: 2026-04-02
 # F149: ACP Runtime Operations — 项目级进程池 + Session Lease
 
 > **Status**: done | **Owner**: Maine Coon/gpt52 | **Priority**: P1
+
+**2026-09-29 reuse**：[F325](F325-antigravity-native-parity.md) 复用本 F 的通用 ACP pool/session lease 与生命周期基础设施，旧 Gemini carrier 退役不等于通用 ACP 退役；AGY 专属验收归 F325。
 
 ## Why
 
@@ -146,7 +149,7 @@ operator experience（2026-03-31）：
 | `gemini-3.1-pro-preview` 会报 `No capacity available for model ...` / `MODEL_CAPACITY_EXHAUSTED`，即使 OAuth 订阅层级正常、visible usage 很低 | 这不是 `subscription_quota_exhausted`，而是 provider 侧容量/路由问题。F149 必须把它归到 `model_capacity`，不能当作本地 runtime 卡死或用户额度见底 |
 | headless / 非交互 Gemini CLI 在 capacity/5xx 路径上会重试 + exponential backoff，体感上会表现成“几分钟没回答” | F149 的观测必须拆开 `cold_init_ms` 与 `provider_backoff_ms`；控制面要能看见“是在重试退避”，而不是把所有长尾都归咎于 ACP 启动慢 |
 | `/stats` 或会话内用量页首先是当前 session 统计，不是 preview 模型实时可用性的权威面板 | 调度、熔断、告警不能依赖 CLI quota UI；是否有容量要以实际错误分类和请求链路遥测为准 |
-| `loadSession()` 会 replay 历史；session 热状态丢了以后，恢复本身也可能污染 transcript | session 连续性只能被当作性能优化，不是真相源。真相源仍是 Cat Café thread transcript；恢复路径必须 shadow 化 |
+| `loadSession()` 会 replay 历史；session 热状态丢了以后，恢复本身也可能污染 transcript | session 连续性只能被当作性能优化，不是真相源。真相源仍是 Clowder AI thread transcript；恢复路径必须 shadow 化 |
 | preview 模型在 provider/CLI 层可能伴随 fallback、silent downgrade 或重复 retry | 对被 pin 住的 agent identity，V1 不能默认“静默帮你换模型就算成功”；需要显式 policy，至少先保 transcript 语义和错误可见性 |
 | ACP stdio 单通道支持 cross-session multiplex（OQ-6 已验证） | V1 Gemini carrier `supportsMultiplexing=true`；调度器可向同一进程并行下发不同 session 的 prompt。same-session 仍为 single-flight |
 | 不同 ACP carrier 即使同协议，也不代表事件格式、权限模型、工具桥、副作用语义一致 | F149 未来可以复用 pool/lease/lifecycle，但不承诺“只写一个 provider 配置项就吃遍所有 ACP agent”；第二个 carrier 落地后才能收敛真正共性 |

@@ -1,21 +1,27 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
+import { catRegistry } from '@cat-cafe/shared';
 import { resolveWorkspaceRoot } from '../dist/config/capabilities/mcp-config-adapters.js';
+import { CONTEXT_WINDOW_SIZES } from '../dist/config/context-window-sizes.js';
 import { prepareOpenCodeAcpSpawnConfig } from '../dist/domains/cats/services/agents/providers/opencode-acp-spawn-config.js';
 import {
   deriveOpenCodeApiType,
   generateOpenCodeConfig,
   generateOpenCodeRuntimeConfig,
+  inferOpenCodeProviderFromModelName,
   OC_API_KEY_ENV,
   OC_BASE_URL_ENV,
   parseOpenCodeModel,
+  resolveEffectiveOpenCodeModel,
   summarizeOpenCodeRuntimeConfigForDebug,
+} from '../dist/domains/cats/services/agents/providers/opencode-config-template.js';
+import {
   writeOpenCodeInstructionsOnlyConfig,
   writeOpenCodeRuntimeConfig,
-} from '../dist/domains/cats/services/agents/providers/opencode-config-template.js';
+} from '../dist/domains/cats/services/agents/providers/opencode-config-writer.js';
 
 describe('opencode config module boundaries', () => {
   test('keeps ACP spawn config in a dedicated module under the line budget', () => {
@@ -35,6 +41,26 @@ describe('opencode config module boundaries', () => {
     assert.match(spawnSource, /prepareOpenCodeAcpSpawnConfig/);
   });
 });
+
+/**
+ * Register a minimal cat in the shared registry so that resolveServersForCat
+ * can derive the provider's clientId (needed for streamableHttp transport
+ * support checks). Safe across parallel tests — each call returns a teardown.
+ */
+function ensureCatRegistered(catId, clientId) {
+  if (catRegistry.has(catId)) return () => {};
+  catRegistry.register(catId, { id: catId, clientId });
+  return () => catRegistry.reset();
+}
+
+function writeCapabilitiesConfig(projectRoot, capabilities) {
+  mkdirSync(join(projectRoot, '.cat-cafe'), { recursive: true });
+  writeFileSync(
+    join(projectRoot, '.cat-cafe', 'capabilities.json'),
+    JSON.stringify({ version: 1, capabilities }),
+    'utf8',
+  );
+}
 
 describe('opencode Config Template (AC-9 + AC-10)', () => {
   test('generates valid opencode config with required fields', () => {
@@ -199,6 +225,40 @@ describe('parseOpenCodeModel', () => {
   });
 });
 
+describe('resolveEffectiveOpenCodeModel', () => {
+  test('canonicalizes recognized bare native models', () => {
+    const scenarios = [
+      ['claude-opus-4-6', 'anthropic'],
+      ['gpt-5.4', 'openai'],
+      ['o3', 'openai'],
+      ['gemini-3-flash', 'google'],
+      ['kimi-k2', 'kimi'],
+      ['deepseek-v4', 'deepseek'],
+      ['glm-5.2', 'zhipu'],
+      ['qwen3-coder', 'dashscope'],
+      ['MiniMax-M3', 'minimax'],
+    ];
+    for (const [model, providerName] of scenarios) {
+      assert.equal(inferOpenCodeProviderFromModelName(model), providerName);
+      assert.deepEqual(resolveEffectiveOpenCodeModel(undefined, model), {
+        providerName,
+        model: `${providerName}/${model}`,
+      });
+    }
+  });
+
+  test('keeps unknown bare models unresolved without an explicit provider', () => {
+    assert.equal(resolveEffectiveOpenCodeModel(undefined, 'vendor-model'), null);
+  });
+
+  test('resolves every bare model in the context-window catalog', () => {
+    const unresolved = Object.keys(CONTEXT_WINDOW_SIZES).filter(
+      (model) => resolveEffectiveOpenCodeModel(undefined, model) == null,
+    );
+    assert.deepEqual(unresolved, []);
+  });
+});
+
 describe('deriveOpenCodeApiType', () => {
   test('derives apiType solely from providerName', () => {
     const scenarios = [
@@ -229,22 +289,23 @@ describe('deriveOpenCodeApiType', () => {
 });
 
 describe('prepareOpenCodeAcpSpawnConfig', () => {
-  test('writes OPENCODE_CONFIG and credential env for OpenCode ACP api_key accounts', () => {
+  test('writes OPENCODE_CONFIG and credential env for bare OpenCode ACP api_key models', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-opencode-acp-'));
     try {
-      const prepared = prepareOpenCodeAcpSpawnConfig({
+      const prepared = await prepareOpenCodeAcpSpawnConfig({
         projectRoot,
         profileId: 'opencode-acp',
         clientId: 'opencode',
         command: '/opt/homebrew/bin/opencode',
-        providerName: 'anthropic',
-        defaultModel: 'anthropic/claude-opus-4-6',
+        providerName: undefined,
+        defaultModel: 'claude-opus-4-6',
         account: {
           id: 'anthropic-proxy',
           authType: 'api_key',
           apiKey: 'sk-test-secret',
           baseUrl: 'https://proxy.example/v1',
           models: ['claude-opus-4-6'],
+          modelAliases: { 'claude-opus-4-6': 'claude-opus-4-6-20260101' },
         },
       });
 
@@ -258,20 +319,33 @@ describe('prepareOpenCodeAcpSpawnConfig', () => {
       assert.equal(config.small_model, 'anthropic/claude-opus-4-6');
       assert.equal(config.provider.anthropic.options.apiKey, `{env:${OC_API_KEY_ENV}}`);
       assert.equal(config.provider.anthropic.options.baseURL, `{env:${OC_BASE_URL_ENV}}`);
+      assert.deepEqual(config.provider.anthropic.models, {
+        'claude-opus-4-6': {
+          id: 'claude-opus-4-6-20260101',
+          name: 'claude-opus-4-6',
+        },
+      });
+      assert.deepEqual(prepared.runtimeConfigSummary.providerSummary.anthropic.modelMappings, {
+        'claude-opus-4-6': 'claude-opus-4-6-20260101',
+      });
       assert.ok(!JSON.stringify(config).includes('sk-test-secret'), 'runtime config must not write secrets');
+      assert.ok(
+        !JSON.stringify(prepared.runtimeConfigSummary).includes('sk-test-secret'),
+        'debug summary must not include secrets',
+      );
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
     }
   });
 
-  test('does NOT manage generic ACP by command basename (clientId=acp + command=opencode → null)', () => {
+  test('does NOT manage generic ACP by command basename (clientId=acp + command=opencode → null)', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-opencode-acp-generic-'));
     try {
       // F161 cleanup: generic ACP (clientId='acp') must NOT be auto-upgraded to
       // OpenCode managed config by sniffing the command basename. OpenCode managed
       // config is opt-in via clientId='opencode' only. A generic carrier that happens
       // to point at the opencode binary stays on the pure generic env path.
-      const prepared = prepareOpenCodeAcpSpawnConfig({
+      const prepared = await prepareOpenCodeAcpSpawnConfig({
         projectRoot,
         profileId: 'generic-acp-opencode',
         clientId: 'acp',
@@ -293,10 +367,10 @@ describe('prepareOpenCodeAcpSpawnConfig', () => {
     }
   });
 
-  test('skips non-OpenCode ACP clients', () => {
+  test('skips non-OpenCode ACP clients', async () => {
     const projectRoot = mkdtempSync(join(tmpdir(), 'cat-cafe-opencode-acp-skip-'));
     try {
-      const prepared = prepareOpenCodeAcpSpawnConfig({
+      const prepared = await prepareOpenCodeAcpSpawnConfig({
         projectRoot,
         profileId: 'gemini-acp',
         clientId: 'google',
@@ -313,6 +387,63 @@ describe('prepareOpenCodeAcpSpawnConfig', () => {
       assert.equal(prepared, null);
     } finally {
       rmSync(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+// ── OpenCode limit block: we emit none ─────────────────────────────────────
+// #1208 began writing `limit: { context }` with no `output`. OpenCode requires
+// `output` whenever `limit` exists, so every affected cat died at config-parse.
+// Supplying a guessed `output` is not a fix either: OpenCode merges
+// `config ?? catalog ?? 0`, so our value would overwrite an authoritative,
+// sometimes smaller catalog output limit. With no authoritative per-carrier
+// output source at this layer, we emit neither field.
+describe('generateOpenCodeRuntimeConfig — no limit block', () => {
+  test('never writes a limit block, so the catalog stays authoritative', () => {
+    const config = generateOpenCodeRuntimeConfig({
+      providerName: 'zhipu',
+      models: ['glm-5.2'],
+      defaultModel: 'glm-5.2',
+      hasBaseUrl: true,
+    });
+
+    assert.deepEqual(config.provider.zhipu.models['glm-5.2'], { name: 'glm-5.2' });
+  });
+
+  test('a catalog-backed sub-32K model keeps its own output limit', () => {
+    const config = generateOpenCodeRuntimeConfig({
+      providerName: 'openrouter',
+      models: ['openai/gpt-4o'],
+      hasBaseUrl: true,
+    });
+
+    assert.equal(config.provider.openrouter.models['openai/gpt-4o'].limit, undefined);
+  });
+
+  test('model aliases still survive without a limit block', () => {
+    const config = generateOpenCodeRuntimeConfig({
+      providerName: 'zhipu',
+      models: ['glm-5.2'],
+      modelAliases: { 'glm-5.2': 'glm-5.2-0714' },
+      hasBaseUrl: true,
+    });
+
+    assert.deepEqual(config.provider.zhipu.models['glm-5.2'], {
+      id: 'glm-5.2-0714',
+      name: 'glm-5.2',
+    });
+  });
+
+  test('every context-window catalog entry still emits a limit-free entry', () => {
+    for (const model of Object.keys(CONTEXT_WINDOW_SIZES)) {
+      const resolved = resolveEffectiveOpenCodeModel(undefined, model);
+      const config = generateOpenCodeRuntimeConfig({
+        providerName: resolved.providerName,
+        models: [model],
+        hasBaseUrl: true,
+      });
+      const providerKey = Object.keys(config.provider)[0];
+      assert.equal(config.provider[providerKey].models[model].limit, undefined, `${model} must stay limit-free`);
     }
   });
 });
@@ -336,6 +467,48 @@ describe('generateOpenCodeRuntimeConfig', () => {
     assert.equal(config.provider.maas.npm, '@ai-sdk/openai-compatible');
     assert.equal(config.provider.maas.options.baseURL, `{env:${OC_BASE_URL_ENV}}`);
     assert.equal(config.provider.maas.options.apiKey, `{env:${OC_API_KEY_ENV}}`);
+  });
+
+  test('uses account model aliases as upstream ids while preserving local keys', () => {
+    const config = generateOpenCodeRuntimeConfig({
+      providerName: 'kimi',
+      models: ['kimi-code/k3'],
+      defaultModel: 'kimi/kimi-code/k3',
+      apiType: 'openai',
+      hasBaseUrl: true,
+      modelAliases: { 'kimi-code/k3': 'kimi-k3' },
+    });
+
+    assert.equal(config.model, 'kimi/kimi-code/k3');
+    assert.deepStrictEqual(config.provider.kimi.models, {
+      'kimi-code/k3': { id: 'kimi-k3', name: 'kimi-code/k3' },
+    });
+  });
+
+  test('keeps unknown models on identity routing without guessing aliases', () => {
+    const config = generateOpenCodeRuntimeConfig({
+      providerName: 'vendor',
+      models: ['vendor/custom-model'],
+      defaultModel: 'vendor/custom-model',
+      apiType: 'openai',
+    });
+
+    assert.deepStrictEqual(config.provider.vendor.models, {
+      'custom-model': { name: 'custom-model' },
+    });
+  });
+
+  test('keeps prototype-named local models on identity routing without inherited aliases', () => {
+    const config = generateOpenCodeRuntimeConfig({
+      providerName: 'vendor',
+      models: ['toString', 'constructor'],
+      modelAliases: { configured: 'upstream-configured' },
+    });
+
+    assert.deepStrictEqual(config.provider.vendor.models, {
+      toString: { name: 'toString' },
+      constructor: { name: 'constructor' },
+    });
   });
 
   test('apiType maps to correct npm adapters', () => {
@@ -417,7 +590,7 @@ describe('generateOpenCodeRuntimeConfig', () => {
     assert.equal(config.provider.test.npm, '@ai-sdk/openai-compatible');
   });
 
-  test('mcpServerPath injects mcp.cat-cafe section into config', () => {
+  test('#712: mcpServerPath injects split MCP servers into config', () => {
     const config = generateOpenCodeRuntimeConfig({
       providerName: 'anthropic',
       models: ['anthropic/claude-opus-4-6'],
@@ -427,47 +600,92 @@ describe('generateOpenCodeRuntimeConfig', () => {
     });
 
     assert.ok(config.mcp, 'config must have mcp section when mcpServerPath is provided');
-    assert.deepStrictEqual(config.mcp['cat-cafe'], {
-      type: 'local',
-      command: ['node', '/absolute/path/to/packages/mcp-server/dist/index.js'],
-    });
+    assert.equal(config.mcp['cat-cafe'], undefined, 'monolith should not be injected');
+    const names = Object.keys(config.mcp);
+    assert.ok(
+      names.some((n) => n.startsWith('cat-cafe-')),
+      'split servers should be injected',
+    );
   });
 
-  test('mcp.cat-cafe environment uses the invocation workspace', () => {
-    const config = generateOpenCodeRuntimeConfig({
-      providerName: 'anthropic',
-      models: ['anthropic/claude-opus-4-6'],
-      defaultModel: 'anthropic/claude-opus-4-6',
-      apiType: 'anthropic',
-      mcpServerPath: '/absolute/path/to/packages/mcp-server/dist/index.js',
-      allowedWorkspaceDirs: '/tmp/project',
-    });
-
-    assert.deepStrictEqual(config.mcp['cat-cafe'], {
-      type: 'local',
-      command: ['node', '/absolute/path/to/packages/mcp-server/dist/index.js'],
-      environment: {
-        ALLOWED_WORKSPACE_DIRS: '/tmp/project',
-      },
-    });
-  });
-
-  test('mcp.cat-cafe environment drives MCP workspace resolution', () => {
-    const originalAwd = process.env.ALLOWED_WORKSPACE_DIRS;
-    const originalWorkspace = process.env.CAT_CAFE_WORKSPACE_ROOT;
+  // #712: In the capabilities-based architecture, MCP entries come from
+  // capabilities.json via buildOpenCodeMcpSync — the old hardcoded cat-cafe
+  // entry no longer exists in generateOpenCodeRuntimeConfig.  The workspace
+  // resolution test below validates resolveWorkspaceRoot() directly.
+  test('#712: MCP entries come from capabilities, not hardcoded cat-cafe block', () => {
+    const cleanup = ensureCatRegistered('cat-test-oc-ws', 'openai');
     try {
-      process.env.ALLOWED_WORKSPACE_DIRS = '/stale/parent/workspace';
-      delete process.env.CAT_CAFE_WORKSPACE_ROOT;
       const config = generateOpenCodeRuntimeConfig({
         providerName: 'anthropic',
         models: ['anthropic/claude-opus-4-6'],
         defaultModel: 'anthropic/claude-opus-4-6',
         apiType: 'anthropic',
         mcpServerPath: '/absolute/path/to/packages/mcp-server/dist/index.js',
-        allowedWorkspaceDirs: '/tmp/project',
+        catId: 'cat-test-oc-ws',
+      });
+      // buildOpenCodeMcpSync produces split entrypoints, not a single cat-cafe key
+      assert.equal(config.mcp?.['cat-cafe'], undefined, 'monolithic cat-cafe key should not exist');
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('passes allowed workspace env into capabilities-backed managed MCP entries', async () => {
+    const cleanup = ensureCatRegistered('cat-test-oc-allowed-workspace', 'opencode');
+    const tempRoot = mkdtempSync(join(tmpdir(), 'opencode-mcp-env-'));
+    const distDir = join(tempRoot, 'packages', 'mcp-server', 'dist');
+    const projectRoot = join(tempRoot, 'project');
+    const allowedWorkspaceDirs = join(tempRoot, 'allowed-workspace');
+    try {
+      const { CAT_CAFE_SPLIT_ENTRYPOINTS } = await import('../dist/config/capabilities/capability-orchestrator.js');
+      mkdirSync(distDir, { recursive: true });
+      mkdirSync(projectRoot, { recursive: true });
+      writeFileSync(join(distDir, 'index.js'), '');
+      for (const entrypoint of CAT_CAFE_SPLIT_ENTRYPOINTS.values()) {
+        writeFileSync(join(distDir, entrypoint), '');
+      }
+      const [serverName] = CAT_CAFE_SPLIT_ENTRYPOINTS.keys();
+      writeCapabilitiesConfig(projectRoot, [
+        {
+          id: serverName,
+          type: 'mcp',
+          enabled: false,
+          globalEnabled: false,
+          source: 'cat-cafe',
+          mcpServer: { command: 'node', args: ['stale.js'] },
+          blockedCats: [],
+        },
+      ]);
+
+      const config = generateOpenCodeRuntimeConfig({
+        providerName: 'anthropic',
+        models: ['anthropic/claude-opus-4-6'],
+        defaultModel: 'anthropic/claude-opus-4-6',
+        apiType: 'anthropic',
+        mcpServerPath: join(distDir, 'index.js'),
+        catId: 'cat-test-oc-allowed-workspace',
+        capabilitiesProjectRoot: tempRoot,
+        workingDirectory: projectRoot,
+        allowedWorkspaceDirs,
       });
 
-      process.env.ALLOWED_WORKSPACE_DIRS = config.mcp['cat-cafe'].environment.ALLOWED_WORKSPACE_DIRS;
+      assert.equal(
+        config.mcp?.[serverName]?.environment?.ALLOWED_WORKSPACE_DIRS,
+        allowedWorkspaceDirs,
+        'managed split MCPs need invocation workspace env in OpenCode runtime config',
+      );
+    } finally {
+      cleanup();
+      rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('resolveWorkspaceRoot reads ALLOWED_WORKSPACE_DIRS from environment', () => {
+    const originalAwd = process.env.ALLOWED_WORKSPACE_DIRS;
+    const originalWorkspace = process.env.CAT_CAFE_WORKSPACE_ROOT;
+    try {
+      process.env.ALLOWED_WORKSPACE_DIRS = '/tmp/project';
+      delete process.env.CAT_CAFE_WORKSPACE_ROOT;
 
       assert.equal(
         resolveWorkspaceRoot(),
@@ -505,7 +723,8 @@ describe('generateOpenCodeRuntimeConfig', () => {
       undefined,
       'OAuth/native-auth runtime config must not reference missing CAT_CAFE_OC_BASE_URL',
     );
-    assert.ok(config.mcp?.['cat-cafe'], 'MCP injection must still be present');
+    // #712: capabilities.json split architecture — fallback generates split entries, not monolith 'cat-cafe'
+    assert.ok(config.mcp && Object.keys(config.mcp).length > 0, 'MCP injection must still be present');
   });
 
   test('mcp section is absent when mcpServerPath is not provided', () => {
@@ -543,6 +762,7 @@ describe('generateOpenCodeRuntimeConfig', () => {
       defaultModel: 'anthropic/minimax-m2.7',
       apiType: 'anthropic',
       hasBaseUrl: true,
+      modelAliases: { 'minimax-m2.7': 'upstream-minimax-m2.7' },
     });
 
     assert.equal(summary.model, 'anthropic/minimax-m2.7');
@@ -552,6 +772,10 @@ describe('generateOpenCodeRuntimeConfig', () => {
       anthropic: {
         npm: '@ai-sdk/anthropic',
         modelKeys: ['minimax-m2.7', 'minimax-text-01'],
+        modelMappings: {
+          'minimax-m2.7': 'upstream-minimax-m2.7',
+          'minimax-text-01': 'minimax-text-01',
+        },
         hasBaseUrl: true,
         apiKeySource: `env:${OC_API_KEY_ENV}`,
         baseUrlSource: `env:${OC_BASE_URL_ENV}`,
@@ -589,10 +813,10 @@ describe('writeOpenCodeInstructionsOnlyConfig', () => {
 });
 
 describe('writeOpenCodeRuntimeConfig', () => {
-  test('writes invocation-scoped runtime config file under .cat-cafe (OPENCODE_CONFIG)', () => {
+  test('writes invocation-scoped runtime config file under .cat-cafe (OPENCODE_CONFIG)', async () => {
     const tmpRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-config-'));
     try {
-      const configPath = writeOpenCodeRuntimeConfig(tmpRoot, 'opencode-maas', 'inv-123', {
+      const configPath = await writeOpenCodeRuntimeConfig(tmpRoot, 'opencode-maas', 'inv-123', {
         providerName: 'maas',
         models: ['maas/glm-5'],
         defaultModel: 'maas/glm-5',
@@ -610,11 +834,11 @@ describe('writeOpenCodeRuntimeConfig', () => {
     }
   });
 
-  test('persists mcp.cat-cafe section to disk when mcpServerPath is provided', () => {
+  test('#712: persists split MCP servers to disk when mcpServerPath is provided', async () => {
     const tmpRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-mcp-'));
     try {
       const mcpPath = '/opt/cat-cafe/packages/mcp-server/dist/index.js';
-      const configPath = writeOpenCodeRuntimeConfig(tmpRoot, 'opencode', 'inv-game-001', {
+      const configPath = await writeOpenCodeRuntimeConfig(tmpRoot, 'opencode', 'inv-game-001', {
         providerName: 'anthropic',
         models: ['anthropic/claude-opus-4-6'],
         defaultModel: 'anthropic/claude-opus-4-6',
@@ -623,11 +847,281 @@ describe('writeOpenCodeRuntimeConfig', () => {
       });
 
       const content = JSON.parse(readFileSync(configPath, 'utf-8'));
-      assert.deepStrictEqual(content.mcp, {
-        'cat-cafe': { type: 'local', command: ['node', mcpPath] },
-      });
+      assert.ok(content.mcp, 'mcp section should be present');
+      assert.equal(content.mcp['cat-cafe'], undefined, 'monolith should not appear');
+      const names = Object.keys(content.mcp);
+      assert.ok(names.includes('cat-cafe-collab'), 'collab split expected');
+      assert.ok(names.includes('cat-cafe-memory'), 'memory split expected');
+      assert.equal(content.mcp['cat-cafe-collab'].command[0], process.execPath);
     } finally {
       rmSync(tmpRoot, { recursive: true, force: true });
+    }
+  });
+
+  test('uses runtime root capabilities for invocation MCP config', async () => {
+    const configRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-cap-config-'));
+    const runtimeRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-cap-binary-'));
+    const projectDir = mkdtempSync(join(tmpdir(), 'oc-runtime-cap-project-'));
+    const mcpDistDir = join(runtimeRoot, 'packages', 'mcp-server', 'dist');
+    try {
+      mkdirSync(mcpDistDir, { recursive: true });
+      for (const entry of ['index.js', 'collab.js', 'memory.js', 'signals.js', 'limb.js', 'finance.js']) {
+        writeFileSync(join(mcpDistDir, entry), '// stub', 'utf8');
+      }
+      writeCapabilitiesConfig(runtimeRoot, [
+        {
+          id: 'cat-cafe-collab',
+          type: 'mcp',
+          globalEnabled: false,
+          source: 'cat-cafe',
+          mcpServer: { command: 'node', args: [] },
+        },
+        {
+          id: 'cat-cafe-memory',
+          type: 'mcp',
+          globalEnabled: true,
+          source: 'cat-cafe',
+          mcpServer: { command: 'node', args: [] },
+        },
+      ]);
+
+      const configPath = await writeOpenCodeRuntimeConfig(
+        configRoot,
+        'opencode',
+        'inv-cap-root',
+        {
+          providerName: 'anthropic',
+          models: ['anthropic/claude-opus-4-6'],
+          defaultModel: 'anthropic/claude-opus-4-6',
+          apiType: 'anthropic',
+          mcpServerPath: join(mcpDistDir, 'index.js'),
+        },
+        projectDir,
+      );
+
+      const content = JSON.parse(readFileSync(configPath, 'utf-8'));
+      assert.equal(content.mcp['cat-cafe-collab'], undefined, 'disabled runtime capability must not be injected');
+      assert.ok(content.mcp['cat-cafe-memory'], 'enabled runtime capability must be injected');
+      assert.equal(content.mcp['cat-cafe-memory'].command[0], process.execPath);
+    } finally {
+      rmSync(configRoot, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test('keeps command-only external MCP entries when capabilities omit args', async () => {
+    const configRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-no-args-config-'));
+    const runtimeRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-no-args-binary-'));
+    const projectDir = mkdtempSync(join(tmpdir(), 'oc-runtime-no-args-project-'));
+    const mcpDistDir = join(runtimeRoot, 'packages', 'mcp-server', 'dist');
+    try {
+      mkdirSync(mcpDistDir, { recursive: true });
+      writeFileSync(join(mcpDistDir, 'index.js'), '// stub', 'utf8');
+      writeCapabilitiesConfig(runtimeRoot, [
+        {
+          id: 'external-command-only',
+          type: 'mcp',
+          enabled: true,
+          source: 'external',
+          mcpServer: { command: 'external-tool' },
+        },
+      ]);
+
+      const configPath = await writeOpenCodeRuntimeConfig(
+        configRoot,
+        'opencode',
+        'inv-no-args',
+        {
+          providerName: 'anthropic',
+          models: ['anthropic/claude-opus-4-6'],
+          defaultModel: 'anthropic/claude-opus-4-6',
+          apiType: 'anthropic',
+          mcpServerPath: join(mcpDistDir, 'index.js'),
+        },
+        projectDir,
+      );
+
+      const content = JSON.parse(readFileSync(configPath, 'utf-8'));
+      assert.deepEqual(content.mcp['external-command-only'].command, ['external-tool']);
+    } finally {
+      rmSync(configRoot, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+      rmSync(projectDir, { recursive: true, force: true });
+    }
+  });
+
+  test('preserves streamableHttp external MCP entries as OpenCode remote servers', async () => {
+    // resolveServersForCat gates streamableHttp on provider clientId — register
+    // the cat so the transport check passes.
+    const teardown = ensureCatRegistered('opencode', 'opencode');
+    const configRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-remote-config-'));
+    const runtimeRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-remote-binary-'));
+    const projectDir = mkdtempSync(join(tmpdir(), 'oc-runtime-remote-project-'));
+    const mcpDistDir = join(runtimeRoot, 'packages', 'mcp-server', 'dist');
+    try {
+      mkdirSync(mcpDistDir, { recursive: true });
+      writeFileSync(join(mcpDistDir, 'index.js'), '// stub', 'utf8');
+      writeCapabilitiesConfig(runtimeRoot, [
+        {
+          id: 'context7',
+          type: 'mcp',
+          enabled: true,
+          source: 'external',
+          mcpServer: {
+            transport: 'streamableHttp',
+            url: 'https://mcp.context7.example/mcp',
+            headers: { Authorization: 'Bearer test-token' },
+          },
+        },
+      ]);
+
+      const configPath = await writeOpenCodeRuntimeConfig(
+        configRoot,
+        'opencode',
+        'inv-remote',
+        {
+          providerName: 'anthropic',
+          models: ['anthropic/claude-opus-4-6'],
+          defaultModel: 'anthropic/claude-opus-4-6',
+          apiType: 'anthropic',
+          mcpServerPath: join(mcpDistDir, 'index.js'),
+        },
+        projectDir,
+      );
+
+      const content = JSON.parse(readFileSync(configPath, 'utf-8'));
+      assert.deepEqual(content.mcp.context7, {
+        type: 'remote',
+        url: 'https://mcp.context7.example/mcp',
+        enabled: true,
+        headers: { Authorization: 'Bearer test-token' },
+      });
+    } finally {
+      rmSync(configRoot, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+      rmSync(projectDir, { recursive: true, force: true });
+      teardown();
+    }
+  });
+
+  test('#712: external server named cat-cafe-* stays external — not rewritten to split entrypoint', async () => {
+    // Regression: an external MCP server whose name collides with a split
+    // entrypoint name (e.g. "cat-cafe-limb") must keep its original command,
+    // not be silently rewritten to the built-in dist/limb.js path.
+    const teardown = ensureCatRegistered('opencode', 'opencode');
+    const configRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-collision-config-'));
+    const runtimeRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-collision-binary-'));
+    const projectDir = mkdtempSync(join(tmpdir(), 'oc-runtime-collision-project-'));
+    const mcpDistDir = join(runtimeRoot, 'packages', 'mcp-server', 'dist');
+    try {
+      mkdirSync(mcpDistDir, { recursive: true });
+      for (const entry of ['index.js', 'collab.js', 'memory.js', 'signals.js', 'limb.js', 'finance.js']) {
+        writeFileSync(join(mcpDistDir, entry), '// stub', 'utf8');
+      }
+      writeCapabilitiesConfig(runtimeRoot, [
+        {
+          id: 'cat-cafe-limb',
+          type: 'mcp',
+          enabled: true,
+          source: 'external',
+          mcpServer: { command: 'my-custom-limb-server', args: ['--port', '9999'] },
+        },
+      ]);
+
+      const configPath = await writeOpenCodeRuntimeConfig(
+        configRoot,
+        'opencode',
+        'inv-collision',
+        {
+          providerName: 'anthropic',
+          models: ['anthropic/claude-opus-4-6'],
+          defaultModel: 'anthropic/claude-opus-4-6',
+          apiType: 'anthropic',
+          mcpServerPath: join(mcpDistDir, 'index.js'),
+        },
+        projectDir,
+      );
+
+      const content = JSON.parse(readFileSync(configPath, 'utf-8'));
+      const limb = content.mcp['cat-cafe-limb'];
+      assert.ok(limb, 'external cat-cafe-limb must be present');
+      assert.deepEqual(
+        limb.command,
+        ['my-custom-limb-server', '--port', '9999'],
+        'external source must keep original command, not rewrite to split entrypoint',
+      );
+    } finally {
+      rmSync(configRoot, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+      rmSync(projectDir, { recursive: true, force: true });
+      teardown();
+    }
+  });
+
+  test('excludes disabled capability-managed user MCP entries during merge', async () => {
+    const configRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-disabled-merge-config-'));
+    const runtimeRoot = mkdtempSync(join(tmpdir(), 'oc-runtime-disabled-merge-binary-'));
+    const projectDir = mkdtempSync(join(tmpdir(), 'oc-runtime-disabled-merge-project-'));
+    const mcpDistDir = join(runtimeRoot, 'packages', 'mcp-server', 'dist');
+    try {
+      mkdirSync(mcpDistDir, { recursive: true });
+      for (const entry of ['index.js', 'collab.js', 'memory.js', 'signals.js', 'limb.js', 'finance.js']) {
+        writeFileSync(join(mcpDistDir, entry), '// stub', 'utf8');
+      }
+      writeCapabilitiesConfig(runtimeRoot, [
+        {
+          id: 'filesystem',
+          type: 'mcp',
+          globalEnabled: false,
+          source: 'external',
+          mcpServer: { command: 'npx', args: ['-y', '@mcp/fs'] },
+        },
+        {
+          id: 'cat-cafe-memory',
+          type: 'mcp',
+          globalEnabled: true,
+          source: 'cat-cafe',
+          mcpServer: { command: 'node', args: [] },
+        },
+      ]);
+      writeFileSync(
+        join(projectDir, 'opencode.json'),
+        JSON.stringify({
+          mcp: {
+            filesystem: { type: 'local', command: ['npx', '-y', '@mcp/fs-stale'] },
+            github: { type: 'remote', url: 'https://api.githubcopilot.com/mcp/', enabled: true },
+            'cat-cafe': { type: 'local', command: ['node', 'legacy-monolith.js'] },
+            'my-tool': { type: 'local', command: ['node', 'tool.js'] },
+          },
+        }),
+        'utf8',
+      );
+
+      const configPath = await writeOpenCodeRuntimeConfig(
+        configRoot,
+        'opencode',
+        'inv-disabled-merge',
+        {
+          providerName: 'anthropic',
+          models: ['anthropic/claude-opus-4-6'],
+          defaultModel: 'anthropic/claude-opus-4-6',
+          apiType: 'anthropic',
+          mcpServerPath: join(mcpDistDir, 'index.js'),
+        },
+        projectDir,
+      );
+
+      const content = JSON.parse(readFileSync(configPath, 'utf-8'));
+      assert.equal(content.mcp.filesystem, undefined, 'disabled capability must not be re-added from opencode.json');
+      assert.equal(content.mcp.github, undefined, 'retired GitHub MCP must not be re-added from opencode.json');
+      assert.equal(content.mcp['cat-cafe'], undefined, 'legacy monolith alias must not be re-added from opencode.json');
+      assert.ok(content.mcp['my-tool'], 'unmanaged user server should still be merged');
+      assert.ok(content.mcp['cat-cafe-memory'], 'enabled capability should still be injected');
+    } finally {
+      rmSync(configRoot, { recursive: true, force: true });
+      rmSync(runtimeRoot, { recursive: true, force: true });
+      rmSync(projectDir, { recursive: true, force: true });
     }
   });
 });

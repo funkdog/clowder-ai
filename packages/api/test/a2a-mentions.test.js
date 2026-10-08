@@ -168,22 +168,12 @@ describe('parseA2AMentions', () => {
     assert.deepEqual(result, ['kimi']);
   });
 
-  it('analyzeA2AMentions returns empty suppressed (no suppression system)', async () => {
+  it('analyzeA2AMentions omits suppressed field (suppression system removed)', async () => {
     const { analyzeA2AMentions } = await import('../dist/domains/cats/services/agents/routing/a2a-mentions.js');
-    const result = analyzeA2AMentions('@布偶猫', 'codex');
-    assert.deepEqual(result.mentions, ['opus']);
-    assert.deepEqual(result.suppressed, []);
-  });
-
-  // === Backward compat: mode option is accepted but ignored ===
-
-  it('mode option is accepted but does not affect routing (backward compat)', async () => {
-    const { parseA2AMentions } = await import('../dist/domains/cats/services/agents/routing/a2a-mentions.js');
-    const text = '@布偶猫\n\n这是交接文档';
-    const strict = parseA2AMentions(text, 'codex', { mode: 'strict' });
-    const relaxed = parseA2AMentions(text, 'codex', { mode: 'relaxed' });
-    assert.deepEqual(strict, ['opus']);
-    assert.deepEqual(relaxed, ['opus']);
+    const result = analyzeA2AMentions('', 'codex');
+    assert.deepEqual(result.mentions, []);
+    assert.equal(result.suppressed, undefined);
+    assert.ok(Array.isArray(result.routing_warnings));
   });
 
   it('does NOT trigger for non-line-start @mention', async () => {

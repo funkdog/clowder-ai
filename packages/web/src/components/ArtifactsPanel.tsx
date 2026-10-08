@@ -2,11 +2,13 @@
 
 import type { GlobalArtifactDTO, ThreadArtifactDTO, ThreadArtifactType } from '@cat-cafe/shared';
 import type { JSX } from 'react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { pushThreadRouteWithHistory } from '@/components/ThreadSidebar/thread-navigation';
 import { useCatData } from '@/hooks/useCatData';
+import { formatCatDisplayName } from '@/lib/cat-display-name';
 import { useChatStore } from '@/stores/chatStore';
 import { API_URL } from '@/utils/api-client';
+import { isRowPrimaryActionTarget } from '@/utils/row-primary-action';
 import { scrollToMessage } from '@/utils/scrollToMessage';
 import { kickTeleportResolve, planTeleport } from '@/utils/teleport';
 import { useGlobalArtifacts } from '../hooks/useGlobalArtifacts';
@@ -15,7 +17,10 @@ import { ArtifactDetailView } from './artifacts/ArtifactDetailView';
 import { extractCatChips, filterByCat } from './artifacts/artifact-filters';
 import type { ArtifactGroup, GroupingMode } from './artifacts/artifact-grouping';
 import { groupArtifacts } from './artifacts/artifact-grouping';
+import type { ArtifactListOrigin, ArtifactListView } from './artifacts/artifact-list-state';
 import { artifactActionLabel, artifactRowMeta, resolveAssetUrl } from './artifacts/artifact-view';
+import { CompactLabel } from './content-overflow/CompactLabel';
+import { messagePublicationSource, usePublishedContent } from './content-review/usePublishedContent';
 
 const resolveUrl = (url?: string): string | undefined => resolveAssetUrl(url, API_URL);
 
@@ -170,16 +175,16 @@ function ArtifactRow({
         <Icon />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium text-cafe-secondary">{a.name}</div>
+        <CompactLabel label="产物名称" value={a.name} className="text-sm font-medium text-cafe-secondary" />
         <div className="mt-0.5 flex items-center gap-1.5 text-micro text-cafe-muted">
-          <span className="truncate">
-            {meta.catLabel} · {meta.relativeTime}
-          </span>
+          <CompactLabel label="产物来源" value={`${meta.catLabel} · ${meta.relativeTime}`} className="min-w-0 flex-1" />
           {/* Phase B: thread badge in global scope (skip when already grouped by thread) */}
           {global && grouping !== 'thread' && (
-            <span className="shrink-0 truncate rounded bg-cafe-surface-elevated px-1.5 py-0.5 text-micro text-cafe-muted">
-              {a.threadTitle}
-            </span>
+            <CompactLabel
+              label="所属对话"
+              value={a.threadTitle}
+              className="max-w-[45%] rounded bg-cafe-surface-elevated px-1.5 py-0.5 text-micro text-cafe-muted"
+            />
           )}
           {a.sourceMessageId && (
             <button
@@ -196,7 +201,18 @@ function ArtifactRow({
           )}
         </div>
       </div>
-      {url && (
+      {url && a.url && /^\/uploads\/[^/]+\.(png|mp4)$/i.test(a.url) ? (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect(a);
+          }}
+          className="shrink-0 rounded-lg border border-cafe px-2.5 py-1 text-micro text-cafe-muted"
+        >
+          打开作品
+        </button>
+      ) : url ? (
         <a
           href={url}
           target="_blank"
@@ -206,7 +222,7 @@ function ArtifactRow({
         >
           {artifactActionLabel(a.type)}
         </a>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -227,13 +243,17 @@ export function ArtifactsPanel({
   threadId,
   width,
   onClose,
+  onSelectArtifact,
+  initialView,
 }: {
   threadId: string;
   width?: number;
   onClose?: () => void;
+  onSelectArtifact?: (artifact: ThreadArtifactDTO | GlobalArtifactDTO, origin: ArtifactListOrigin) => void;
+  initialView?: ArtifactListView;
 }) {
   // F232 Phase B: scope toggle state
-  const [scope, setScope] = useState<ArtifactScope>('thread');
+  const [scope, setScope] = useState<ArtifactScope>(initialView?.scope ?? 'thread');
 
   // Data sources: thread-scoped (Phase A) + global (Phase B)
   const threadData = useThreadArtifacts(threadId);
@@ -244,17 +264,57 @@ export function ArtifactsPanel({
 
   const { getCatById } = useCatData();
   const workspaceWorktreeId = useChatStore((s) => s.workspaceWorktreeId);
-  const [filter, setFilter] = useState<FilterKey>('all');
-  const [q, setQ] = useState('');
+  const [filter, setFilter] = useState<FilterKey>(initialView?.filter ?? 'all');
+  const [q, setQ] = useState(initialView?.query ?? '');
   // AC-A7: 选中产物 → panel 内进入内容详情视图（null = 列表视图）。
   const [selected, setSelected] = useState<ThreadArtifactDTO | null>(null);
+  const publication = usePublishedContent();
+  const [sourceError, setSourceError] = useState<string | null>(null);
+  const selectArtifact = (artifact: ThreadArtifactDTO | GlobalArtifactDTO) => {
+    const origin: ArtifactListOrigin = {
+      kind: 'artifact-list',
+      threadId,
+      view: { scope, filter, query: q, grouping, catFilter, collapsed: [...collapsed] },
+    };
+    if (onSelectArtifact) {
+      onSelectArtifact(artifact, origin);
+      return;
+    }
+    if ((artifact.type === 'file' || artifact.type === 'code') && artifact.ref && !artifact.url) {
+      useChatStore.getState().openPublishedArtifact(threadId, artifact, origin);
+      return;
+    }
+    if (artifact.url && /^\/uploads\/[^/]+\.(png|mp4)$/i.test(artifact.url)) {
+      const source =
+        artifact.sourceMessageId && artifact.publicationItem
+          ? messagePublicationSource(
+              {
+                threadId: isGlobal(artifact) ? artifact.threadId : threadId,
+                messageId: artifact.sourceMessageId,
+                messageRevision: String(artifact.createdAt),
+              },
+              artifact.publicationItem,
+              artifact.url,
+            )
+          : null;
+      if (!source) {
+        setSourceError('原发布消息没有可核验的内容坐标，请回到来源核对。');
+        return;
+      }
+      setSourceError(null);
+      useChatStore.getState().openPublishedArtifact(threadId, artifact, origin);
+      return;
+    }
+    setSelected(artifact);
+  };
 
   // F232 Phase B: grouping mode (only active in global scope)
-  const [grouping, setGrouping] = useState<GroupingMode>('time');
+  const [grouping, setGrouping] = useState<GroupingMode>(initialView?.grouping ?? 'time');
   // F232 Phase B: cat filter (null = show all, catId string = filter to that cat)
-  const [catFilter, setCatFilter] = useState<string | null>(null);
+  const [catFilter, setCatFilter] = useState<string | null>(initialView?.catFilter ?? null);
   // Track collapsed groups by stable id (not label — labels can collide, gpt52 P1)
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set(initialView?.collapsed ?? []));
+  const previousScope = useRef({ threadId, scope });
   const toggleCollapse = useCallback(
     (groupId: string) =>
       setCollapsed((prev) => {
@@ -269,6 +329,8 @@ export function ArtifactsPanel({
   // Reset view state when threadId or scope changes.
   // biome-ignore lint/correctness/useExhaustiveDependencies: threadId + scope are intentional effect triggers (prop/state change → reset UI state)
   useEffect(() => {
+    if (previousScope.current.threadId === threadId && previousScope.current.scope === scope) return;
+    previousScope.current = { threadId, scope };
     setSelected(null);
     setFilter('all');
     setQ('');
@@ -294,8 +356,14 @@ export function ArtifactsPanel({
     [threadId],
   );
 
-  // F232 Phase B: resolve catId → display nickname (shared by grouping + cat filter)
-  const resolveNickname = useCallback((catId: string) => getCatById(catId)?.nickname, [getCatById]);
+  // F232 Phase B: resolve catId → standard Console member label (shared by grouping + cat filter)
+  const resolveNickname = useCallback(
+    (catId: string) => {
+      const cat = getCatById(catId);
+      return cat ? formatCatDisplayName(cat) : undefined;
+    },
+    [getCatById],
+  );
 
   // F232 Phase B: apply cat filter first, then compute counts on the cat-filtered set
   const catFiltered = useMemo(
@@ -359,6 +427,11 @@ export function ArtifactsPanel({
       className="flex flex-col overflow-hidden bg-cafe-surface text-cafe"
       style={width ? { width, flexShrink: 0 } : { flex: '1 1 0%', minWidth: 0 }}
     >
+      {sourceError || publication.error ? (
+        <p role="alert" className="p-3 text-sm text-cafe-error">
+          {sourceError ?? publication.error}
+        </p>
+      ) : null}
       {selected ? (
         <ArtifactDetailView
           artifact={selected}
@@ -515,15 +588,30 @@ export function ArtifactsPanel({
                 return (
                   <div key={group.id}>
                     {showHeader && (
-                      <button
-                        type="button"
-                        onClick={() => toggleCollapse(group.id)}
-                        className="flex w-full items-center gap-1.5 border-b border-cafe-subtle bg-cafe-surface-sunken px-3 py-2 text-left"
+                      // biome-ignore lint/a11y: the nested native button owns keyboard/screen-reader semantics; the wrapper restores the surrounding pointer hit area
+                      <div
+                        data-artifact-group-header
+                        onClick={(event) => {
+                          if (isRowPrimaryActionTarget(event.target, event.currentTarget)) toggleCollapse(group.id);
+                        }}
+                        className="flex w-full cursor-pointer items-center gap-1.5 border-b border-cafe-subtle bg-cafe-surface-sunken px-3 py-2 text-left"
                       >
-                        <IconChevron open={isOpen} />
-                        <span className="flex-1 truncate text-xs font-semibold text-cafe-secondary">{group.label}</span>
+                        <button
+                          type="button"
+                          aria-expanded={isOpen}
+                          aria-label={`${isOpen ? '收起' : '展开'}分组：${group.label}`}
+                          onClick={() => toggleCollapse(group.id)}
+                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded text-cafe-muted transition-colors hover:bg-cafe-surface-elevated hover:text-cafe-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cafe-accent"
+                        >
+                          <IconChevron open={isOpen} />
+                        </button>
+                        <CompactLabel
+                          label="分组名称"
+                          value={group.label}
+                          className="min-w-0 flex-1 text-xs font-semibold text-cafe-secondary"
+                        />
                         <span className="text-micro text-cafe-muted">{group.count}</span>
-                      </button>
+                      </div>
                     )}
                     {isOpen &&
                       group.items.map((a, i) => (
@@ -532,8 +620,8 @@ export function ArtifactsPanel({
                           a={a}
                           index={i}
                           grouping={grouping}
-                          resolveNick={(id) => getCatById(id)?.nickname}
-                          onSelect={setSelected}
+                          resolveNick={resolveNickname}
+                          onSelect={selectArtifact}
                           onJump={handleJump}
                         />
                       ))}

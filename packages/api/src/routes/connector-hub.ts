@@ -1,6 +1,12 @@
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isOperationField, isValueField, type ValueConfigField } from '@cat-cafe/shared';
+import {
+  isOperationField,
+  isValueField,
+  matchesRequiredWhen,
+  type RequiredWhen,
+  type ValueConfigField,
+} from '@cat-cafe/shared';
 import type { RedisClient } from '@cat-cafe/shared/utils';
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { configEventBus, createChangeSetId } from '../config/config-event-bus.js';
@@ -137,7 +143,7 @@ interface ConnectorFieldDef {
   /** Select options (only for type: select). */
   options?: Array<{ value: string; label: string }>;
   /** When set, this field is only required if the condition env var has the given value */
-  requiredWhen?: { envName: string; value: string };
+  requiredWhen?: RequiredWhen;
   /** When true, this field is never required for the platform to be "configured" */
   optional?: boolean;
   /** Default value used when the env var is not set — aligns status page with runtime normalization */
@@ -392,7 +398,7 @@ function isRequiredFieldSatisfied(
   if (field.requiredWhen) {
     const conditionField = fields.find((candidate) => candidate.envName === field.requiredWhen?.envName);
     const conditionValue = resolveRequiredWhenConditionValue(conditionField, env[field.requiredWhen.envName]);
-    if (conditionValue !== field.requiredWhen.value) return true;
+    if (!matchesRequiredWhen(field.requiredWhen, conditionValue)) return true;
   }
   return isConfiguredFieldValue(field, env[field.envName]);
 }
@@ -484,7 +490,7 @@ export function buildConnectorStatus(
   return builtinStatuses;
 }
 
-function buildConnectorStatusWithStoredConfig(): {
+export function buildConnectorStatusWithStoredConfig(): {
   projectRoot: string;
   manifests: ConnectorManifest[];
   status: PlatformStatus[];
@@ -499,14 +505,6 @@ function buildConnectorStatusWithStoredConfig(): {
     connectorEnvById.set(m.id, { ...process.env, ...resolved });
   }
   return { projectRoot, manifests, status: buildConnectorStatus(process.env, manifests, connectorEnvById) };
-}
-
-function resolveStoredConnectorEnv(
-  connectorId: string,
-  manifest: ConnectorManifest,
-): Record<string, string | undefined> {
-  loadAllConnectorConfigs(resolveActiveProjectRoot(), [manifest]);
-  return resolveConnectorEnv(connectorId, manifest.config.filter(isValueField));
 }
 
 export const connectorHubRoutes: FastifyPluginAsync<ConnectorHubRoutesOptions> = async (app, opts) => {
@@ -629,17 +627,12 @@ export const connectorHubRoutes: FastifyPluginAsync<ConnectorHubRoutesOptions> =
         return status;
       }
 
+      // QR-based login → always default to websocket (works behind CF Access / NAT).
       const updates = [
         { name: 'FEISHU_APP_ID', value: status.appId ?? null },
         { name: 'FEISHU_APP_SECRET', value: status.appSecret ?? null },
+        { name: 'FEISHU_CONNECTION_MODE', value: 'websocket' },
       ];
-      const feishuManifest = getConnectorManifests().get('feishu');
-      const feishuEnv = feishuManifest ? resolveStoredConnectorEnv('feishu', feishuManifest) : process.env;
-      const currentMode = feishuEnv.FEISHU_CONNECTION_MODE === 'websocket' ? 'websocket' : 'webhook';
-      const verificationToken = feishuEnv.FEISHU_VERIFICATION_TOKEN;
-      if (currentMode === 'webhook' && (!verificationToken || verificationToken.trim() === '')) {
-        updates.push({ name: 'FEISHU_CONNECTION_MODE', value: 'websocket' });
-      }
       const writeError = await applyAuditedConnectorSecretUpdates(
         app,
         'feishu',

@@ -75,11 +75,11 @@ describe('Cross-domain SOP schema validation (AC-E23)', () => {
     }
   });
 
-  it('stubs cover multiple diverse domains (not all the same)', () => {
+  it('stubs each have a unique domain (diverse SOP types)', () => {
     const catalog = loadSopDefinitionCatalog({ repoRoot });
     const domains = catalog.stubDefinitions.map((d) => d.domain);
     const uniqueDomains = new Set(domains);
-    assert.ok(uniqueDomains.size >= 2, `stubs should cover at least 2 distinct domains, got: ${[...uniqueDomains]}`);
+    assert.equal(uniqueDomains.size, domains.length, `duplicate domains in stubs: ${domains}`);
   });
 
   it('runtime definitions have machine-checkable predicates', () => {

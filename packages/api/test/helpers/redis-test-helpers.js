@@ -31,13 +31,20 @@ export function assertRedisIsolationOrThrow(redisUrl, suiteName) {
     throw new Error(`[${suiteName}] Invalid REDIS_URL: ${redisUrl}`);
   }
 
+  if (parsed.port === '0' || parsed.port === '6399') {
+    throw new Error(`[${suiteName}] Redis port ${parsed.port} is disabled or protected`);
+  }
+
   if (parsed.hostname !== '127.0.0.1' && parsed.hostname !== 'localhost') {
     throw new Error(`[${suiteName}] REDIS_URL must point to localhost for tests, got hostname=${parsed.hostname}`);
   }
 
   const db = parsed.pathname.replace('/', '') || '0';
-  if (db !== '15') {
-    throw new Error(`[${suiteName}] REDIS_URL must use /15 test DB for isolation, got /${db}`);
+  const assignedDatabase = process.env.CAT_CAFE_REDIS_TEST_DB_ASSIGNED;
+  const hasValidAssignedDatabase = assignedDatabase === db && /^\d+$/.test(db) && Number(db) >= 15;
+  const manifestBackedRunner = Boolean(process.env.CAT_CAFE_REDIS_TEST_DB_MANIFEST);
+  if ((manifestBackedRunner || db !== '15') && !hasValidAssignedDatabase) {
+    throw new Error(`[${suiteName}] REDIS_URL must use /15 or a manifest-assigned test DB for isolation, got /${db}`);
   }
 }
 
@@ -47,6 +54,8 @@ export function assertRedisIsolationOrThrow(redisUrl, suiteName) {
  */
 export function redisIsolationSkipReason(redisUrl) {
   if (!redisUrl) return 'REDIS_URL not set';
+  const port = parseRedisUrl(redisUrl)?.port;
+  if (port === '0' || port === '6399') return `Redis port ${port} is disabled or protected`;
   if (process.env[ISOLATION_FLAG] !== '1') return 'Redis isolation flag not set';
   return false;
 }

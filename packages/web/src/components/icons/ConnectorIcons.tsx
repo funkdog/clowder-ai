@@ -93,6 +93,25 @@ export function HoldBallIcon({ className = 'w-5 h-5', color = '#374151' }: IconP
   );
 }
 
+/** Development result returning to its original owner, monoline SVG. */
+export function ReturnArrowIcon({ className = 'w-5 h-5', color = '#374151' }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="m9 5-5 5 5 5" />
+      <path d="M4 10h11a5 5 0 0 1 0 10h-3" />
+    </svg>
+  );
+}
+
 /** Auth key — key silhouette, monoline SVG, 24x24 */
 export function AuthKeyIcon({ className = 'w-5 h-5', color = '#374151' }: IconProps) {
   return (
@@ -109,6 +128,48 @@ export function AuthKeyIcon({ className = 'w-5 h-5', color = '#374151' }: IconPr
       <path d="M11.7 11.3L15.5 7.5" />
       <path d="M15.5 7.5l3 3" />
       <path d="M15.5 7.5L20 3" />
+    </svg>
+  );
+}
+
+/** Search — monoline SVG, 24x24 */
+export function SearchIcon({ className = 'w-5 h-5', color = '#374151' }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <circle cx="11" cy="11" r="6" />
+      <path d="m20 20-4.35-4.35" />
+    </svg>
+  );
+}
+
+/** Physical limb robot — monoline SVG, 24x24 */
+export function RobotIcon({ className = 'w-5 h-5', color = '#374151' }: IconProps) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke={color}
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      <path d="M12 3v3" />
+      <circle cx="12" cy="2.5" r="0.5" fill={color} stroke="none" />
+      <rect x="4" y="6" width="16" height="13" rx="3" />
+      <circle cx="9" cy="12" r="1" fill={color} stroke="none" />
+      <circle cx="15" cy="12" r="1" fill={color} stroke="none" />
+      <path d="M9 16h6" />
     </svg>
   );
 }

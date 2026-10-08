@@ -1,8 +1,10 @@
-**记忆**：`cat_cafe_search_evidence`（语义/模糊找）/ `cat_cafe_graph_resolve`（精确 anchor）/ `cat_cafe_list_recent`（零先验/扫最近）
-**协作**：`cat_cafe_post_message` / `cat_cafe_cross_post_message` / `cat_cafe_multi_mention` / `cat_cafe_hold_ball`
-**任务**：`cat_cafe_create_task` / `cat_cafe_update_task` / `cat_cafe_list_tasks`
-**Rich block**：`cat_cafe_create_rich_block`（schema via `cat_cafe_get_rich_block_rules`；字段名 `kind` / `v` / `id`，不是 `type`）
-**Drill-down**：`cat_cafe_read_session_digest` / `cat_cafe_read_session_events` / `cat_cafe_read_invocation_detail`
-**四肢控制面（Limb）**：`limb_list_available`（列出在线节点及能力，含插件提供的服务）/ `limb_invoke`（调用节点能力，nodeId 从 list 获取不要猜）
+**记忆**：已有可读来源直接读；否则 `cat_cafe_search_evidence`（模糊）/ `cat_cafe_graph_resolve`（实体/关系）/ `cat_cafe_list_recent`（零先验） / `cat_cafe_library_*`（collection）
+**Thread**：`cat_cafe_post_message`（本 thread；agent-key 才传 threadId）/ `cat_cafe_cross_post_message`（跨 thread，targetCats 或行首 @；路径 list_threads→cross_post_message→get_thread_context；爪感差留源，查证 owner→sourceMessageId，无 owner→F128）/ `cat_cafe_multi_mention` / `cat_cafe_hold_ball`（定时/命令）；读 `cat_cafe_get_thread_context` / `cat_cafe_list_threads` / `cat_cafe_get_pending_mentions`
+**新 thread**：`cat_cafe_propose_thread`（projectPath=项目归属，GitHub target≠projectPath；clowder-ai review/triage/intake→当前 cat-cafe 绝对路径，checkout→clowder-ai；reportingMode=final-only（默认），triage reportingMode=none；外部 PR/issue 子 thread 加载 `opensource-ops` 自行 grounding，服务端不再自动注入五问）/ `cat_cafe_withdraw_thread_proposal`（原猫撤回 pending，非用户 reject）
+**任务/富块/文档**：`cat_cafe_create_task` / `cat_cafe_update_task` / `cat_cafe_list_tasks`；`cat_cafe_create_rich_block`（结构化信息才用；字段名 `kind`/`v`/`id`，先 `cat_cafe_get_rich_block_rules`）；`cat_cafe_generate_document`（文档→IM）
+**PR/Issue 跟踪**：`cat_cafe_register_pr_tracking` / `cat_cafe_register_issue_tracking` / `cat_cafe_unregister_tracking`
+**External case**：`cat_cafe_validate_community_route`（接/退 route）/ `cat_cafe_record_external_review_verdict`
+**Drill/Limb**：`cat_cafe_list_session_chain` / `cat_cafe_read_session_digest` / `cat_cafe_read_session_events` / `cat_cafe_read_invocation_detail`；`limb_list_available`→`limb_list_tools`→`limb_invoke_tool`
+**会话进展**：`cat_cafe_record_thread_progress` 仅在本轮形成可恢复的关键变化时写一条 Receipt；回执叙述跟随 co-creator 在当前 thread 的主要交流语言
 
-工具未暴露时：先用 `tool_search` 精确搜工具名加载（schema 在 deferred 列表里）。规范全文：`cat-cafe-skills/refs/rich-blocks.md` + `cat-cafe-skills/refs/memory-routing-partial.md`。
+未暴露的工具先 `tool_search`；详规见 `rich-blocks.md` / `memory-routing-partial.md`。

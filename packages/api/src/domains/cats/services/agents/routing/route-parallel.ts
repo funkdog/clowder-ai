@@ -3,31 +3,58 @@
  * All cats respond independently to the same message.
  */
 
-import type { CatConfig, CatId } from '@cat-cafe/shared';
+import crypto from 'node:crypto';
+import type { CatConfig, CatId, OutputCommitDecision, RoutingPreflightDecisionV1 } from '@cat-cafe/shared';
 import { catRegistry, resolveWorkflowSopSkill } from '@cat-cafe/shared';
-import { getCatContextBudget } from '../../../../../config/cat-budgets.js';
-import { getConfigSessionStrategy, isSessionChainEnabled } from '../../../../../config/cat-config-loader.js';
+import {
+  deriveHistoryContextTokenCeiling,
+  resolvePromptInputCeilingTokens,
+} from '../../../../../config/context-capacity.js';
 import { createModuleLogger } from '../../../../../infrastructure/logger.js';
 import {
   ROUTE_HAS_A2A_HANDOFF,
   ROUTE_TOTAL_CATS_INVOKED,
   ROUTE_TOTAL_TOKENS,
 } from '../../../../../infrastructure/telemetry/genai-semconv.js';
+import {
+  conciergeVerifiedToolActions,
+  conciergeVerifiedToolTargetsPerReply,
+} from '../../../../../infrastructure/telemetry/instruments.js';
 import { estimateTokens } from '../../../../../utils/token-counter.js';
 import { conciergeContextForCat, prepareConciergeContext } from '../../../../concierge/ConciergeRoutingInterceptor.js';
+import { createConciergeMessageSearch } from '../../../../concierge/concierge-message-search.js';
 import {
   buildConciergeActions,
   extractTriagePlanIdsFromActions,
+  projectConciergeStoredContent,
   stripTriagePlanMarkers,
   type TriagePlanExtractionDeps,
 } from '../../../../concierge/concierge-reply-validator.js';
-import { buildConciergeSearchContext } from '../../../../concierge/concierge-search-context.js';
+import { buildConciergeSearchContext, type HandleEntry } from '../../../../concierge/concierge-search-context.js';
+import {
+  resolveVerifiedConciergeToolAnchor,
+  VerifiedConciergeToolTargetCollector,
+} from '../../../../concierge/concierge-verified-tool-target.js';
 import {
   ackGuideCompletion,
   guideContextForCat,
   prepareGuideContext,
 } from '../../../../guides/GuideRoutingInterceptor.js';
-import { triggerRecallCorrelation } from '../../../../memory/recall-correlation-hook.js';
+import type { MemoryCueOpportunitySeed } from '../../../../memory/cue/MemoryCueInvocationPromptService.js';
+// F260 AC-B8: Entity nudge — scan human input for already-registered entity references.
+import { type EntityNudgeCandidateBatch, EntityNudgeService } from '../../../../memory/EntityNudgeService.js';
+import { sharedEventStore, sharedNudgeCooldown } from '../../../../memory/entity-nudge-state.js';
+import type { PushRecallPresentation } from '../../../../memory/f200-types.js';
+import type { PreparedProactiveMemoryNudge } from '../../../../memory/ProactiveMemoryNudgeService.js';
+import { mergePushRecallPresentations, triggerRecallCorrelation } from '../../../../memory/recall-correlation-hook.js';
+import { drainCapturedTraces } from '../../../../prompt-hooks/PipelinePromptBuilder.js';
+import { getTraceStore } from '../../../../prompt-hooks/trace-bootstrap.js';
+// F237: Injection trace (v0 — fire-and-forget observability)
+import { buildTraceDetail, buildTraceSummary, collectTrace } from '../../../../prompt-hooks/trace-collector.js';
+import {
+  preflightRoutingDispatch,
+  routingDispatchPreflightReceipt,
+} from '../../../../routing-context/RoutingDispatchPreflightPort.js';
 import { assembleContext } from '../../context/ContextAssembler.js';
 import {
   buildInvocationContext,
@@ -35,44 +62,120 @@ import {
   buildStaticIdentityPackOnly,
   type InvocationContext,
 } from '../../context/SystemPromptBuilder.js';
+import { checkStreamOutputFreshness } from '../../freshness/checkStreamOutputFreshness.js';
+import { mayDeleteDraft } from '../../freshness/FreshnessDraftCustody.js';
+import type { FreshnessEvaluation } from '../../freshness/glass-box/FreshnessOutputCommitCoordinator.js';
+import { findReplayUnsafeToolNames } from '../../freshness/tool-replay-safety.js';
 import { formatDegradationMessage } from '../../orchestration/DegradationPolicy.js';
-import { buildSessionBootstrap } from '../../session/SessionBootstrap.js';
-import type { StoredToolEvent } from '../../stores/ports/MessageStore.js';
+import { mergePresentationCounts, type PresentationCounts } from '../../session/context/context-surface-projection.js';
+import { buildSessionBootstrap, MAX_SESSION_BOOTSTRAP_TOKENS } from '../../session/SessionBootstrap.js';
+import { createMessageDeliveryBoundary } from '../../stores/message-delivery-boundary.js';
+import type { AppendMessageInput, StoredToolEvent } from '../../stores/ports/MessageStore.js';
 import type { Thread, ThreadRoutingPolicyV1 } from '../../stores/ports/ThreadStore.js';
+import {
+  projectTurnExecutionMessage,
+  type TurnExecutionMessageProjection,
+} from '../../stores/ports/TurnExecutionStore.js';
+import { canViewMessage } from '../../stores/visibility.js';
 import { classifyTool } from '../../tool-usage/classify.js';
 import { deriveResultSummary } from '../../tool-usage/derive-result-summary.js';
 import { normalizeMcpToolName } from '../../tool-usage/normalize-mcp-tool-name.js';
+import { RECALL_CORRELATION_EVENT_WINDOW } from '../../tool-usage/ToolEventLog.js';
 import { getVoiceBlockSynthesizer } from '../../tts/VoiceBlockSynthesizer.js';
-import type { AgentMessage, AgentMessageType, MessageMetadata } from '../../types.js';
+import {
+  type AgentMessage,
+  type AgentMessageType,
+  type AgentService,
+  type MessageMetadata,
+  mergeMessageMetadataSnapshots,
+} from '../../types.js';
 import { buildCapsuleFromRouteState } from '../invocation/CollaborationContinuityCapsule.js';
-import { invokeSingleCat } from '../invocation/invoke-single-cat.js';
+import { resolveInvocationOrigin } from '../invocation/context-continuity.js';
+import {
+  applyActiveSessionCapacityPin,
+  resolveInvocationCapacitySnapshot,
+  sealBeforeInvocationIfNeeded,
+} from '../invocation/invocation-capacity-snapshot.js';
+import { type InvocationParams, invokeSingleCat } from '../invocation/invoke-single-cat.js';
 import { buildMcpCallbackInstructions, needsMcpInjection } from '../invocation/McpPromptInjector.js';
 import { getRichBlockBuffer } from '../invocation/RichBlockBuffer.js';
+import { resolveManagedSessionPolicySnapshot } from '../invocation/session-policy-snapshot.js';
 import { mergeStreams } from '../invocation/stream-merge.js';
 import { resolveDefaultClaudeMcpServerPath } from '../providers/ClaudeAgentService.js';
+import { AgentServiceUnavailableError } from '../registry/AgentServiceUnavailableError.js';
 import { parseA2AMentions } from '../routing/a2a-mentions.js';
 import { accumulateTextAggregate } from '../text-aggregation.js';
 import { type ContextEvalInput, extractContextEvalSignals } from './context-eval.js';
 import { buildBriefingMessage } from './format-briefing.js';
+import { isDirectOwnerDispositionOrigin } from './human-disposition-invocation-origin.js';
+import { persistUserFacingSystemInfoNotices } from './persist-system-info-warnings.js';
 import { extractRichFromText, isValidRichBlock } from './rich-block-extract.js';
 import type { RouteOptions, RouteStrategyDeps } from './route-helpers.js';
 import {
   assembleIncrementalContext,
+  collectExactPromptMessageIds,
+  computeContextBudget,
+  contextProjectionFromEpochDecision,
+  createIdempotentPendingProjectionQueue,
   createLeakedToolCallStreamStripper,
   detectContextDegradation,
+  explicitApprovedTasteCueSeeds,
+  explicitPromptForIncrementalContext,
   getService,
   getThreadBootcampMemberCount,
+  hydrateVisibleA2ATriggerPromptMessage,
+  isFinalGenerationBriefingBoundary,
   isUserFacingSystemInfoContent,
+  judgmentSurfaceCueSeeds,
+  mergePersistedPromptMessages,
+  operationalKnowledgeCueSeeds,
   routeContentBlocksForCat,
   sanitizeInjectedContent,
-  shouldAppendExplicitCurrentMessage,
+  shouldPersistContextBriefing,
+  storedMessageTimestamp,
+  subjectSeenCueSeeds,
   toStoredToolEvent,
   upsertMaxBoundary,
 } from './route-helpers.js';
+import { isRoutingOwnerAttempt } from './routing-owner-attempt.js';
+import { routingPreflightNotice } from './routing-preflight-notice.js';
 import { appendThinkingChunk, renderThinkingChunks } from './thinking-chunks.js';
 import { buildVoteTally, checkVoteCompletion, extractVoteFromText, VOTE_RESULT_SOURCE } from './vote-intercept.js';
 
 const log = createModuleLogger('route-parallel');
+
+// F260 P1-2 R2 fix: Nudge singletons moved to entity-nudge-state.ts
+// (shared across serial + parallel strategies — see sharedCandidateTracker/sharedNudgeCooldown)
+
+/**
+ * Wrap an agent stream so iteration-time errors yield synthetic error+done events
+ * instead of propagating into mergeStreams (which silently drops errored streams).
+ * Without this, @all can lose a cat's response with zero user-visible feedback.
+ */
+async function* wrapStreamWithErrorRecovery(
+  stream: AsyncIterable<AgentMessage>,
+  catId: CatId,
+): AsyncGenerator<AgentMessage> {
+  try {
+    yield* stream;
+  } catch (err) {
+    log.error({ catId, err }, 'Parallel stream iteration error — synthesizing error+done');
+    yield {
+      type: 'error' as AgentMessageType,
+      catId,
+      content: err instanceof Error ? err.message : String(err),
+      error: err instanceof Error ? err.message : String(err),
+      timestamp: Date.now(),
+    } as AgentMessage;
+    yield { type: 'done' as AgentMessageType, catId, timestamp: Date.now() } as AgentMessage;
+  }
+}
+
+function requireTargetCat(targetCats: CatId[], index: number): CatId {
+  const catId = targetCats[index];
+  if (!catId) throw new Error(`Missing parallel target cat at stream index ${index}`);
+  return catId;
+}
 
 export async function* routeParallel(
   deps: RouteStrategyDeps,
@@ -91,13 +194,154 @@ export async function* routeParallel(
     contextHistory,
     history,
     currentUserMessageId,
+    getQueuedFreshnessMessagesForCat,
     modeSystemPrompt,
     modeSystemPromptByCat,
   } = options;
+  let routingDispatchPreflightDecision: RoutingPreflightDecisionV1 | undefined;
+  if (deps.routingDispatchPreflight) {
+    const requestedTargetCats = [...targetCats];
+    const routingPreflight = await preflightRoutingDispatch(deps.routingDispatchPreflight, {
+      ownerId: userId,
+      targetCatIds: requestedTargetCats,
+      ...(isRoutingOwnerAttempt(options) ? { ownerRequestedAttempt: true } : {}),
+      ...(options.routingContextIntent ? { intent: options.routingContextIntent } : {}),
+    });
+    routingDispatchPreflightDecision = routingPreflight;
+    for (const targetCatId of requestedTargetCats) {
+      const receipt = routingDispatchPreflightReceipt(routingPreflight, targetCatId);
+      if (receipt.target.disposition === 'allowed') continue;
+      const notice = await routingPreflightNotice(deps, options, routingPreflight, targetCatId, threadId, true);
+      if (notice) yield notice;
+      if (receipt.target.disposition === 'rejected') {
+        yield {
+          type: 'error',
+          catId: targetCatId,
+          errorCode: 'routing_preflight_rejected',
+          error: '本次未执行：成员当前不可用。恢复后可重试原消息。',
+          timestamp: Date.now(),
+        };
+      }
+    }
+    targetCats = requestedTargetCats.filter(
+      (catId) => routingPreflight.targets.find((target) => target.targetCatId === catId)?.disposition !== 'rejected',
+    );
+    if (targetCats.length === 0) {
+      const terminalCatId = requestedTargetCats[0];
+      if (terminalCatId) yield { type: 'done', catId: terminalCatId, isFinal: true, timestamp: Date.now() };
+      return;
+    }
+  }
+  const ownerAuthProvenance = options.ownerAuthProvenance ?? 'unknown';
   const thinkingMode = options.thinkingMode ?? 'play';
+  const isFreshnessSupplement = Boolean(options.freshnessSupplementId);
+  const turnExecutionKind = isFreshnessSupplement ? 'freshness_supplement' : 'ordinary';
+  const exactA2ACallerCatId = options.a2aTriggerMessageId ? options.a2aCallerCatId : undefined;
+  const bridgeMentioningCatId =
+    options.cloudDispatchProvenance?.calledByCatId ?? (options.a2aTriggerMessageId ? exactA2ACallerCatId : userId);
+  const bridgeTriggerMessageId =
+    options.cloudDispatchProvenance?.sourceMessageId ?? options.a2aTriggerMessageId ?? currentUserMessageId;
   // P2-3 fix: also consider default MCP server path (ClaudeAgentService has fallback resolution)
   const mcpServerPath = process.env.CAT_CAFE_MCP_SERVER_PATH || resolveDefaultClaudeMcpServerPath();
   const incrementalMode = Boolean(currentUserMessageId && deps.deliveryCursorStore);
+  const parallelBatchId = options.parallelBatchId ?? crypto.randomUUID();
+  const exactPromptMessageIdsByCat = new Map<string, string[]>();
+
+  const evaluateParallelFreshness = async (
+    catId: CatId,
+    invocationId: string,
+    priorFrontierMessageId: string | null,
+  ): Promise<FreshnessEvaluation> => {
+    const freshness = await checkStreamOutputFreshness({
+      userId,
+      catId,
+      threadId,
+      currentTriggerMessageId: currentUserMessageId,
+      parallelBatchId,
+      coveredMessageIds: exactPromptMessageIdsByCat.get(catId as string) ?? [],
+      throughMessageId: priorFrontierMessageId,
+      cursorStore: deps.deliveryCursorStore!,
+      messageStore: deps.messageStore,
+      messageFilter: (raw: Record<string, unknown>) => {
+        if (raw.userId === 'system' || raw.origin === 'briefing') return false;
+        const viewer =
+          thinkingMode === 'play' ? ({ type: 'cat' as const, catId } as const) : ({ type: 'user' as const } as const);
+        if (
+          !canViewMessage(
+            raw as unknown as Parameters<typeof canViewMessage>[0],
+            viewer as Parameters<typeof canViewMessage>[1],
+          )
+        )
+          return false;
+        return true;
+      },
+      queueChecker: getQueuedFreshnessMessagesForCat
+        ? {
+            getQueuedForThread: (tid, uid, targetCatId) =>
+              getQueuedFreshnessMessagesForCat(tid, uid, targetCatId, options.parentInvocationId),
+          }
+        : undefined,
+      onEvent: deps.freshnessEventLog
+        ? (event) => {
+            deps.freshnessEventLog!.append({ ...event, invocationId, catId }, { ownerUserId: userId }).catch(() => {});
+          }
+        : undefined,
+    });
+    return { freshness, rawFrontierMessageId: priorFrontierMessageId };
+  };
+
+  const enqueueParallelSupplement = async (
+    decision: Extract<OutputCommitDecision, { kind: 'published_with_unseen' }>,
+    catId: string,
+  ): Promise<void> => {
+    if (!deps.freshnessOutputCommitCoordinator) return;
+    const supplement = await deps.freshnessOutputCommitCoordinator.getSupplement(decision.offeredSupplementId);
+    if (!supplement || supplement.status !== 'pending') return;
+    if (!options.freshnessReinvokeEnqueue) {
+      await deps.freshnessOutputCommitCoordinator.failSupplement(supplement.id, 'scheduler_unavailable');
+      return;
+    }
+    try {
+      const enqueueResult = options.freshnessReinvokeEnqueue({
+        threadId,
+        userId,
+        ownerAuthProvenance,
+        content: `[Freshness Supplement ${supplement.id}]`,
+        source: 'agent',
+        sourceCategory: 'freshness',
+        targetCats: [catId],
+        callerCatId: catId,
+        autoExecute: true,
+        priority: 'normal',
+        intent: 'execute',
+        idempotencyKey: supplement.id,
+        freshnessSupplementId: supplement.id,
+        freshnessSupplementLineageId: supplement.lineageId,
+        freshnessSupplementSeq: supplement.seq,
+        readOnlyToolPolicy: {
+          mode: 'read_only',
+          replayDeniedToolNames: supplement.replayUnsafeToolNames,
+        },
+        freshnessContext: {
+          sourceNoticeIds: [],
+          senders: [],
+          reason: 'parallel_published_with_unseen',
+        },
+      });
+      if (enqueueResult?.outcome === 'full') {
+        await deps.freshnessOutputCommitCoordinator.failSupplement(supplement.id, 'queue_full');
+      }
+    } catch (err) {
+      try {
+        await deps.freshnessOutputCommitCoordinator.failSupplement(supplement.id, 'scheduler_unavailable');
+      } catch (terminalErr) {
+        log.error(
+          { err, terminalErr, supplementId: supplement.id },
+          '[F254] parallel supplement enqueue and terminal persistence both failed',
+        );
+      }
+    }
+  };
 
   const degradationMsgs: AgentMessage[] = [];
   const boundaryByCat = new Map<CatId, string | undefined>();
@@ -168,32 +412,179 @@ export async function* routeParallel(
   // F229: Concierge interceptor — load duty-cat 岗位 context for concierge threads
   const conciergeCtx = await prepareConciergeContext(routeThread, userId, deps.invocationDeps.conciergeConfigStore);
 
-  // F229 KD-17: Pre-fetch search context for concierge threads
+  // F229 KD-23: Pre-fetch search context → per-invocation handle table + prompt context
   let conciergeSearchContextString = '';
-  if ('conciergeConfig' in conciergeCtx && deps.invocationDeps.conciergeHandleMapStore) {
+  let conciergeHandles: HandleEntry[] = [];
+  if ('conciergeConfig' in conciergeCtx) {
     try {
       const searchResult = await buildConciergeSearchContext({
         userMessage: message,
         threadId,
-        handleMapStore: deps.invocationDeps.conciergeHandleMapStore,
         evidenceStore: deps.evidenceStore,
+        messageSearch: createConciergeMessageSearch({
+          evidenceStore: deps.evidenceStore,
+          threadStore: deps.invocationDeps.threadStore,
+          messageStore: deps.messageStore,
+          userId,
+          ...(currentUserMessageId ? { source: { threadId, messageId: currentUserMessageId } } : {}),
+        }),
       });
       conciergeSearchContextString = searchResult.contextString;
+      conciergeHandles = searchResult.handles;
     } catch {
       // Fail-open
     }
   }
 
+  // F260 AC-B8: Entity nudge — scan HUMAN input only.
+  // P1-1 R2 fix: Gate on frustrationAutoIssueEligible (typed user-origin flag).
+  // routeParallel is NOT always human-originated — routeExecution dispatches
+  // connector and callback multi-mention fallback to parallel too.
+  // P1-2 R2 fix: Use shared singletons from entity-nudge-state.ts.
+  const cueOccurredAt = Date.now();
+  const memoryCueOpportunitySeeds = [...(options.memoryCueOpportunitySeeds ?? [])];
+  const memoryCueLegacyFallbacks: Array<{
+    seed: MemoryCueOpportunitySeed;
+    promptContext: string;
+  }> = [];
+  let entityNudgePresentation:
+    | { service: EntityNudgeService; candidates: EntityNudgeCandidateBatch; sourceMessageId: string }
+    | undefined;
+  let entityNudgeCuePresentation:
+    | {
+        service: EntityNudgeService;
+        candidates: EntityNudgeCandidateBatch;
+        sourceMessageId: string;
+        seeds: readonly Extract<MemoryCueOpportunitySeed, { kind: 'subject_seen' }>[];
+      }
+    | undefined;
+  let entityNudgePromptTokenEstimate = 0;
+  let routeOwnedNudgePromptContext = '';
+  let preparedProactiveMemoryNudge: PreparedProactiveMemoryNudge | null = null;
+  if (deps.evidenceStore && options.frustrationAutoIssueEligible !== false) {
+    try {
+      const evidenceDb = (deps.evidenceStore as { getDb?: () => import('better-sqlite3').Database }).getDb?.();
+      if (evidenceDb) {
+        const nudgeService = new EntityNudgeService(evidenceDb, sharedNudgeCooldown(), sharedEventStore(evidenceDb));
+        const nudgeResult = nudgeService.detectCandidates({
+          text: message,
+          threadId,
+          ownerUserId: userId,
+        });
+        const subjectCueSeeds = deps.invocationDeps.memoryCuePromptService
+          ? subjectSeenCueSeeds({
+              result: nudgeResult,
+              sourceMessageId: currentUserMessageId,
+              occurredAt: cueOccurredAt,
+            })
+          : [];
+        memoryCueOpportunitySeeds.push(...subjectCueSeeds);
+        const subjectCueEntityIds = new Set(subjectCueSeeds.map((seed) => seed.payload.entityId));
+        const subjectCueCandidates: EntityNudgeCandidateBatch = {
+          ...nudgeResult,
+          nudges: nudgeResult.nudges.filter((nudge) => nudge.entityId && subjectCueEntityIds.has(nudge.entityId)),
+        };
+        if (currentUserMessageId && subjectCueCandidates.nudges.length > 0) {
+          entityNudgeCuePresentation = {
+            service: nudgeService,
+            candidates: subjectCueCandidates,
+            sourceMessageId: currentUserMessageId,
+            seeds: subjectCueSeeds,
+          };
+        }
+        for (const seed of subjectCueSeeds) {
+          const nudge = nudgeResult.nudges.find(
+            (candidate) =>
+              candidate.entityId === seed.payload.entityId && candidate.matchedAlias === seed.payload.matchedAlias,
+          );
+          if (nudge) {
+            memoryCueLegacyFallbacks.push({
+              seed,
+              promptContext: EntityNudgeService.formatForPrompt({ ...nudgeResult, nudges: [nudge] }),
+            });
+          }
+        }
+        const cueEntityIds = new Set(subjectCueSeeds.map((seed) => seed.payload.entityId));
+        const presentationCandidates: EntityNudgeCandidateBatch = {
+          ...nudgeResult,
+          nudges: nudgeResult.nudges.filter((nudge) => !nudge.entityId || !cueEntityIds.has(nudge.entityId)),
+        };
+        if (currentUserMessageId && presentationCandidates.nudges.length > 0) {
+          entityNudgePresentation = {
+            service: nudgeService,
+            candidates: presentationCandidates,
+            sourceMessageId: currentUserMessageId,
+          };
+          entityNudgePromptTokenEstimate = estimateTokens(EntityNudgeService.formatForPrompt(presentationCandidates));
+        }
+      }
+    } catch (nudgeErr) {
+      log.warn({ err: nudgeErr, threadId }, '[F260] entity nudge hook failed — fail-open, no nudges this invocation');
+    }
+  }
+  if (deps.proactiveMemoryNudgeService && currentUserMessageId && options.frustrationAutoIssueEligible !== false) {
+    preparedProactiveMemoryNudge = await deps.proactiveMemoryNudgeService.prepare({
+      ownerUserId: userId,
+      currentUserMessageId,
+    });
+    routeOwnedNudgePromptContext += preparedProactiveMemoryNudge.context;
+  }
+  let humanDispositionFeedbackPromptContext = '';
+  if (
+    deps.humanDispositionFeedbackContextService &&
+    isDirectOwnerDispositionOrigin(options.humanDispositionInvocationOrigin)
+  ) {
+    try {
+      humanDispositionFeedbackPromptContext = await deps.humanDispositionFeedbackContextService.prepare({
+        ownerUserId: userId,
+        text: message,
+      });
+    } catch (feedbackErr) {
+      log.warn(
+        { err: feedbackErr, threadId },
+        '[F281] exact-subject feedback context failed closed for parallel route',
+      );
+    }
+  }
+  if (deps.invocationDeps.memoryCuePromptService) {
+    memoryCueOpportunitySeeds.push(
+      ...explicitApprovedTasteCueSeeds({
+        message,
+        sourceMessageId: currentUserMessageId,
+        ownerOriginEligible: options.frustrationAutoIssueEligible !== false,
+        occurredAt: cueOccurredAt,
+      }),
+      ...judgmentSurfaceCueSeeds({
+        sopStageHint,
+        promptTags: options.frustrationAutoIssueEligible !== false ? promptTags : undefined,
+        occurredAt: cueOccurredAt,
+      }),
+      ...operationalKnowledgeCueSeeds({
+        message,
+        sourceMessageId: currentUserMessageId,
+        ownerOriginEligible: options.frustrationAutoIssueEligible !== false,
+        sopStageHint,
+        occurredAt: cueOccurredAt,
+      }),
+    );
+  }
+  const routeLevelNudgePromptContext = routeOwnedNudgePromptContext + humanDispositionFeedbackPromptContext;
+
   // F148 OQ-2: briefing→invocation link per cat (must be before Promise.all — TDZ fix)
   const catBriefingMessageId = new Map<string, string>();
+  const pushRecallPresentationsByCat = new Map<string, PushRecallPresentation[]>();
   // F148 OQ-2: Collect tool names and coverage maps per cat for context eval
   const catToolNames = new Map<string, string[]>();
   const catCoverageMap = new Map<string, ContextEvalInput['coverageMap']>();
+  const unavailableCats = new Set<CatId>();
 
   const streams = await Promise.all(
     targetCats.map(async (catId) => {
       const catConfig: CatConfig | undefined = catRegistry.tryGet(catId as string)?.config;
       const teammates = targetCats.filter((id) => id !== catId);
+      const catConciergeContext = conciergeContextForCat(conciergeCtx, catId as string);
+      const conciergeSearchContextForCat =
+        conciergeSearchContextString && 'conciergeConfig' in catConciergeContext ? conciergeSearchContextString : '';
       // F203 Phase C: non-pack identity/家规/MCP docs travel via the
       // compression-immune native system role (--system-prompt-file / -c)
       // ONLY for providers with native L0 injection (ClaudeAgentService -p,
@@ -209,13 +600,62 @@ export async function* routeParallel(
         const { getActivePackBlocks } = await import('../../../../packs/getActivePackBlocks.js');
         packBlocks = await getActivePackBlocks(deps.packStore);
       }
-      const service = getService(deps.services, catId);
+      let service: AgentService;
+      try {
+        service = getService(deps.services, catId, deps.unavailableServices);
+      } catch (error) {
+        if (!(error instanceof AgentServiceUnavailableError)) throw error;
+        unavailableCats.add(catId);
+        // Keep registration rejection in the per-cat completion pipeline, without aborting siblings' preparation.
+        return (async function* unavailableMember(): AsyncGenerator<AgentMessage> {
+          yield { type: 'error', catId, content: error.message, error: error.message, timestamp: Date.now() };
+          yield { type: 'done', catId, timestamp: Date.now() };
+        })();
+      }
+      const resolvedCapacitySnapshot = await resolveInvocationCapacitySnapshot({
+        catId,
+        service,
+      });
+      let capacitySnapshot = resolvedCapacitySnapshot;
+      capacitySnapshot = await applyActiveSessionCapacityPin({
+        snapshot: capacitySnapshot,
+        catId,
+        threadId,
+        userId,
+        sessionChainStore: deps.invocationDeps.sessionChainStore,
+      });
+      const sessionPolicySnapshot = resolveManagedSessionPolicySnapshot({
+        catId: catId as string,
+        evidence: {
+          capacitySnapshot,
+          // A carrier declaration is not this invocation's usage evidence.
+          // invokeSingleCat may refine the snapshot only after this invocation
+          // emits authoritative current-context usage.
+          authoritativeUsage: false,
+          sessionRotation: Boolean(deps.invocationDeps.sessionChainStore && deps.invocationDeps.sessionSealer),
+          continuityBootstrap: Boolean(deps.invocationDeps.sessionChainStore && deps.invocationDeps.transcriptReader),
+        },
+      });
+      const sealedForCapacity = await sealBeforeInvocationIfNeeded({
+        snapshot: capacitySnapshot,
+        catId,
+        threadId,
+        userId,
+        sessionChainStore: deps.invocationDeps.sessionChainStore,
+        sessionSealer: deps.invocationDeps.sessionSealer,
+        policySnapshot: sessionPolicySnapshot,
+        clearProviderSession: () => deps.invocationDeps.sessionManager.delete(userId, catId, threadId),
+      });
+      if (sealedForCapacity) capacitySnapshot = resolvedCapacitySnapshot;
       const hasNativeL0 = service.injectsL0Natively?.() ?? false;
       // Staging is injected in invoke-single-cat independently of staticIdentity
       // (Cloud R2 P1 #2237 L1099). See route-serial.ts for the architecture rationale.
       const staticIdentity = hasNativeL0
         ? buildStaticIdentityPackOnly(catId, { packBlocks })
         : buildStaticIdentity(catId, { mcpAvailable, packBlocks });
+      // F237: drain session trace IMMEDIATELY — before any await that could let
+      // another parallel cat overwrite the module-global capture buffer.
+      drainCapturedTraces();
       // F041: inject HTTP callback only when MCP is NOT actually available (fallback)
       const mcpInstructions = needsMcpInjection(mcpAvailable, catConfig?.clientId)
         ? buildMcpCallbackInstructions({
@@ -269,33 +709,57 @@ export async function* routeParallel(
         }
       }
 
-      const invocationContext = buildInvocationContext({
-        catId,
-        mode: 'parallel',
-        teammates,
-        mcpAvailable,
-        nativeL0Injected: hasNativeL0,
-        ...(promptTags && promptTags.length > 0 ? { promptTags } : {}),
-        ...(activeParticipants.length > 0 ? { activeParticipants } : {}),
-        ...(routingPolicy ? { routingPolicy } : {}),
-        ...(sopStageHint ? { sopStageHint } : {}),
-        ...(activeSignals ? { activeSignals } : {}),
-        ...(voiceMode ? { voiceMode } : {}),
-        ...(bootcampState ? { bootcampState, threadId, bootcampMemberCount } : {}),
-        ...(alwaysOnDocs && alwaysOnInjectionMode === 'on' ? { alwaysOnDocs } : {}),
-        ...guideContextForCat(guideCtx, catId, targetCatIds, threadId),
-        ...conciergeContextForCat(conciergeCtx, catId as string),
-      });
+      const personMemoryProposalStatusContext = deps.personMemoryProposalStatusContextResolver
+        ? await deps.personMemoryProposalStatusContextResolver.resolve(userId, threadId, message)
+        : '';
+      const invocationContext = [
+        buildInvocationContext({
+          catId,
+          mode: 'parallel',
+          teammates,
+          mcpAvailable,
+          nativeL0Injected: hasNativeL0,
+          ...(promptTags && promptTags.length > 0 ? { promptTags } : {}),
+          ...(activeParticipants.length > 0 ? { activeParticipants } : {}),
+          ...(routingPolicy ? { routingPolicy } : {}),
+          ...(sopStageHint ? { sopStageHint } : {}),
+          ...(activeSignals ? { activeSignals } : {}),
+          ...(voiceMode ? { voiceMode } : {}),
+          ...(bootcampState ? { bootcampState, threadId, bootcampMemberCount } : {}),
+          ...(alwaysOnDocs && alwaysOnInjectionMode === 'on' ? { alwaysOnDocs } : {}),
+          ...guideContextForCat(guideCtx, catId, targetCatIds, threadId),
+          ...catConciergeContext,
+        }),
+        personMemoryProposalStatusContext,
+      ]
+        .filter(Boolean)
+        .join('\n\n');
+      // F237: drain turn trace IMMEDIATELY — same race-safety as session drain above.
+      drainCapturedTraces();
+
+      // F237 Phase 2: Pipeline trace capture drained above (lines 250, 322) to prevent
+      // stale module-global buffer in concurrent Promise.all execution. Persistence is
+      // handled by the v0 trace path below (after all route-level content is assembled).
+
       const continuityCapsule = buildCapsuleFromRouteState({
         threadId,
         catId: catId as string,
         ...(options.parentInvocationId ? { parentInvocationId: options.parentInvocationId } : {}),
         mode: 'parallel',
-        a2aEnabled: false,
+        ...(exactA2ACallerCatId ? { directMessageFrom: exactA2ACallerCatId } : {}),
+        ...(options.a2aTriggerMessageId ? { a2aTriggerMessageId: options.a2aTriggerMessageId } : {}),
+        a2aEnabled: Boolean(options.a2aTriggerMessageId),
       });
 
       const targetContentBlocks = routeContentBlocksForCat(catId, contentBlocks);
       const targetUploadDir = targetContentBlocks ? uploadDir : undefined;
+      const exactA2ATriggerPromptMessage = incrementalMode
+        ? await hydrateVisibleA2ATriggerPromptMessage(deps, options.a2aTriggerMessageId, threadId, catId, thinkingMode)
+        : undefined;
+      const persistedPromptMessagesForCat = mergePersistedPromptMessages(
+        options.persistedPromptMessages,
+        exactA2ATriggerPromptMessage,
+      );
 
       // F24 Phase E: Bootstrap context for Session #2+
       // #836: Reborn cats skip bootstrap — every invocation starts with zero prior context.
@@ -314,135 +778,308 @@ export async function* routeParallel(
           '[routeParallel] #836: isRebornSession lookup failed pre-bootstrap, defaulting to non-reborn',
         );
       }
-      if (
-        !isParReborn &&
-        isSessionChainEnabled(catId) &&
-        deps.invocationDeps.sessionChainStore &&
-        deps.invocationDeps.transcriptReader
-      ) {
+      const bootstrapSessionChainStore = deps.invocationDeps.sessionChainStore;
+      const bootstrapTranscriptReader = deps.invocationDeps.transcriptReader;
+      const defersProjection =
+        incrementalMode &&
+        Boolean(deps.invocationDeps.contextEpochOwner) &&
+        catConfig?.provider !== 'openai-chatgpt-pro';
+      const rebuildSessionBootstrap =
+        !isParReborn && bootstrapSessionChainStore && bootstrapTranscriptReader
+          ? async (contextProjection?: Parameters<typeof buildSessionBootstrap>[0]['contextProjection']) => {
+              const bootstrapDepth = sessionPolicySnapshot.config.handoff?.bootstrapDepth;
+              return buildSessionBootstrap(
+                {
+                  sessionChainStore: bootstrapSessionChainStore,
+                  transcriptReader: bootstrapTranscriptReader,
+                  ownerUserId: userId,
+                  ...(deps.invocationDeps.taskStore ? { taskStore: deps.invocationDeps.taskStore } : {}),
+                  ...(deps.invocationDeps.threadStore ? { threadStore: deps.invocationDeps.threadStore } : {}),
+                  ...(bootstrapDepth ? { bootstrapDepth } : {}),
+                  ...(contextProjection ? { contextProjection } : {}),
+                },
+                catId,
+                threadId,
+              );
+            }
+          : undefined;
+      if (rebuildSessionBootstrap && !defersProjection) {
         try {
-          const bootstrapDepth = getConfigSessionStrategy(catId)?.handoff?.bootstrapDepth;
-          const bootstrap = await buildSessionBootstrap(
-            {
-              sessionChainStore: deps.invocationDeps.sessionChainStore,
-              transcriptReader: deps.invocationDeps.transcriptReader,
-              ...(deps.invocationDeps.taskStore ? { taskStore: deps.invocationDeps.taskStore } : {}),
-              ...(deps.invocationDeps.threadStore ? { threadStore: deps.invocationDeps.threadStore } : {}),
-              ...(bootstrapDepth ? { bootstrapDepth } : {}),
-            },
-            catId,
-            threadId,
-          );
+          const bootstrap = await rebuildSessionBootstrap();
           if (bootstrap) {
             bootstrapCtx = bootstrap.text;
+            if (bootstrap.pushRecallPresentations?.length) {
+              pushRecallPresentationsByCat.set(catId, [
+                ...(pushRecallPresentationsByCat.get(catId) ?? []),
+                ...bootstrap.pushRecallPresentations,
+              ]);
+            }
           }
         } catch {
           // Best-effort: bootstrap failure doesn't block invocation
         }
       }
 
-      let prompt: string;
-      if (incrementalMode) {
-        // A+ fix: calculate effective context budget by deducting ALL system parts from maxPromptTokens.
-        const parCatModePromptForBudget = modeSystemPromptByCat?.[catId as string] ?? modeSystemPrompt;
-        const parIncBudget = getCatContextBudget(catId as string);
-        const parIncSystemTokens = estimateTokens(
-          [staticIdentity, invocationContext, parCatModePromptForBudget, bootstrapCtx, mcpInstructions]
+      // F237: fire-and-forget injection trace persist (v0 — observability only)
+      // Placed after bootstrapCtx so per-turn trace covers ALL route-level
+      // injected system/control content (invocation + mode prompt + bootstrap + MCP).
+      // Skip if cat is already cancelled (avoid phantom trace for turns that never happen).
+      const preTraceSignal = signalForCat?.(catId) ?? signal;
+      try {
+        const traceStore = getTraceStore();
+        if (traceStore && !preTraceSignal?.aborted) {
+          const traceTurnId = crypto.randomUUID();
+          const traceModePrompt = modeSystemPromptByCat?.[catId as string] ?? modeSystemPrompt ?? '';
+          const traceTurnContent = [invocationContext, traceModePrompt, bootstrapCtx, mcpInstructions]
             .filter(Boolean)
-            .join('\n'),
-        );
-        const parIncMessageTokens = estimateTokens(message);
-        const parEffectiveContextBudget = Math.min(
-          Math.max(0, parIncBudget.maxPromptTokens - parIncSystemTokens - parIncMessageTokens - 200),
-          parIncBudget.maxContextTokens,
-        );
-
-        const inc = await assembleIncrementalContext(
-          deps,
-          userId,
-          threadId,
-          catId,
-          currentUserMessageId,
-          thinkingMode,
-          {
-            effectiveMaxContextTokens: parEffectiveContextBudget,
-            canonicalFeatureId: sopStageHint?.featureId,
-            threadTitle: routeThread?.title ?? undefined,
-          },
-        );
-        boundaryByCat.set(catId, inc.boundaryId);
-        if (inc.degradation) {
-          degradationMsgs.push({
-            type: 'system_info' as AgentMessageType,
-            catId,
-            content: inc.degradation,
-            timestamp: Date.now(),
-          } as AgentMessage);
+            .join('\n\n---\n\n');
+          const collected = collectTrace(catId as string, staticIdentity, traceTurnContent, hasNativeL0, {
+            mcpAvailable,
+            packBlocks,
+          });
+          const traceMeta = { turnId: traceTurnId, threadId, catId: catId as string };
+          const summary = buildTraceSummary(collected, traceMeta);
+          const detail = buildTraceDetail(collected, traceMeta);
+          traceStore.persist(summary, detail).catch((err) => {
+            log.warn({ err, threadId, catId }, '[F237] injection trace persist failed (fire-and-forget)');
+          });
         }
+        // v0 collectTrace → buildStaticIdentity(annotateSegments: true) re-populates
+        // the module-global capturedSessionTrace without draining. Clear it so the next
+        // invocation (especially native-L0 pack-only) doesn't persist stale session traces.
+        if (deps.injectionTraceStore) drainCapturedTraces();
+      } catch {
+        /* F237: trace collection must never break invocation */
+      }
 
-        // F148 Phase E: Auto-insert context briefing when smart window triggered (AC-E1)
-        if (inc.coverageMap) {
-          const briefingInput = buildBriefingMessage(inc.coverageMap, threadId, inc.briefingContext);
-          try {
-            const stored = await deps.messageStore.append(briefingInput);
-            catBriefingMessageId.set(catId, stored.id);
-            catCoverageMap.set(catId, inc.coverageMap);
-            // P1-3: Include full stored message in payload so frontend can addMessage directly
-            degradationMsgs.push({
-              type: 'system_info' as AgentMessageType,
-              catId,
-              content: JSON.stringify({
-                type: 'context_briefing',
-                messageId: stored.id,
-                storedMessage: {
-                  id: stored.id,
-                  content: stored.content,
-                  origin: stored.origin,
-                  timestamp: stored.timestamp,
-                  extra: stored.extra,
-                },
-              }),
-              timestamp: stored.timestamp,
-            } as AgentMessage);
-          } catch {
-            // fail-open: briefing is non-critical UI enhancement
+      let prompt: string;
+      let incrementallyExposedMessageIds: string[] = [];
+      let rebuildPromptWithBootstrap: ((bootstrap: string) => string) | undefined;
+      let explicitlyExposedMessageIds: string[] = [];
+      let contextPromptFactory: InvocationParams['contextPromptFactory'];
+      let exactPromptMessageIds: string[] = [];
+      const pendingContextProjectionMessages = createIdempotentPendingProjectionQueue<AgentMessage>();
+      let briefingProjectionMessage: AgentMessage | undefined;
+      let pendingBriefingInput: AppendMessageInput | undefined;
+      let bootstrapPresentationCounts: PresentationCounts | undefined;
+      let proactiveMemoryNudgeFinalized = false;
+      const appendRoutePromptAdditions = (basePrompt: string): string => {
+        let projectedPrompt = basePrompt;
+        if (conciergeSearchContextForCat) projectedPrompt = `${projectedPrompt}\n${conciergeSearchContextForCat}`;
+        if (routeLevelNudgePromptContext) {
+          projectedPrompt = `${projectedPrompt}\n${routeLevelNudgePromptContext}`;
+          if (preparedProactiveMemoryNudge && !proactiveMemoryNudgeFinalized) {
+            deps.proactiveMemoryNudgeService?.finalize(preparedProactiveMemoryNudge);
+            proactiveMemoryNudgeFinalized = true;
           }
         }
+        return projectedPrompt;
+      };
+      const materializeFinalGenerationBriefing = async (): Promise<void> => {
+        if (!pendingBriefingInput || briefingProjectionMessage) return;
+        try {
+          const stored = await deps.messageStore.append(pendingBriefingInput);
+          catBriefingMessageId.set(catId, stored.id);
+          briefingProjectionMessage = {
+            type: 'system_info' as AgentMessageType,
+            catId,
+            content: JSON.stringify({
+              type: 'context_briefing',
+              messageId: stored.id,
+              storedMessage: {
+                id: stored.id,
+                content: stored.content,
+                origin: stored.origin,
+                timestamp: stored.timestamp,
+                extra: stored.extra,
+              },
+            }),
+            timestamp: stored.timestamp,
+          } as AgentMessage;
+          pendingContextProjectionMessages.enqueue(`briefing:${stored.id}`, briefingProjectionMessage);
+        } catch {
+          // fail-open: briefing is a non-critical UI projection
+        }
+      };
+      if (incrementalMode) {
+        // Deduct fixed prompt parts from the invocation-owned input ceiling.
+        const parCatModePromptForBudget = modeSystemPromptByCat?.[catId as string] ?? modeSystemPrompt;
+        const inputCeilingTokens = resolvePromptInputCeilingTokens(capacitySnapshot.capacity);
+        const parIncSystemTokens =
+          estimateTokens(
+            [staticIdentity, invocationContext, parCatModePromptForBudget, mcpInstructions].filter(Boolean).join('\n'),
+          ) + (rebuildSessionBootstrap ? MAX_SESSION_BOOTSTRAP_TOKENS : estimateTokens(bootstrapCtx));
+        const parIncMessageTokens = estimateTokens([message, conciergeSearchContextForCat].filter(Boolean).join('\n'));
+        // P1 R7 fix: use shared budget helper (parallel incremental path)
+        const parIncNudgeTokens =
+          (routeLevelNudgePromptContext ? estimateTokens(routeLevelNudgePromptContext) : 0) +
+          entityNudgePromptTokenEstimate;
+        const parEffectiveContextBudget = computeContextBudget({
+          inputCeilingTokens,
+          historyTokenCeiling: deriveHistoryContextTokenCeiling(inputCeilingTokens),
+          systemPartsTokens: parIncSystemTokens,
+          promptTokens: parIncMessageTokens,
+          nudgeTokens: parIncNudgeTokens,
+        });
 
-        /* @segment R1 — Mode System Prompt */
-        /* @segment R2 — Mode System Prompt (per-cat) */
         const parCatModePrompt = modeSystemPromptByCat?.[catId as string] ?? modeSystemPrompt;
-        const parts = [invocationContext, parCatModePrompt, bootstrapCtx, mcpInstructions].filter(Boolean);
-        if (inc.contextText) parts.push(inc.contextText);
-        // F35 fix: only inject raw message when it was genuinely absent from unseen rows.
-        // Defensive guard: if the current message ID is already present anywhere in
-        // the assembled context text, do not append the raw message again.
-        if (shouldAppendExplicitCurrentMessage(inc, currentUserMessageId)) parts.push(message);
-        prompt = parts.join('\n\n---\n\n');
+        const buildIncrementalProjection = async (
+          epochInput?: Parameters<NonNullable<InvocationParams['contextPromptFactory']>>[0],
+        ) => {
+          // Provider replacement reruns this factory before its stream becomes
+          // visible. Replace the pending projection instead of accumulating
+          // one notification per attempted generation.
+          pendingContextProjectionMessages.reset();
+          const contextProjection = epochInput
+            ? contextProjectionFromEpochDecision(epochInput.decision, epochInput.handshake.coordinate)
+            : undefined;
+          if (contextProjection && rebuildSessionBootstrap) {
+            try {
+              const bootstrap = await rebuildSessionBootstrap(contextProjection);
+              bootstrapCtx = bootstrap?.text ?? '';
+              bootstrapPresentationCounts = bootstrap?.presentationCounts;
+              if (bootstrap?.pushRecallPresentations?.length) {
+                pushRecallPresentationsByCat.set(catId, [
+                  ...(pushRecallPresentationsByCat.get(catId) ?? []),
+                  ...bootstrap.pushRecallPresentations,
+                ]);
+              }
+            } catch {
+              bootstrapCtx = '';
+              bootstrapPresentationCounts = undefined;
+            }
+          }
+          const inc = await assembleIncrementalContext(
+            deps,
+            userId,
+            threadId,
+            catId,
+            currentUserMessageId,
+            thinkingMode,
+            {
+              effectiveMaxContextTokens: parEffectiveContextBudget,
+              canonicalFeatureId: sopStageHint?.featureId,
+              threadTitle: routeThread?.title ?? undefined,
+              projectPath: routeThread?.projectPath,
+              cursorOverlay: options.cursorBoundaries?.get(catId as string),
+              ...(currentUserMessageId ? { sameUserWaveTriggerMessageId: currentUserMessageId } : {}),
+              ...(contextProjection ? { contextProjection } : {}),
+            },
+          );
+          boundaryByCat.set(catId, inc.boundaryId);
+          incrementallyExposedMessageIds = inc.exposedMessageIds;
+          if (inc.pushRecallPresentations?.length) {
+            pushRecallPresentationsByCat.set(catId, [
+              ...(pushRecallPresentationsByCat.get(catId) ?? []),
+              ...inc.pushRecallPresentations,
+            ]);
+          }
+
+          // F254 Phase A (AC-A3 seed): Initialize seenCursor from delivery boundary.
+          if (inc.boundaryId && deps.deliveryCursorStore) {
+            try {
+              await deps.deliveryCursorStore.ackSeenCursor(userId, catId, threadId, inc.boundaryId);
+            } catch (err) {
+              log.warn({ catId: catId as string, err }, '[F254] seenCursor seed failed');
+            }
+          }
+
+          if (inc.degradation) {
+            pendingContextProjectionMessages.enqueue(`degradation:${inc.degradation}`, {
+              type: 'system_info' as AgentMessageType,
+              catId,
+              content: inc.degradation,
+              timestamp: Date.now(),
+            } as AgentMessage);
+          }
+
+          // F148 Phase E: Auto-insert context briefing when smart window triggered (AC-E1).
+          if (shouldPersistContextBriefing(inc)) {
+            catCoverageMap.set(catId, inc.coverageMap);
+            const contextSurfaceProjection = inc.surfaceProjection
+              ? {
+                  ...inc.surfaceProjection,
+                  presentationCounts: mergePresentationCounts(
+                    inc.surfaceProjection.presentationCounts,
+                    ...(bootstrapPresentationCounts ? [bootstrapPresentationCounts] : []),
+                  ),
+                }
+              : undefined;
+            pendingBriefingInput = buildBriefingMessage(inc.coverageMap, threadId, {
+              ...inc.briefingContext,
+              ...(contextSurfaceProjection ? { contextSurfaceProjection } : {}),
+            });
+          } else {
+            pendingBriefingInput = undefined;
+          }
+
+          const explicitProjection = explicitPromptForIncrementalContext(
+            inc,
+            message,
+            currentUserMessageId,
+            persistedPromptMessagesForCat,
+          );
+          explicitlyExposedMessageIds = explicitProjection.exposedMessageIds;
+          rebuildPromptWithBootstrap = (bootstrap) => {
+            const parts = [invocationContext, parCatModePrompt, bootstrap, mcpInstructions].filter(Boolean);
+            if (inc.contextText) parts.push(inc.contextText);
+            if (explicitProjection.text) parts.push(explicitProjection.text);
+            return parts.join('\n\n---\n\n');
+          };
+          const projectedPrompt = appendRoutePromptAdditions(rebuildPromptWithBootstrap(bootstrapCtx));
+          exactPromptMessageIds = collectExactPromptMessageIds(
+            incrementallyExposedMessageIds,
+            explicitlyExposedMessageIds,
+            options.freshnessSupplementRequiredMessageIds ?? [],
+            options.freshnessClosureRequiredMessageIds ?? [],
+          );
+          exactPromptMessageIdsByCat.set(catId as string, exactPromptMessageIds);
+          return {
+            prompt: projectedPrompt,
+            promptMessageIds: exactPromptMessageIds,
+            ...(inc.surfaceProjection ? { deltaSize: inc.surfaceProjection.deltaSize } : {}),
+          };
+        };
+        if (defersProjection) {
+          contextPromptFactory = async (epochInput) => buildIncrementalProjection(epochInput);
+          prompt = '[F296 context projection pending provider preflight]';
+        } else {
+          const projection = await buildIncrementalProjection();
+          prompt = projection.prompt;
+        }
       } else {
         // Per-cat context budget (Phase 4.0)
         let catContextHistory = contextHistory;
         if (history && history.length > 0 && !contextHistory) {
-          const budget = getCatContextBudget(catId as string);
+          const inputCeilingTokens = resolvePromptInputCeilingTokens(capacitySnapshot.capacity);
           // F8: token-based budget — estimate non-context tokens, remainder goes to context
           // A+ fix: include catModePrompt + bootstrapCtx in system parts estimate (P2-1)
           const parCatModePromptLegacyForBudget = modeSystemPromptByCat?.[catId as string] ?? modeSystemPrompt;
-          const parSystemTokens = estimateTokens(
-            [staticIdentity, invocationContext, parCatModePromptLegacyForBudget, bootstrapCtx, mcpInstructions]
-              .filter(Boolean)
-              .join('\n'),
-          );
-          const parPromptTokens = estimateTokens(message);
-          const budgetForContext = Math.max(0, budget.maxPromptTokens - parSystemTokens - parPromptTokens - 200);
+          const parSystemTokens =
+            estimateTokens(
+              [staticIdentity, invocationContext, parCatModePromptLegacyForBudget, mcpInstructions]
+                .filter(Boolean)
+                .join('\n'),
+            ) + (rebuildSessionBootstrap ? MAX_SESSION_BOOTSTRAP_TOKENS : estimateTokens(bootstrapCtx));
+          const parPromptTokens = estimateTokens([message, conciergeSearchContextForCat].filter(Boolean).join('\n'));
+          // P1 R7 fix: use shared budget helper (parallel legacy path)
+          const parLegacyNudgeTokens =
+            (routeLevelNudgePromptContext ? estimateTokens(routeLevelNudgePromptContext) : 0) +
+            entityNudgePromptTokenEstimate;
+          const budgetForContext = computeContextBudget({
+            inputCeilingTokens,
+            historyTokenCeiling: deriveHistoryContextTokenCeiling(inputCeilingTokens),
+            systemPartsTokens: parSystemTokens,
+            promptTokens: parPromptTokens,
+            nudgeTokens: parLegacyNudgeTokens,
+          });
           const { contextText, messageCount } = assembleContext(history, {
-            maxMessages: budget.maxMessages,
-            maxContentLength: budget.maxContentLengthPerMsg,
-            maxTotalTokens: Math.min(budgetForContext, budget.maxContextTokens),
+            maxTotalTokens: budgetForContext,
           });
           catContextHistory = contextText || undefined;
 
           // Degradation check: notify user if context was truncated (count budget or char budget)
-          const degradation = detectContextDegradation(history.length, messageCount, budget);
+          const degradation = detectContextDegradation(history.length, messageCount);
           if (degradation?.degraded) {
             degradationMsgs.push({
               type: 'system_info' as AgentMessageType,
@@ -454,20 +1091,50 @@ export async function* routeParallel(
         }
 
         const parCatModePromptLegacy = modeSystemPromptByCat?.[catId as string] ?? modeSystemPrompt;
-        if (invocationContext || parCatModePromptLegacy || mcpInstructions || bootstrapCtx) {
-          const parts = [invocationContext, parCatModePromptLegacy, bootstrapCtx, mcpInstructions].filter(Boolean);
-          if (catContextHistory) parts.push(catContextHistory);
-          prompt = `${parts.join('\n\n---\n\n')}\n\n---\n\n${message}`;
-        } else if (catContextHistory) {
-          prompt = `${catContextHistory}\n\n---\n\n${message}`;
-        } else {
-          prompt = message;
-        }
+        rebuildPromptWithBootstrap = (bootstrap) => {
+          if (invocationContext || parCatModePromptLegacy || mcpInstructions || bootstrap) {
+            const parts = [invocationContext, parCatModePromptLegacy, bootstrap, mcpInstructions].filter(Boolean);
+            if (catContextHistory) parts.push(catContextHistory);
+            return `${parts.join('\n\n---\n\n')}\n\n---\n\n${message}`;
+          }
+          return catContextHistory ? `${catContextHistory}\n\n---\n\n${message}` : message;
+        };
+        prompt = rebuildPromptWithBootstrap(bootstrapCtx);
       }
 
-      // F229 KD-17: Inject search context into duty cat prompt
-      if (conciergeSearchContextString && conciergeContextForCat(conciergeCtx, catId as string)?.conciergeConfig) {
-        prompt = `${prompt}\n${conciergeSearchContextString}`;
+      if (!incrementalMode) prompt = appendRoutePromptAdditions(prompt);
+      const rebuildPromptAfterSessionSeal =
+        !defersProjection && rebuildSessionBootstrap && (rebuildPromptWithBootstrap || contextPromptFactory)
+          ? async () => {
+              const refreshed = await rebuildSessionBootstrap();
+              if (!refreshed) {
+                log.warn(
+                  { catId, threadId },
+                  '[routeParallel] session bootstrap rebuild returned no sealed prior; degrading to initial bootstrap context',
+                );
+              } else {
+                bootstrapCtx = refreshed.text;
+                if (refreshed.pushRecallPresentations?.length) {
+                  pushRecallPresentationsByCat.set(catId, [
+                    ...(pushRecallPresentationsByCat.get(catId) ?? []),
+                    ...refreshed.pushRecallPresentations,
+                  ]);
+                }
+              }
+              return rebuildPromptWithBootstrap
+                ? appendRoutePromptAdditions(rebuildPromptWithBootstrap(bootstrapCtx))
+                : prompt;
+            }
+          : undefined;
+
+      if (!incrementalMode) {
+        exactPromptMessageIds = collectExactPromptMessageIds(
+          options.persistedPromptMessageIds ?? [],
+          [currentUserMessageId, options.a2aTriggerMessageId],
+          options.freshnessSupplementRequiredMessageIds ?? [],
+          options.freshnessClosureRequiredMessageIds ?? [],
+        );
+        exactPromptMessageIdsByCat.set(catId as string, exactPromptMessageIds);
       }
 
       // F-parallel-cancel: each concurrent cat listens to ITS OWN slot signal, not the
@@ -481,12 +1148,22 @@ export async function* routeParallel(
       if (catSignal?.aborted) {
         return (async function* skipCancelledCat(): AsyncGenerator<AgentMessage> {})();
       }
-      return invokeSingleCat(deps.invocationDeps, {
+      const invocationStream = invokeSingleCat(deps.invocationDeps, {
+        ...(options.routeIntent ? { routeIntent: options.routeIntent } : {}),
+        ...(options.routingContextIntent ? { routingContextIntent: options.routingContextIntent } : {}),
+        ...(routingDispatchPreflightDecision ? { routingDispatchPreflightDecision } : {}),
         catId,
         service,
+        capacitySnapshot,
+        sessionPolicySnapshot,
         prompt,
+        ...(contextPromptFactory ? { contextPromptFactory } : {}),
+        ...(rebuildPromptAfterSessionSeal ? { rebuildPromptAfterSessionSeal } : {}),
         userId,
+        ownerAuthProvenance,
         threadId,
+        invocationOrigin: resolveInvocationOrigin(options.humanDispositionInvocationOrigin),
+        routeTopology: 'parallel',
         ...(targetContentBlocks ? { contentBlocks: targetContentBlocks } : {}),
         ...(targetUploadDir ? { uploadDir: targetUploadDir } : {}),
         ...(catSignal ? { signal: catSignal } : {}),
@@ -496,9 +1173,48 @@ export async function* routeParallel(
         // helper namespace bridge 失效 → ideate/parallel 场景气泡又裂。
         ...(options.parentInvocationId ? { parentInvocationId: options.parentInvocationId } : {}),
         ...(options.routeSpan ? { routeSpan: options.routeSpan } : {}),
+        // F247: preserve server-owned A2A provenance through parallel fan-out.
+        // User-initiated parallel routes have no A2A caller and retain userId;
+        // an unpaired A2A trigger fails closed in invokeSingleCat instead of
+        // attributing the call to the thread owner.
+        mentionContent: options.cloudDispatchProvenance?.intent ?? message,
+        ...(bridgeMentioningCatId
+          ? { mentioningCatId: bridgeMentioningCatId as import('@cat-cafe/shared').CatId }
+          : {}),
+        ...(options.cloudDispatchProvenance ? { cloudDispatchProvenance: options.cloudDispatchProvenance } : {}),
+        ...(options.requiresExactCloudDispatchProvenance ? { requiresExactCloudDispatchProvenance: true } : {}),
+        ...(options.a2aTriggerMessageId ? { a2aTriggerMessageId: options.a2aTriggerMessageId } : {}),
         continuityCapsule,
+        ...(memoryCueOpportunitySeeds.length > 0 ? { memoryCueOpportunitySeeds } : {}),
+        ...(entityNudgePresentation ? { entityNudgePresentation } : {}),
+        ...(entityNudgeCuePresentation ? { entityNudgeCuePresentation } : {}),
+        ...(options.asrPersonMemoryScenes?.length ? { asrPersonMemoryScenes: options.asrPersonMemoryScenes } : {}),
+        ...(memoryCueLegacyFallbacks.length > 0 ? { memoryCueLegacyFallbacks } : {}),
+        ...(options.toolExecutionPolicy ? { toolExecutionPolicy: options.toolExecutionPolicy } : {}),
+        ...(options.executionScope ? { executionScope: options.executionScope } : {}),
+        executionKind: turnExecutionKind,
+        executionCausal: {
+          ...(bridgeTriggerMessageId ? { triggerMessageId: bridgeTriggerMessageId } : {}),
+          ...(options.freshnessSupplementId ? { freshnessSupplementId: options.freshnessSupplementId } : {}),
+        },
+        promptMessageIds: exactPromptMessageIds,
+        ...(options.onPromptMessagesExposed ? { onPromptMessagesExposed: options.onPromptMessagesExposed } : {}),
         isLastCat: false,
       });
+      return (async function* withContextProjectionMessages(): AsyncGenerator<AgentMessage> {
+        for await (const event of invocationStream) {
+          if (isFinalGenerationBriefingBoundary(event)) await materializeFinalGenerationBriefing();
+          while (pendingContextProjectionMessages.length > 0) {
+            const pendingMessage = pendingContextProjectionMessages.shift();
+            if (pendingMessage) yield pendingMessage;
+          }
+          yield event;
+        }
+        while (pendingContextProjectionMessages.length > 0) {
+          const pendingMessage = pendingContextProjectionMessages.shift();
+          if (pendingMessage) yield pendingMessage;
+        }
+      })();
     }),
   );
 
@@ -511,7 +1227,9 @@ export async function* routeParallel(
   const catThinking = new Map<string, string[]>();
   const catMeta = new Map<string, MessageMetadata>();
   const catSawUserFacingSystemInfo = new Map<string, boolean>();
+  const catUserFacingSystemInfoContents = new Map<string, string[]>();
   const catToolEvents = new Map<string, StoredToolEvent[]>();
+  const catVerifiedConciergeToolTargets = new Map<string, VerifiedConciergeToolTargetCollector>();
   // F060: Collect inline rich blocks per cat from system_info stream
   const catStreamRichBlocks = new Map<string, import('@cat-cafe/shared').RichBlock[]>();
   const catErrorText = new Map<string, string>();
@@ -521,8 +1239,25 @@ export async function* routeParallel(
   const catHadError = new Set<string>();
   // #267: track errors that happened BEFORE abort — only these are real provider failures
   const catHadProviderError = new Set<string>();
+  // Abort-aware merge may terminalize before a child's buffered error/done is
+  // consumed. Track activity writes so cancellation fallback preserves #267
+  // health semantics without double-incrementing messageCount.
+  const catActivityUpdated = new Set<string>();
   // F22 R2 P1-1: Capture own invocationId per cat from stream
   const catInvocationId = new Map<string, string>();
+  const turnExecutionProjectionByInvocation = new Map<string, TurnExecutionMessageProjection>();
+  const projectLiveTurnExecution = (event: AgentMessage, invocationId: string | undefined): AgentMessage => {
+    if (!deps.invocationDeps.turnExecutionStore || !invocationId) return event;
+    const turnExecution = turnExecutionProjectionByInvocation.get(invocationId);
+    if (!turnExecution) return event;
+    return {
+      ...event,
+      extra: {
+        ...event.extra,
+        turnExecution,
+      },
+    };
+  };
   const completedCatInvocationIds: Array<[string, string]> = [];
   const catPayloadStrippers = new Map<string, ReturnType<typeof createLeakedToolCallStreamStripper>>();
   let completedCount = 0;
@@ -564,15 +1299,33 @@ export async function* routeParallel(
   // same-name queue drift (search→graph→search).
   const pendingToolResultsByCat = new Map<string, Array<{ toolName: string; toolUseId?: string }>>();
   const invocationStartedAt = Date.now();
-  for await (const msg of mergeStreams(streams, (idx, err) => {
-    log.error({ streamIndex: idx, err }, 'Parallel stream error');
-  })) {
+  // Wrap each stream so iteration errors surface as error+done events
+  // instead of being silently dropped by mergeStreams.
+  const recoveredStreams = streams.map((stream, index) =>
+    wrapStreamWithErrorRecovery(stream, requireTargetCat(targetCats, index)),
+  );
+  const mergedStreams = mergeStreams(
+    recoveredStreams,
+    (idx, err) => {
+      log.error({ streamIndex: idx, catId: targetCats[idx], err }, 'Parallel stream error (post-recovery)');
+    },
+    {
+      ...(signal ? { signal } : {}),
+      ...(signalForCat ? { signalForIndex: (index: number) => signalForCat(requireTargetCat(targetCats, index)) } : {}),
+      valueForAbort: (index: number): AgentMessage => ({
+        type: 'done',
+        catId: requireTargetCat(targetCats, index),
+        timestamp: Date.now(),
+      }),
+    },
+  );
+  for await (const msg of mergedStreams) {
     const effectiveMsgs: AgentMessage[] = [];
     if (msg.type === 'text' && msg.content && msg.catId) {
       effectiveMsgs.push({ ...msg, content: getPayloadStripper(msg.catId).push(msg.content) });
     } else if (msg.type === 'done' && msg.catId) {
-      if (msg.metadata && !catMeta.has(msg.catId)) {
-        catMeta.set(msg.catId, msg.metadata);
+      if (msg.metadata) {
+        catMeta.set(msg.catId, mergeMessageMetadataSnapshots(catMeta.get(msg.catId), msg.metadata));
       }
       const flushedText = getPayloadStripper(msg.catId).flush();
       if (flushedText) {
@@ -598,8 +1351,19 @@ export async function* routeParallel(
       ) {
         try {
           const parsed = JSON.parse(effectiveMsg.content);
-          if (parsed.type === 'invocation_created') {
+          if (
+            parsed.type === 'invocation_created' &&
+            typeof parsed.invocationId === 'string' &&
+            parsed.invocationId.length > 0
+          ) {
             catInvocationId.set(effectiveMsg.catId, parsed.invocationId);
+            if (deps.invocationDeps.turnExecutionStore) {
+              turnExecutionProjectionByInvocation.set(parsed.invocationId, {
+                invocationId: parsed.invocationId,
+                parentInvocationId: options.parentInvocationId ?? parsed.invocationId,
+                executionKind: turnExecutionKind,
+              });
+            }
             // #80 fix: seed flush baseline so interval triggers after FLUSH_INTERVAL_MS
             catFlushTime.set(effectiveMsg.catId, Date.now());
             // Issue #83: Start a single keepalive timer that touches all active drafts.
@@ -630,6 +1394,9 @@ export async function* routeParallel(
       if (effectiveMsg.type === 'system_info' && effectiveMsg.content && effectiveMsg.catId) {
         if (isUserFacingSystemInfoContent(effectiveMsg.content)) {
           catSawUserFacingSystemInfo.set(effectiveMsg.catId, true);
+          const contents = catUserFacingSystemInfoContents.get(effectiveMsg.catId) ?? [];
+          contents.push(effectiveMsg.content);
+          catUserFacingSystemInfoContents.set(effectiveMsg.catId, contents);
         }
         try {
           const parsed = JSON.parse(effectiveMsg.content);
@@ -690,6 +1457,14 @@ export async function* routeParallel(
         const arr = catToolEvents.get(effectiveMsg.catId) ?? [];
         arr.push(toolEvt);
         catToolEvents.set(effectiveMsg.catId, arr);
+      }
+      if (effectiveMsg.catId) {
+        let collector = catVerifiedConciergeToolTargets.get(effectiveMsg.catId);
+        if (!collector) {
+          collector = new VerifiedConciergeToolTargetCollector();
+          catVerifiedConciergeToolTargets.set(effectiveMsg.catId, collector);
+        }
+        collector.observe(effectiveMsg);
       }
 
       // F148 OQ-2: Collect tool names for context eval
@@ -774,8 +1549,11 @@ export async function* routeParallel(
             .catch(() => {});
         }
       }
-      if (effectiveMsg.metadata && effectiveMsg.catId && !catMeta.has(effectiveMsg.catId)) {
-        catMeta.set(effectiveMsg.catId, effectiveMsg.metadata);
+      if (effectiveMsg.metadata && effectiveMsg.catId) {
+        catMeta.set(
+          effectiveMsg.catId,
+          mergeMessageMetadataSnapshots(catMeta.get(effectiveMsg.catId), effectiveMsg.metadata),
+        );
       }
 
       // F188 Phase F AC-F10 (砚砚 七审 P1): merge result-side summary; parses real Codex
@@ -928,11 +1706,12 @@ export async function* routeParallel(
       const ownInvForYield = effectiveMsg.catId ? catInvocationId.get(effectiveMsg.catId) : undefined;
       const stampedEffectiveMsg =
         ownInvForYield && !effectiveMsg.invocationId ? { ...effectiveMsg, invocationId: ownInvForYield } : effectiveMsg;
-      yield stampedEffectiveMsg;
+      yield projectLiveTurnExecution(stampedEffectiveMsg, ownInvForYield);
     }
 
     if (msg.type === 'done' && msg.catId) {
       completedCount++;
+      let persistedDoneContent: string | undefined;
 
       // F148 OQ-2: Log briefing→invocation link + context eval signals
       const doneBriefingId = catBriefingMessageId.get(msg.catId);
@@ -960,6 +1739,7 @@ export async function* routeParallel(
       // F22: Consume MCP-buffered rich blocks BEFORE text/empty branch —
       // blocks must be persisted even when the cat emits no text (cloud Codex P1).
       const ownInvId = catInvocationId.get(msg.catId);
+      let turnStoredMessageId: string | undefined;
       if (ownInvId) completedCatInvocationIds.push([msg.catId, ownInvId]);
       // Issue #83 P2 fix: Remove completed cat from keepalive set.
       // Without this, the shared keepalive timer would touch() a deleted draft,
@@ -971,18 +1751,58 @@ export async function* routeParallel(
       // the same id; otherwise IDB/live bubbles use parent id while hydration uses
       // per-cat invocation_created id, creating duplicate bubbles after refresh.
       const persistedInvocationId = options.parentInvocationId ?? ownInvId;
+      let turnExecution = ownInvId ? turnExecutionProjectionByInvocation.get(ownInvId) : undefined;
+      if (ownInvId && deps.invocationDeps.turnExecutionStore) {
+        if (!turnExecution) {
+          try {
+            const record = await deps.invocationDeps.turnExecutionStore.get(ownInvId);
+            turnExecution = record ? projectTurnExecutionMessage(record) : undefined;
+          } catch (error) {
+            log.warn(
+              { threadId, catId: msg.catId, invocationId: ownInvId, err: error },
+              'Turn execution projection read failed; preserving visible output without badge metadata',
+            );
+          }
+        }
+      }
       let catProducedOutput = false;
       const text = catText.get(msg.catId);
-      if (text) {
+      const actionOutputCommitAllowed = options.beforeOutputCommit
+        ? await options.beforeOutputCommit(msg.catId as CatId)
+        : true;
+      const targetSucceeded =
+        actionOutputCommitAllowed &&
+        !catHadError.has(msg.catId) &&
+        !msg.errorCode &&
+        !(signalForCat?.(msg.catId) ?? signal)?.aborted;
+      const deliveryBoundary = createMessageDeliveryBoundary({
+        cursor: boundaryByCat.get(msg.catId as CatId),
+        userId,
+        threadId,
+        catId: msg.catId as CatId,
+        turnInvocationId: ownInvId,
+        sourceMessageId: currentUserMessageId ?? options.a2aTriggerMessageId,
+        succeeded: targetSucceeded,
+      });
+      if (!actionOutputCommitAllowed) {
+        catProducedOutput = Boolean(
+          text || bufferedBlocks.length > 0 || (catToolEvents.get(msg.catId)?.length ?? 0) > 0,
+        );
+        if (options.persistenceContext) options.persistenceContext.actionOutputCommitRejected = true;
+      } else if (text) {
         catProducedOutput = true;
         const meta = catMeta.get(msg.catId);
         const sanitized = sanitizeInjectedContent(text);
         // F22: Extract cc_rich blocks from text + merge with buffered
-        let { cleanText: storedContent, blocks: textBlocks } = extractRichFromText(sanitized);
-        let allRichBlocks = [...bufferedBlocks, ...textBlocks, ...(catStreamRichBlocks.get(msg.catId) ?? [])];
+        let { cleanText: storedContent, blocks: textBlocks } = isFreshnessSupplement
+          ? { cleanText: sanitized, blocks: [] }
+          : extractRichFromText(sanitized);
+        let allRichBlocks = isFreshnessSupplement
+          ? []
+          : [...bufferedBlocks, ...textBlocks, ...(catStreamRichBlocks.get(msg.catId) ?? [])];
         // F34-b: synthesize text-only audio blocks (voice messages)
         // F111: skip synthesis in voiceMode — frontend streams via /api/tts/stream
-        if (!voiceMode) {
+        if (!isFreshnessSupplement && !voiceMode) {
           const voiceSynth = getVoiceBlockSynthesizer();
           if (voiceSynth && allRichBlocks.some((b) => b.kind === 'audio' && 'text' in b)) {
             try {
@@ -993,14 +1813,30 @@ export async function* routeParallel(
           }
         }
         const catTools = catToolEvents.get(msg.catId);
+        const conciergeActionSourceContent =
+          !isFreshnessSupplement &&
+          'conciergeConfig' in conciergeCtx &&
+          conciergeContextForCat(conciergeCtx, msg.catId as string)?.conciergeConfig &&
+          storedContent
+            ? storedContent
+            : undefined;
+        if (conciergeActionSourceContent) {
+          storedContent = stripTriagePlanMarkers(storedContent);
+        }
+        const persistedContent = conciergeActionSourceContent
+          ? projectConciergeStoredContent(storedContent)
+          : storedContent;
+        if (conciergeActionSourceContent !== undefined) {
+          persistedDoneContent = persistedContent;
+        }
         // F167 L2 AC-A5: parallel mode has no routing semantics, so persist mentions=[]
         // to keep parallel @ mentions out of MessageStore.getMentionsFor() / pending-mentions flow.
-        // L2 suppression log below still surfaces the raw @ tokens from the text for observability.
+        // L2 suppression log below still surfaces visible @ tokens from the text for observability.
 
         // F079 Phase 2: Vote interception for parallel routing.
         // @all / multi-cat requests route here, so [VOTE:xxx] must be handled too.
         const votedOption = extractVoteFromText(storedContent);
-        if (votedOption && deps.invocationDeps.threadStore) {
+        if (!isFreshnessSupplement && votedOption && deps.invocationDeps.threadStore) {
           try {
             const voteState = await deps.invocationDeps.threadStore.getVotingState(threadId);
             if (voteState && voteState.status === 'active' && voteState.options.includes(votedOption)) {
@@ -1079,13 +1915,8 @@ export async function* routeParallel(
 
         let triagePlanIdsToLink: string[] = [];
 
-        // F229 KD-17: Post-process concierge reply — inject CardBlock actions from HandleMap markers
-        if (
-          'conciergeConfig' in conciergeCtx &&
-          conciergeContextForCat(conciergeCtx, msg.catId as string)?.conciergeConfig &&
-          deps.invocationDeps.conciergeHandleMapStore &&
-          storedContent
-        ) {
+        // F229 KD-23: Post-process concierge reply — resolve markers against per-invocation handle table
+        if (conciergeActionSourceContent) {
           try {
             // Phase B: pass triageDeps if TriagePlanStore is available
             const triageDeps: TriagePlanExtractionDeps | undefined = deps.invocationDeps.conciergeTriagePlanStore
@@ -1103,12 +1934,27 @@ export async function* routeParallel(
                     : {}),
                 }
               : undefined;
-            const conciergeActions = await buildConciergeActions(
-              storedContent,
+            const verifiedToolTargets = catVerifiedConciergeToolTargets.get(msg.catId);
+            const verifiedToolAnchor = await resolveVerifiedConciergeToolAnchor(
+              verifiedToolTargets,
               threadId,
-              deps.invocationDeps.conciergeHandleMapStore,
-              triageDeps,
+              deps.invocationDeps.threadStore,
             );
+            conciergeVerifiedToolTargetsPerReply.record(verifiedToolTargets?.verifiedTargetCount() ?? 0);
+            const conciergeActions = await buildConciergeActions(
+              conciergeActionSourceContent,
+              conciergeHandles,
+              triageDeps,
+              verifiedToolAnchor,
+            );
+            if (
+              verifiedToolAnchor &&
+              conciergeActions.some(
+                (action) => !action.handle && action.payload.threadId === verifiedToolAnchor.threadId,
+              )
+            ) {
+              conciergeVerifiedToolActions.add(1);
+            }
             triagePlanIdsToLink = extractTriagePlanIdsFromActions(conciergeActions);
             if (conciergeActions.length > 0) {
               allRichBlocks = [
@@ -1121,11 +1967,6 @@ export async function* routeParallel(
                   actions: conciergeActions,
                 },
               ];
-              // Strip <!-- triage-plan --> markers from stored content (cloud P2 fix).
-              // Users should not see raw HTML comment markers in the concierge panel.
-              if (triagePlanIdsToLink.length > 0) {
-                storedContent = stripTriagePlanMarkers(storedContent);
-              }
             }
           } catch {
             // Fail-open
@@ -1133,11 +1974,12 @@ export async function* routeParallel(
         }
 
         const thinking = catThinking.get(msg.catId);
+        let outputCommitDecision: OutputCommitDecision | undefined;
         try {
-          const storedMsg = await deps.messageStore.append({
+          const streamMessageInput: AppendMessageInput = {
             userId,
             catId: msg.catId as CatId,
-            content: storedContent,
+            content: persistedContent,
             mentions: [],
             origin: 'stream',
             timestamp: invocationStartedAt,
@@ -1147,6 +1989,7 @@ export async function* routeParallel(
             ...(catTools && catTools.length > 0 ? { toolEvents: catTools } : {}),
             extra: {
               ...(allRichBlocks.length > 0 ? { rich: { v: 1 as const, blocks: allRichBlocks } } : {}),
+              ...(deliveryBoundary ? { deliveryBoundary } : {}),
               // F194 Phase Z9 AC-Z25 (KD-28): always stamp turnInvocationId
               // (= ownInvId else parent fallback).
               ...(persistedInvocationId
@@ -1154,14 +1997,64 @@ export async function* routeParallel(
                     stream: {
                       invocationId: persistedInvocationId,
                       turnInvocationId: ownInvId ?? persistedInvocationId,
+                      parallelBatchId,
                     },
                   }
                 : {}),
+              ...((currentUserMessageId ?? options.a2aTriggerMessageId)
+                ? {
+                    causal: {
+                      kind: 'invocation_reply' as const,
+                      triggerMessageId: (currentUserMessageId ?? options.a2aTriggerMessageId) as string,
+                    },
+                  }
+                : {}),
+              ...(turnExecution ? { turnExecution } : {}),
               ...(msg.tracing ? { tracing: msg.tracing } : {}),
             },
-          });
+          };
+          let storedMsg = null;
+          if (deps.freshnessOutputCommitCoordinator && deps.deliveryCursorStore && ownInvId) {
+            outputCommitDecision = await deps.freshnessOutputCommitCoordinator.commit({
+              userId,
+              threadId,
+              catId: msg.catId,
+              invocationId: options.parentInvocationId ?? ownInvId,
+              turnInvocationId: ownInvId,
+              originTriggerMessageId: currentUserMessageId ?? options.a2aTriggerMessageId ?? null,
+              freshnessClosureId: options.freshnessClosureId,
+              freshnessSupplementId: options.freshnessSupplementId,
+              message: streamMessageInput,
+              replayUnsafeToolNames: findReplayUnsafeToolNames(catToolNames.get(msg.catId) ?? []),
+              commitRecheckLimit: 10 + targetCats.length,
+              evaluateFreshness: (priorFrontierMessageId) =>
+                evaluateParallelFreshness(msg.catId as CatId, ownInvId, priorFrontierMessageId),
+            });
+            if (options.persistenceContext) {
+              options.persistenceContext.outputCommitDecisions = {
+                ...(options.persistenceContext.outputCommitDecisions ?? {}),
+                [msg.catId]: outputCommitDecision,
+              };
+            }
+            if (
+              outputCommitDecision.kind === 'committed_fresh' ||
+              outputCommitDecision.kind === 'committed_degraded_unknown' ||
+              outputCommitDecision.kind === 'published_with_unseen'
+            ) {
+              storedMsg = await deps.messageStore.getById(outputCommitDecision.messageId);
+            }
+          } else {
+            storedMsg = await deps.messageStore.append(streamMessageInput);
+          }
+
+          turnStoredMessageId = storedMsg?.id;
+
+          if (outputCommitDecision?.kind === 'published_with_unseen') {
+            await enqueueParallelSupplement(outputCommitDecision, msg.catId);
+          }
+
           const triagePlanStore = deps.invocationDeps.conciergeTriagePlanStore;
-          if (triagePlanStore && triagePlanIdsToLink.length > 0) {
+          if (storedMsg && triagePlanStore && triagePlanIdsToLink.length > 0) {
             try {
               await Promise.all(
                 triagePlanIdsToLink.map((planId) => triagePlanStore.setConfirmationMessageId(planId, storedMsg.id)),
@@ -1171,14 +2064,20 @@ export async function* routeParallel(
             }
           }
           // F088-P3: Stash rich blocks for outbound delivery
-          if (options.persistenceContext && allRichBlocks.length > 0) {
+          if (storedMsg && options.persistenceContext && allRichBlocks.length > 0) {
             options.persistenceContext.richBlocks = [
               ...(options.persistenceContext.richBlocks ?? []),
               ...allRichBlocks,
             ];
           }
-          // #80: Clean up draft only after successful append
-          if (deps.draftStore && ownInvId) {
+          if (storedMsg && options.persistenceContext) {
+            options.persistenceContext.persistedOutputMessageIds = [
+              ...(options.persistenceContext.persistedOutputMessageIds ?? []),
+              storedMsg.id,
+            ];
+          }
+          // #80/F254: Delete only after MessageStore or closure truth proves custody.
+          if (deps.draftStore && ownInvId && mayDeleteDraft(outputCommitDecision, Boolean(storedMsg))) {
             deps.draftStore.delete(userId, threadId, ownInvId)?.catch?.(noop);
           }
           // Cloud Codex R4 P1 fix: Update activity in isolated try/catch to not affect append status
@@ -1190,6 +2089,7 @@ export async function* routeParallel(
                 // #267: only errors before abort are provider failures
                 !catHadProviderError.has(msg.catId),
               );
+              catActivityUpdated.add(msg.catId);
             } catch (activityErr) {
               log.warn({ catId: msg.catId, err: activityErr }, 'updateParticipantActivity failed');
             }
@@ -1218,7 +2118,9 @@ export async function* routeParallel(
           hasRichBlocks ||
           (catTools?.length ?? 0) > 0 ||
           Boolean(thinking && renderThinkingChunks(thinking).trim().length > 0);
-        const shouldEmitSilentCompletion = (catTools?.length ?? 0) > 0 && !hasRichBlocks && !sawUserFacingSystemInfo;
+        const isFreshnessClosureSuccessor = Boolean(options.freshnessClosureRequiredMessageIds?.length);
+        const shouldEmitSilentCompletion =
+          (catTools?.length ?? 0) > 0 && !hasRichBlocks && !sawUserFacingSystemInfo && !isFreshnessClosureSuccessor;
 
         // Diagnostic: if cat ran tools but produced no text, emit a system_info so the
         // user sees *something* instead of a silent vanish (bugfix: silent-exit P1).
@@ -1241,7 +2143,7 @@ export async function* routeParallel(
 
         if (shouldPersistNoTextMessage) {
           try {
-            await deps.messageStore.append({
+            const noTextMessageInput: AppendMessageInput = {
               userId,
               catId: msg.catId as CatId,
               content: '',
@@ -1254,6 +2156,7 @@ export async function* routeParallel(
               ...(catTools && catTools.length > 0 ? { toolEvents: catTools } : {}),
               extra: {
                 ...(noTextBlocks.length > 0 ? { rich: { v: 1 as const, blocks: noTextBlocks } } : {}),
+                ...(deliveryBoundary ? { deliveryBoundary } : {}),
                 // F194 Phase Z3 dual id (see route-serial.ts:1370 for contract)
                 // F194 Phase Z9 AC-Z25 (KD-28): always stamp turnInvocationId
                 // (= ownInvId else parent fallback) — prevents multi-turn same-cat
@@ -1263,21 +2166,87 @@ export async function* routeParallel(
                       stream: {
                         invocationId: persistedInvocationId,
                         turnInvocationId: ownInvId ?? persistedInvocationId,
+                        parallelBatchId,
                       },
                     }
                   : {}),
+                ...((currentUserMessageId ?? options.a2aTriggerMessageId)
+                  ? {
+                      causal: {
+                        kind: 'invocation_reply' as const,
+                        triggerMessageId: (currentUserMessageId ?? options.a2aTriggerMessageId) as string,
+                      },
+                    }
+                  : {}),
+                ...(turnExecution ? { turnExecution } : {}),
                 ...(msg.tracing ? { tracing: msg.tracing } : {}),
               },
-            });
+            };
+            const answerBearingNoText =
+              hasRichBlocks || Boolean(thinking && renderThinkingChunks(thinking).trim().length > 0);
+            const replayUnsafeToolNames = findReplayUnsafeToolNames(catToolNames.get(msg.catId) ?? []);
+            const requiresFreshnessGate = answerBearingNoText || replayUnsafeToolNames.length > 0;
+            let storedNoText = null;
+            let noTextOutputCommitDecision: OutputCommitDecision | undefined;
+            if (
+              requiresFreshnessGate &&
+              deps.freshnessOutputCommitCoordinator &&
+              deps.deliveryCursorStore &&
+              ownInvId
+            ) {
+              const decision = await deps.freshnessOutputCommitCoordinator.commit({
+                userId,
+                threadId,
+                catId: msg.catId,
+                invocationId: options.parentInvocationId ?? ownInvId,
+                turnInvocationId: ownInvId,
+                originTriggerMessageId: currentUserMessageId ?? options.a2aTriggerMessageId ?? null,
+                freshnessClosureId: options.freshnessClosureId,
+                freshnessSupplementId: options.freshnessSupplementId,
+                message: noTextMessageInput,
+                replayUnsafeToolNames,
+                commitRecheckLimit: 10 + targetCats.length,
+                evaluateFreshness: (priorFrontierMessageId) =>
+                  evaluateParallelFreshness(msg.catId as CatId, ownInvId, priorFrontierMessageId),
+              });
+              noTextOutputCommitDecision = decision;
+              if (options.persistenceContext) {
+                options.persistenceContext.outputCommitDecisions = {
+                  ...(options.persistenceContext.outputCommitDecisions ?? {}),
+                  [msg.catId]: decision,
+                };
+              }
+              if (
+                decision.kind === 'committed_fresh' ||
+                decision.kind === 'committed_degraded_unknown' ||
+                decision.kind === 'published_with_unseen'
+              ) {
+                storedNoText = await deps.messageStore.getById(decision.messageId);
+                if (decision.kind === 'published_with_unseen') {
+                  await enqueueParallelSupplement(decision, msg.catId);
+                }
+              }
+            } else {
+              // Reviewed read-only tool-only audit remains non-routable and does not become
+              // a normal answer. Unknown or mutating tools enter the freshness gate above.
+              storedNoText = await deps.messageStore.append(noTextMessageInput);
+            }
             // F088-P3: Stash rich blocks for outbound delivery (no-text branch)
-            if (options.persistenceContext && noTextBlocks.length > 0) {
+            if (storedNoText && options.persistenceContext && noTextBlocks.length > 0) {
               options.persistenceContext.richBlocks = [
                 ...(options.persistenceContext.richBlocks ?? []),
                 ...noTextBlocks,
               ];
             }
-            // #80: Clean up draft only after successful append
-            if (deps.draftStore && ownInvId) {
+            if (storedNoText && options.persistenceContext) {
+              options.persistenceContext.persistedOutputMessageIds = [
+                ...(options.persistenceContext.persistedOutputMessageIds ?? []),
+                storedNoText.id,
+              ];
+            }
+            turnStoredMessageId = storedNoText?.id;
+            // #80/F254: retained means DraftStore is still the only recoverable copy.
+            if (deps.draftStore && ownInvId && mayDeleteDraft(noTextOutputCommitDecision, Boolean(storedNoText))) {
               deps.draftStore.delete(userId, threadId, ownInvId)?.catch?.(noop);
             }
             // Cloud Codex R4 P1 fix: Update activity in isolated try/catch to not affect append status
@@ -1289,6 +2258,7 @@ export async function* routeParallel(
                   // #267: only errors before abort are provider failures
                   !catHadProviderError.has(msg.catId),
                 );
+                catActivityUpdated.add(msg.catId);
               } catch (activityErr) {
                 log.warn({ catId: msg.catId, err: activityErr }, 'updateParticipantActivity failed');
               }
@@ -1303,7 +2273,7 @@ export async function* routeParallel(
               });
             }
           }
-        } else if (!sawUserFacingSystemInfo) {
+        } else if (!sawUserFacingSystemInfo && !isFreshnessClosureSuccessor) {
           yield {
             type: 'system_info' as AgentMessageType,
             catId: msg.catId,
@@ -1331,7 +2301,7 @@ export async function* routeParallel(
           const meta = catMeta.get(msg.catId);
           const thinking = catThinking.get(msg.catId);
           try {
-            await deps.messageStore.append({
+            const storedToolError = await deps.messageStore.append({
               userId,
               catId: msg.catId as CatId,
               content: '',
@@ -1342,7 +2312,7 @@ export async function* routeParallel(
               ...(thinking && thinking.length > 0 ? { thinking: renderThinkingChunks(thinking) } : {}),
               ...(meta ? { metadata: meta } : {}),
               toolEvents: catTools,
-              ...(persistedInvocationId || msg.tracing
+              ...(persistedInvocationId || turnExecution || msg.tracing
                 ? {
                     extra: {
                       // F194 Phase Z9 AC-Z25 (KD-28): always stamp turnInvocationId.
@@ -1354,11 +2324,13 @@ export async function* routeParallel(
                             },
                           }
                         : {}),
+                      ...(turnExecution ? { turnExecution } : {}),
                       ...(msg.tracing ? { tracing: msg.tracing } : {}),
                     },
                   }
                 : {}),
             });
+            turnStoredMessageId = storedToolError.id;
             // #80: Clean up draft only after successful append
             if (deps.draftStore && ownInvId) {
               deps.draftStore.delete(userId, threadId, ownInvId)?.catch?.(noop);
@@ -1372,6 +2344,7 @@ export async function* routeParallel(
                   // #267: only errors before abort are provider failures
                   !catHadProviderError.has(msg.catId),
                 );
+                catActivityUpdated.add(msg.catId);
               } catch (activityErr) {
                 log.warn({ catId: msg.catId, err: activityErr }, 'updateParticipantActivity failed');
               }
@@ -1389,12 +2362,24 @@ export async function* routeParallel(
         }
       }
 
+      await persistUserFacingSystemInfoNotices({
+        messageStore: deps.messageStore,
+        threadId,
+        catId: msg.catId,
+        contents: catUserFacingSystemInfoContents.get(msg.catId) ?? [],
+        ...(bridgeTriggerMessageId ? { expectedSourceMessageId: bridgeTriggerMessageId } : {}),
+        ...(ownInvId ? { expectedDispatchInvocationId: ownInvId } : {}),
+        ...(options.persistenceContext ? { persistenceContext: options.persistenceContext } : {}),
+      });
+      catUserFacingSystemInfoContents.delete(msg.catId);
+
       // Persist error as system message so it survives F5 reload but does NOT
-      // re-enter the prompt as a cat message (aligned with route-serial.ts).
+      // re-enter the prompt as a cat message. Preserve ordinary provider error persistence;
+      // only registration diagnostics use the output fence, as in route-serial's early rejection path.
       // Previously errors were mixed into catText and persisted with userId=user,
       // which polluted the conversation history and caused "context poisoning".
       const errorText = catErrorText.get(msg.catId);
-      if (errorText) {
+      if (errorText && (!unavailableCats.has(msg.catId) || actionOutputCommitAllowed)) {
         const cliDiag = catCliDiagnostics.get(msg.catId);
         try {
           await deps.messageStore.append({
@@ -1440,32 +2425,6 @@ export async function* routeParallel(
               frustrationDeps,
             );
           }
-
-          // Signal 2: Cancel burst (via PendingRequestStore)
-          if (deps.pendingRequestStore) {
-            const { CANCEL_WINDOW_MS } = await import('../../frustration/FrustrationDetector.js');
-            const recentDenied = await deps.pendingRequestStore.listRecentDenied(
-              threadId,
-              Date.now() - CANCEL_WINDOW_MS,
-            );
-            if (recentDenied.length >= 3) {
-              await evaluate(
-                {
-                  signal: {
-                    type: 'cancel_burst',
-                    recentDenials: recentDenied.map((r) => ({
-                      action: r.action,
-                      timestamp: r.respondedAt ?? r.createdAt,
-                    })),
-                  },
-                  threadId,
-                  userId,
-                  catId: msg.catId as string,
-                },
-                frustrationDeps,
-              );
-            }
-          }
         } catch {
           // Non-blocking
         }
@@ -1477,10 +2436,15 @@ export async function* routeParallel(
         const boundaryId = boundaryByCat.get(msg.catId as CatId);
         if (boundaryId) {
           if (options.cursorBoundaries) {
-            // ADR-008 S3: defer ack — caller acks after invocation succeeds
+            // Preserve the route overlay and the caller's idempotent finalizer.
             upsertMaxBoundary(options.cursorBoundaries, msg.catId, boundaryId);
-          } else if (deps.deliveryCursorStore) {
-            // Legacy: ack immediately
+          }
+          if (
+            deps.deliveryCursorStore &&
+            (!options.cursorBoundaries || (targetSucceeded && (turnStoredMessageId || !catProducedOutput)))
+          ) {
+            // A completed target must commit before done releases its slot,
+            // independently of a hanging sibling or the parent finalizer.
             try {
               await deps.deliveryCursorStore.ackCursor(userId, msg.catId as CatId, threadId, boundaryId);
             } catch (err) {
@@ -1513,7 +2477,11 @@ export async function* routeParallel(
       // 若文本里仍出现 @句柄，仅记录 suppressedInParallel 日志用于观测。
       if (isFinal) {
         for (const [cid, text] of catText.entries()) {
-          const ms = parseA2AMentions(text, cid as CatId);
+          const visibleText =
+            'conciergeConfig' in conciergeCtx && conciergeContextForCat(conciergeCtx, cid as string)?.conciergeConfig
+              ? stripTriagePlanMarkers(text)
+              : text;
+          const ms = parseA2AMentions(visibleText, cid as CatId);
           if (ms.length > 0) {
             log.info(
               { threadId, cat: cid, suppressedMentions: ms, suppressedInParallel: true },
@@ -1529,8 +2497,38 @@ export async function* routeParallel(
       // invocationId → downstream broadcaster falls back to parent → bubble
       // identity / liveness wrongly attached to parent (instead of own turn).
       const stampedDone = ownInvId && !msg.invocationId ? { ...msg, invocationId: ownInvId } : msg;
-      yield { ...stampedDone, isFinal };
+      yield projectLiveTurnExecution(
+        {
+          ...stampedDone,
+          ...(persistedDoneContent !== undefined ? { content: persistedDoneContent } : {}),
+          ...(turnStoredMessageId ? { messageId: turnStoredMessageId } : {}),
+          ...(await storedMessageTimestamp(deps.messageStore, turnStoredMessageId)),
+          isFinal,
+        },
+        ownInvId,
+      );
       if (isFinal) yieldedFinalDone = true;
+    }
+  }
+
+  // mergeStreams intentionally stops waiting as soon as a batch/per-cat abort
+  // fires, even if the provider has buffered error+done behind a stuck next().
+  // Preserve the existing #267 contract: user cancellation is a healthy
+  // terminal, while a provider error observed before abort remains unhealthy.
+  if (deps.invocationDeps.threadStore) {
+    for (const catId of targetCats) {
+      const catSignal = signalForCat?.(catId) ?? signal;
+      if (!catSignal?.aborted || catActivityUpdated.has(catId)) continue;
+      try {
+        await deps.invocationDeps.threadStore.updateParticipantActivity(
+          threadId,
+          catId,
+          !catHadProviderError.has(catId),
+        );
+        catActivityUpdated.add(catId);
+      } catch (activityErr) {
+        log.warn({ catId, err: activityErr }, 'updateParticipantActivity failed after abort terminal');
+      }
     }
   }
 
@@ -1542,16 +2540,25 @@ export async function* routeParallel(
     options.routeSpan.setAttribute(ROUTE_HAS_A2A_HANDOFF, false);
   }
 
-  // F200 AC-A1: fire-and-forget recall correlation after all cats complete
+  // F200 AC-A1: fire-and-forget recall correlation after all cats complete.
+  // TD 2026-08-12: bounded tail read — full-thread reads of large keys
+  // (observed 221MB) froze the API event loop every round-end.
   if (deps.toolEventLog && deps.evidenceStore && completedCatInvocationIds.length > 0) {
     const evidenceDb = (deps.evidenceStore as { getDb?: () => import('better-sqlite3').Database }).getDb?.();
     if (evidenceDb) {
       deps.toolEventLog
-        .readByThread(threadId)
+        .readRecentByThread(threadId, RECALL_CORRELATION_EVENT_WINDOW)
         .then((events) => {
           const raw = events as unknown as Parameters<typeof triggerRecallCorrelation>[1];
           for (const [catId, invId] of completedCatInvocationIds) {
-            triggerRecallCorrelation(evidenceDb, raw, invId, catId).catch(() => {});
+            const withPush = mergePushRecallPresentations(
+              raw,
+              pushRecallPresentationsByCat.get(catId) ?? [],
+              invId,
+              catId,
+              threadId,
+            );
+            triggerRecallCorrelation(evidenceDb, withPush, invId, catId).catch(() => {});
           }
         })
         .catch(() => {});

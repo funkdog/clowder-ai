@@ -13,8 +13,9 @@
  *   分类直接由数据源类型决定（rich block kind / task kind / ledger entry type）。
  */
 
-import { isSourceCodeExtension, type RichBlock, type ThreadArtifactDTO } from '@cat-cafe/shared';
+import { isSourceCodeExtension, type MessageContent, type RichBlock, type ThreadArtifactDTO } from '@cat-cafe/shared';
 import type { IMessageStore, StoredMessage } from '../../stores/ports/MessageStore.js';
+import { getTimelineOrderTime } from '../../stores/visibility.js';
 
 const THREAD_SCAN_PAGE = 200;
 
@@ -35,20 +36,19 @@ export async function collectAllThreadMessages(
   let cursor: { ts: number; id: string } | undefined;
   for (;;) {
     const page = cursor
-      ? await store.getByThreadBefore(threadId, cursor.ts, pageSize, cursor.id, userId)
-      : await store.getByThread(threadId, pageSize, userId);
+      ? await store.getByThreadBefore(threadId, cursor.ts, pageSize, cursor.id, userId, {
+          includeQueuedCatMessages: true,
+        })
+      : await store.getByThread(threadId, pageSize, userId, { includeQueuedCatMessages: true });
     if (page.length === 0) break;
     all.push(...page);
     if (page.length < pageSize) break;
     // getByThread/getByThreadBefore 返回 oldest→newest（最老在 page[0]）。
     // cursor 必须取当前页最老的一条，才能继续往「更老」分页；用最新一条会重叠重扫整页。
     const oldest = page[0];
-    // F232 P2 fix（cloud review）：thread zset 的 score = effective order time——
-    // queued 消息投递后 markDelivered 会把 score re-score 到 deliveredAt（见 RedisMessageStore）。
-    // 游标必须用同一时间（deliveredAt ?? timestamp），否则下一页 getByThreadBefore 以原始
-    // timestamp 为上界（score < timestamp），会跳过 score 落在 (timestamp, deliveredAt) 的消息，
-    // 其 artifacts 从 GET /api/threads/:threadId/artifacts 中漏聚合。
-    cursor = { ts: oldest.deliveredAt ?? oldest.timestamp, id: oldest.id };
+    // Cursor must use the same publication-order score as Redis: real-cat
+    // speech keeps authoring time; ordinary queued work uses delivery time.
+    cursor = { ts: getTimelineOrderTime(oldest), id: oldest.id };
   }
   return all;
 }
@@ -58,6 +58,7 @@ export interface AggregatorMessage {
   catId: string | null;
   timestamp: number;
   extra?: { rich?: { blocks?: RichBlock[] } };
+  contentBlocks?: readonly MessageContent[];
 }
 
 export interface AggregatorPrTask {
@@ -103,17 +104,26 @@ function blockToArtifacts(b: RichBlock, msg: AggregatorMessage): ThreadArtifactD
   switch (b.kind) {
     case 'media_gallery':
       return b.items.map(
-        (item): ThreadArtifactDTO => ({
+        (item, itemIndex): ThreadArtifactDTO => ({
           ...base,
           type: 'image',
           name: item.caption ?? item.alt ?? 'image',
           url: item.url,
+          publicationItem: { kind: 'media-gallery', blockId: b.id, itemIndex },
         }),
       );
     case 'file': {
       // AC-A9: video 识别——mimeType 优先，扩展名 fallback
       const isVideo = b.mimeType ? b.mimeType.startsWith('video/') : VIDEO_EXTENSIONS.has(extensionOf(b.fileName));
-      return [{ ...base, type: isVideo ? 'video' : 'file', name: b.fileName, url: b.url }];
+      return [
+        {
+          ...base,
+          type: isVideo ? 'video' : 'file',
+          name: b.fileName,
+          url: b.url,
+          publicationItem: { kind: 'rich-file', blockId: b.id },
+        },
+      ];
     }
     case 'diff':
       return [{ ...base, type: 'code', name: b.filePath, ref: b.filePath }];
@@ -133,6 +143,18 @@ function blockToArtifacts(b: RichBlock, msg: AggregatorMessage): ThreadArtifactD
 function richBlocksToArtifacts(messages: AggregatorMessage[]): ThreadArtifactDTO[] {
   const out: ThreadArtifactDTO[] = [];
   for (const msg of messages) {
+    for (const [index, block] of (msg.contentBlocks ?? []).entries()) {
+      if (block.type !== 'image' && block.type !== 'file') continue;
+      out.push({
+        catId: msg.catId,
+        createdAt: msg.timestamp,
+        sourceMessageId: msg.id,
+        type: block.type === 'image' ? 'image' : block.mimeType.startsWith('video/') ? 'video' : 'file',
+        name: block.type === 'image' ? '图片' : block.fileName,
+        url: block.url,
+        publicationItem: { kind: 'content-block', index },
+      });
+    }
     for (const b of msg.extra?.rich?.blocks ?? []) {
       out.push(...blockToArtifacts(b, msg));
     }
@@ -165,6 +187,7 @@ function fileLedgerToArtifacts(fileLedger: AggregatorFileLedgerEntry[]): ThreadA
     createdAt: f.updatedAt,
     sourceMessageId: null,
     ref: f.ref,
+    fileLedgerRef: f.ref,
   }));
 }
 

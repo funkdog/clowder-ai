@@ -4,19 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '@/utils/api-client';
 import { SettingsResourceToggleSwitch } from '../SettingsResourceCard';
 import { AllProjectsSyncBanner } from './AllProjectsSyncBanner';
-import { ProjectSelector } from './capability-settings-ui';
+import { ProjectSelector, ScopeTabs } from './capability-settings-ui';
+import { DriftBanner } from './DriftBanner';
 import { MountRulesPanel } from './MountRulesPanel';
 import { SettingsStatusStrip } from './primitives';
 import { SettingsPageHeader } from './SettingsPageHeader';
 import { SkillPreviewModal } from './SkillPreviewModal';
-import { SkillsDriftBanner } from './SkillsDriftBanner';
-import {
-  SkillRow,
-  SkillsEmptyState,
-  SkillsFilterToolbar,
-  SkillsScopeTabs,
-  SkillsSummaryFooter,
-} from './SkillsSubComponents';
+import { SkillRow, SkillsEmptyState, SkillsFilterToolbar, SkillsSummaryFooter } from './SkillsSubComponents';
 import type { SettingsSkillItem, SkillScope, SkillsApiData, SkillsData } from './skills-types';
 import {
   ALL_CATEGORIES,
@@ -44,7 +38,7 @@ export function SkillsContent() {
   const refetchControls = controls.refetch;
   const skillsFetchGen = useRef(0);
 
-  const fetchSkills = useCallback(async (forProject?: string) => {
+  const fetchSkills = useCallback(async (forProject?: string | null) => {
     const generation = ++skillsFetchGen.current;
     const isCurrent = () => skillsFetchGen.current === generation;
     setError(null);
@@ -105,12 +99,10 @@ export function SkillsContent() {
         source: skill.controls?.source ?? skill.source,
         pluginId: skill.pluginId,
       });
-      // Re-fetch skills data so mount state reflects the filesystem changes.
       await fetchSkills(scope === SCOPE_PROJECT ? selectedProjectPath : undefined);
-      // F228: refresh drift banner so conflict/anomaly state updates after toggle.
       setDriftRefreshToken((v) => v + 1);
     },
-    [controls, scope, fetchSkills, selectedProjectPath],
+    [controls, fetchSkills, scope, selectedProjectPath],
   );
 
   const handleMountPointToggle = useCallback(
@@ -125,7 +117,13 @@ export function SkillsContent() {
     [controls, fetchSkills, selectedProjectPath],
   );
 
-  const sync = useSkillsSync({ scope, data, composedItems, controls, fetchSkills, refreshToken: driftRefreshToken });
+  const sync = useSkillsSync({
+    scope,
+    composedItems,
+    controls,
+    fetchSkills,
+    refreshToken: driftRefreshToken,
+  });
 
   const scopeCounts = useMemo(() => ({ all: composedItems.length, project: composedItems.length }), [composedItems]);
 
@@ -159,7 +157,7 @@ export function SkillsContent() {
       await fetchSkills(scope === SCOPE_PROJECT ? selectedProjectPath : undefined);
       setDriftRefreshToken((v) => v + 1);
     },
-    [controls, scope, filteredSkills, fetchSkills, selectedProjectPath],
+    [controls, fetchSkills, scope, filteredSkills, selectedProjectPath],
   );
 
   // F228: Compute whether the majority of visible managed skills are enabled
@@ -179,9 +177,15 @@ export function SkillsContent() {
     <div className="space-y-5">
       <SettingsPageHeader title="Skill 管理" subtitle="点击卡片预览/编辑" />
 
-      <SkillsScopeTabs
-        scope={scope}
-        onScopeChange={(nextScope) => {
+      <ScopeTabs
+        tabs={[
+          { key: SCOPE_ALL, label: '全部 Skill', count: scopeCounts.all },
+          { key: SCOPE_PROJECT, label: '项目 Skill', count: scopeCounts.project },
+        ]}
+        activeKey={scope}
+        ariaLabel="Skill scope"
+        onTabChange={(key) => {
+          const nextScope = key as SkillScope;
           setScope(nextScope);
           setActiveCategory(ALL_CATEGORIES);
           setExpandedMounts(null);
@@ -189,14 +193,18 @@ export function SkillsContent() {
             void fetchSkills();
             void controls.refetch(null);
           } else {
+            // F228: Auto-select first known project when entering project scope.
+            // No "全局技能" fallback — the "全部 Skill" tab is the global view.
+            // Use controls.projectPath (explicit user selection), NOT selectedProjectPath
+            // which falls back to resolvedProjectPath (instance root). The instance root
+            // is excluded from the ProjectSelector dropdown, so falling back to it would
+            // show one project in the dropdown while targeting a different project for data.
+            const target = controls.projectPath ?? controls.knownProjects[0] ?? null;
             setData(null);
-            // switchProject updates projectPathRef (used by toggle) AND fetches capabilities
-            controls.switchProject(selectedProjectPath ?? null);
-            void fetchSkills(selectedProjectPath);
+            controls.switchProject(target);
+            void fetchSkills(target);
           }
         }}
-        allCount={scopeCounts.all}
-        projectCount={scopeCounts.project}
       />
 
       {scope === SCOPE_PROJECT && (
@@ -211,7 +219,7 @@ export function SkillsContent() {
               setActiveCategory(ALL_CATEGORIES);
               setQuery('');
               controls.switchProject(path);
-              void fetchSkills(path ?? undefined);
+              void fetchSkills(path);
             }}
           />
           <MountRulesPanel projectPath={selectedProjectPath} onSaved={handleMountRulesSaved} />
@@ -237,6 +245,7 @@ export function SkillsContent() {
           <div className="min-w-0 flex-1">
             {scope === SCOPE_ALL && (
               <AllProjectsSyncBanner
+                type="skill"
                 scopes={sync.scopeIssues}
                 scopesWithIssues={sync.scopesWithIssues}
                 syncing={sync.syncing}
@@ -246,7 +255,8 @@ export function SkillsContent() {
               />
             )}
             {scope === SCOPE_PROJECT && (
-              <SkillsDriftBanner
+              <DriftBanner
+                type="skill"
                 projectPath={selectedProjectPath}
                 refreshToken={driftRefreshToken}
                 onResolved={refreshSelectedSkills}
@@ -264,7 +274,7 @@ export function SkillsContent() {
         </div>
       )}
 
-      {!data && !error && <SettingsStatusStrip tone="muted">加载中...</SettingsStatusStrip>}
+      {!data && !combinedError && <SettingsStatusStrip tone="muted">加载中...</SettingsStatusStrip>}
       {data && filteredSkills.length === 0 && <SkillsEmptyState />}
 
       <div className="space-y-3" data-testid="skills-list">

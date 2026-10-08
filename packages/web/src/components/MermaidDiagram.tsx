@@ -39,9 +39,12 @@ export function MermaidDiagram({ source }: { source: string }) {
           startOnLoad: false,
           securityLevel: 'strict',
           theme: 'neutral',
-          flowchart: {
-            htmlLabels: false,
-          },
+          // Top-level htmlLabels overrides all diagram types.
+          // Nested flowchart.htmlLabels does NOT suppress foreignObject
+          // in mermaid 11.15.0 when securityLevel='strict' — the strict
+          // sandbox forces HTML labels back on. Top-level wins.
+          // See: clowder-ai#1444
+          htmlLabels: false,
         });
 
         const { svg } = await mermaid.render(diagramId, normalizedSource);
@@ -69,6 +72,10 @@ export function MermaidDiagram({ source }: { source: string }) {
   return (
     <div
       data-testid="mermaid-diagram"
+      // The renderer owns every character in here — typeset SVG, loading copy, error copy —
+      // none of which exists in the Markdown source. It is interface state, not quotable
+      // message content, so selections touching it are refused.
+      data-quote-exclude
       className="my-3 overflow-x-auto rounded-md border border-cafe bg-cafe-white p-3 text-cafe-primary"
     >
       {renderState.status === 'ready' ? (

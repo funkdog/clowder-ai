@@ -14,31 +14,69 @@ const desktopPostInstallScriptPath = path.resolve(
 );
 const desktopInstallerScriptPath = path.resolve(import.meta.dirname, '../../../desktop/installer/cat-cafe.iss');
 
-test('api build script avoids unix-only file copy commands', async () => {
+test('api build uses the public native command without the prepared-artifact wrapper', async () => {
   const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'));
   const buildScript = packageJson.scripts?.build;
 
   assert.equal(typeof buildScript, 'string');
+  assert.doesNotMatch(buildScript, /gate-prepared-artifacts/);
+  assert.match(buildScript, /pnpm --dir \.\.\/shared build/);
+  assert.match(buildScript, /pnpm --dir \.\.\/collective-service build/);
   assert.match(buildScript, /node \.\/scripts\/copy-marketplace-catalog-data\.mjs/);
   assert.doesNotMatch(buildScript, /\bmkdir -p\b/);
   assert.doesNotMatch(buildScript, /\bcp\s+src\/marketplace\/catalog-data/);
+  assert.equal(packageJson.scripts?.['build:actual'], undefined);
 });
 
-test('desktop package includes main process local require dependencies', async () => {
+test('api test script builds mcp-server with workspace dependencies first', async () => {
+  const packageJson = JSON.parse(await readFile(packageJsonPath, 'utf8'));
+  const testScript = packageJson.scripts?.test;
+
+  assert.equal(typeof testScript, 'string');
+  assert.match(testScript, /pnpm --filter @cat-cafe\/mcp-server\.\.\. build/);
+  assert.doesNotMatch(
+    testScript,
+    /pnpm --dir \.\.\/mcp-server build/,
+    'direct mcp-server build can run before workspace deps have dist artifacts',
+  );
+  assert.ok(
+    testScript.indexOf('pnpm --filter @cat-cafe/mcp-server... build') < testScript.indexOf('pnpm run build'),
+    'mcp-server dependency build must run before API build/test execution',
+  );
+});
+
+test('desktop package includes the full main process local require dependency graph', async () => {
   const desktopPackage = JSON.parse(await readFile(desktopPackageJsonPath, 'utf8'));
-  const mainSource = await readFile(desktopMainPath, 'utf8');
   const packageFiles = new Set(desktopPackage.build?.files ?? []);
+  const desktopRoot = path.dirname(desktopMainPath);
+  const pending = ['main.js'];
+  const visited = new Set();
   const missing = [];
 
-  for (const match of mainSource.matchAll(/require\(['"](\.\/[^'"]+)['"]\)/g)) {
-    const specifier = match[1];
-    let relativePath = specifier.slice('./'.length);
-    if (!path.extname(relativePath)) relativePath += '.js';
-    relativePath = relativePath.split(path.sep).join('/');
-    if (!packageFiles.has(relativePath)) missing.push(relativePath);
+  while (pending.length > 0) {
+    const relativeSourcePath = pending.shift();
+    if (visited.has(relativeSourcePath)) continue;
+    visited.add(relativeSourcePath);
+
+    const source = await readFile(path.join(desktopRoot, relativeSourcePath), 'utf8');
+    for (const match of source.matchAll(/require\(['"](\.[^'"]+)['"]\)/g)) {
+      const specifier = match[1];
+      let dependencyPath = path.relative(
+        desktopRoot,
+        path.resolve(desktopRoot, path.dirname(relativeSourcePath), specifier),
+      );
+      if (!path.extname(dependencyPath)) dependencyPath += '.js';
+      dependencyPath = dependencyPath.split(path.sep).join('/');
+      if (path.extname(dependencyPath) !== '.js') continue;
+      if (!packageFiles.has(dependencyPath)) {
+        missing.push(dependencyPath);
+        continue;
+      }
+      pending.push(dependencyPath);
+    }
   }
 
-  assert.deepEqual(missing, []);
+  assert.deepEqual([...new Set(missing)].sort(), []);
 });
 
 test('windows desktop build script cleans up temporary Defender exclusions', async () => {
@@ -55,6 +93,20 @@ test('windows desktop build script retries pnpm deploy on EPERM', async () => {
   assert.match(buildScript, /for \(\$attempt = 1; \$attempt -le 3/);
   assert.match(buildScript, /Start-Sleep -Seconds 10/);
   assert.match(buildScript, /Remove-Item \$out -Recurse -Force/);
+});
+
+test('windows desktop build script downloads official Inno Setup ChineseSimplified language file', async () => {
+  const buildScript = await readFile(desktopBuildScriptPath, 'utf8');
+
+  assert.match(
+    buildScript,
+    /https:\/\/raw\.githubusercontent\.com\/jrsoftware\/issrc\/main\/Files\/Languages\/ChineseSimplified\.isl/,
+  );
+  assert.doesNotMatch(
+    buildScript,
+    /Files\/Languages\/Unofficial\/ChineseSimplified\.isl/,
+    'ChineseSimplified.isl is now an official Inno Setup language file; the old Unofficial URL 404s',
+  );
 });
 
 test('windows desktop build script Defender cleanup runs in finally block', async () => {

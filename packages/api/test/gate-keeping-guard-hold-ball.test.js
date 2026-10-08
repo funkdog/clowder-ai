@@ -9,6 +9,17 @@ import assert from 'node:assert/strict';
 import { beforeEach, describe, test } from 'node:test';
 import Fastify from 'fastify';
 
+/**
+ * PR-O3: all wakeAfterMs payloads now require waitSourceRef.
+ * This fixture satisfies the schema without distracting from the test's focus.
+ */
+const VALID_WAIT_SOURCE_REF = {
+  kind: 'github_issue',
+  value: 'https://github.com/owner/repo/issues/42',
+  expectedSignal: 'issue closed',
+  slaUntilMs: 1781972000000,
+};
+
 describe('F167 gate-keeping guard: POST /api/callbacks/hold-ball', () => {
   let registry;
   let threadStore;
@@ -23,6 +34,18 @@ describe('F167 gate-keeping guard: POST /api/callbacks/hold-ball', () => {
     };
     const deps = {
       registry,
+      holdQuotaStore: {
+        async tryAdmit() {
+          return { admitted: true, count: 1, eventId: `stub-${Date.now()}` };
+        },
+        async releaseByEventId() {
+          return true;
+        },
+        async getCount() {
+          return 0;
+        },
+        async close() {},
+      },
       taskRunner: {
         registerDynamic(spec, taskId) {
           registeredDynamic.push({ spec, taskId });
@@ -107,7 +130,12 @@ describe('F167 gate-keeping guard: POST /api/callbacks/hold-ball', () => {
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
-      payload: { reason: 'waiting CI', nextStep: 'verify merge', wakeAfterMs: 60_000 },
+      payload: {
+        reason: 'waiting CI',
+        nextStep: 'verify merge',
+        wakeAfterMs: 60_000,
+        waitSourceRef: VALID_WAIT_SOURCE_REF,
+      },
     });
 
     assert.equal(response.statusCode, 200, 'normal thread hold_ball must succeed');
@@ -126,7 +154,12 @@ describe('F167 gate-keeping guard: POST /api/callbacks/hold-ball', () => {
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
-      payload: { reason: 'waiting external author', nextStep: 'check reply', wakeAfterMs: 1_800_000 },
+      payload: {
+        reason: 'waiting external author',
+        nextStep: 'check reply',
+        wakeAfterMs: 1_800_000,
+        waitSourceRef: VALID_WAIT_SOURCE_REF,
+      },
     });
 
     assert.equal(response.statusCode, 400, 'gate-keeping thread must block long-SLA hold_ball');
@@ -156,6 +189,7 @@ describe('F167 gate-keeping guard: POST /api/callbacks/hold-ball', () => {
         reason: 'waiting CI on downstream PR I own',
         nextStep: 'verify merge',
         wakeAfterMs: 1_800_000,
+        waitSourceRef: VALID_WAIT_SOURCE_REF,
         override: 'i-am-the-downstream-owner',
       },
     });
@@ -207,7 +241,12 @@ describe('F167 gate-keeping guard: POST /api/callbacks/hold-ball', () => {
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
-      payload: { reason: 'waiting for external author response', nextStep: 'check reply', wakeAfterMs: 1_800_000 },
+      payload: {
+        reason: 'waiting for external author response',
+        nextStep: 'check reply',
+        wakeAfterMs: 1_800_000,
+        waitSourceRef: VALID_WAIT_SOURCE_REF,
+      },
     });
 
     assert.equal(response.statusCode, 400, 'long-SLA hold must be blocked in gate-keeping thread');
@@ -244,7 +283,9 @@ describe('F167 gate-keeping guard: POST /api/callbacks/hold-ball', () => {
     assert.equal(deps._insertedTasks.length, 1, 'hold task must be scheduled');
   });
 
-  test('PR-O4: gate-keeping + short SLA + NO waitSourceRef → 400 (ungrounded hold)', async () => {
+  test('PR-O4→O3: wakeAfterMs + NO waitSourceRef → 400 (schema rejects before guard)', async () => {
+    // PR-O3 elevated this from guard-level to schema-level enforcement.
+    // The schema refine now rejects wakeAfterMs without waitSourceRef directly.
     const deps = makeStubDeps();
     const app = await createApp(deps);
     const thread = await threadStore.create('user-hb-o4-ung', 'repo-inbox');
@@ -255,14 +296,16 @@ describe('F167 gate-keeping guard: POST /api/callbacks/hold-ball', () => {
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
-      // Short SLA but NO waitSourceRef → ungrounded → blocked
+      // Short SLA but NO waitSourceRef → schema rejects
       payload: { reason: 'checking something', nextStep: 'verify', wakeAfterMs: 120_000 },
     });
 
-    assert.equal(response.statusCode, 400, 'ungrounded short-SLA hold must be blocked in gate-keeping thread');
+    assert.equal(response.statusCode, 400, 'missing waitSourceRef must be schema-rejected');
     const body = JSON.parse(response.body);
-    assert.equal(body.error, 'gate_keeping_thread_default_blocked');
-    assert.match(body.reason, /waitSourceRef/, 'reason must mention waitSourceRef requirement');
+    assert.ok(
+      body.details?.some((d) => d.message?.includes('waitSourceRef is required')),
+      'error must mention waitSourceRef requirement',
+    );
     assert.equal(deps._insertedTasks.length, 0, 'hold task must NOT be scheduled');
   });
 
@@ -310,7 +353,7 @@ describe('F167 gate-keeping guard: POST /api/callbacks/hold-ball', () => {
     assert.equal(deps._insertedTasks.length, 1, 'hold task must be scheduled');
   });
 
-  test('PR-O4: gate-keeping + short SLA + active PR tracking → 400 (event-backed hold redundant)', async () => {
+  test('F280: active PR wait no longer blocks a separately grounded short hold via cross-system detection', async () => {
     const { TaskStore } = await import('../dist/domains/cats/services/stores/ports/TaskStore.js');
     const taskStoreInstance = new TaskStore();
 
@@ -334,14 +377,23 @@ describe('F167 gate-keeping guard: POST /api/callbacks/hold-ball', () => {
       method: 'POST',
       url: '/api/callbacks/hold-ball',
       headers: { 'x-invocation-id': invocationId, 'x-callback-token': callbackToken },
-      // Short SLA would normally be allowed — but event callback makes hold redundant
-      payload: { reason: 'waiting CI', nextStep: 'check result', wakeAfterMs: 120_000 },
+      // F280 removed the parallel tracker-vs-hold detector. This route is judged
+      // only by the hold contract's own grounding and SLA.
+      payload: {
+        reason: 'waiting CI',
+        nextStep: 'check result',
+        wakeAfterMs: 120_000,
+        waitSourceRef: {
+          kind: 'github_issue',
+          value: 'https://github.com/owner/repo/issues/42',
+          expectedSignal: 'PR merged',
+          slaUntilMs: 1781972000000,
+        },
+      },
     });
 
-    assert.equal(response.statusCode, 400, 'event-backed hold must be blocked (redundant)');
-    const body = JSON.parse(response.body);
-    assert.match(body.reason, /冗余/, 'reason must mention redundancy');
-    assert.equal(deps._insertedTasks.length, 0, 'hold task must NOT be scheduled');
+    assert.equal(response.statusCode, 200);
+    assert.equal(deps._insertedTasks.length, 1);
   });
 
   test('PR-O4: gate-keeping + short SLA + waitSourceRef + no taskStore → 200 (fail-open, no callback assumed)', async () => {

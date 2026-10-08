@@ -1,5 +1,13 @@
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createModuleLogger } from '../../../../../infrastructure/logger.js';
+import { buildOpenCodeMcpSync } from './opencode-mcp-injection.js';
+
+export {
+  inferOpenCodeProviderFromModelName,
+  parseOpenCodeModel,
+  resolveEffectiveOpenCodeModel,
+} from '../../../../../config/opencode-model.js';
+
+const log = createModuleLogger('opencode-config');
 
 interface OpenCodeConfigOptions {
   /** Anthropic API key — validated but NOT written to config (stays in ANTHROPIC_API_KEY env var) */
@@ -14,7 +22,7 @@ interface OpenCodeConfigOptions {
 
 type OpenCodeProviderConfig = {
   npm?: string;
-  models?: Record<string, { name: string }>;
+  models?: Record<string, { id?: string; name: string }>;
   options: {
     apiKey?: string;
     baseURL?: string;
@@ -37,6 +45,21 @@ interface OpenCodeConfig {
     external_directory?: Record<string, OpenCodePermissionAction>;
   };
 }
+
+type OpenCodeLocalMcpEntry = {
+  type: string;
+  command: string[];
+  environment?: Record<string, string>;
+};
+
+type OpenCodeRemoteMcpEntry = {
+  type: 'remote';
+  url: string;
+  enabled: true;
+  headers?: Record<string, string>;
+};
+
+type OpenCodeMcpEntry = OpenCodeLocalMcpEntry | OpenCodeRemoteMcpEntry;
 
 export function generateOpenCodeConfig(options: OpenCodeConfigOptions): OpenCodeConfig {
   const { baseUrl, model, enableOmoc = true } = options;
@@ -62,6 +85,17 @@ export function generateOpenCodeConfig(options: OpenCodeConfigOptions): OpenCode
 
 export const OC_API_KEY_ENV = 'CAT_CAFE_OC_API_KEY';
 export const OC_BASE_URL_ENV = 'CAT_CAFE_OC_BASE_URL';
+
+/**
+ * We deliberately emit no `limit` block at all.
+ *
+ * OpenCode requires `limit.output` whenever `limit` is present and resolves
+ * explicit config before its catalog and built-in fallback. Pinning only our
+ * invocation context window here therefore makes the config invalid; guessing
+ * an output would instead overwrite authoritative catalog output limits. This layer has no
+ * carrier-aware output authority, so it supplies neither field. Clowder AI still
+ * retains the invocation window for context health and session handoff.
+ */
 
 /**
  * OpenCode API type determines which AI SDK npm adapter to use.
@@ -97,6 +131,7 @@ export function deriveOpenCodeApiType(providerName: string | undefined): OpenCod
 export interface OpenCodeRuntimeConfigOptions {
   providerName: string;
   models: readonly string[];
+  modelAliases?: Readonly<Record<string, string>>;
   defaultModel?: string;
   apiType?: OpenCodeApiType;
   hasBaseUrl?: boolean;
@@ -116,6 +151,19 @@ export interface OpenCodeRuntimeConfigOptions {
   instructions?: readonly string[];
   /** #935: Directories outside cwd granted `permission.external_directory` access. */
   externalDirectories?: readonly string[];
+  /** Cat ID for capabilities.json enabled-state filtering. */
+  catId?: string;
+  /** Runtime root containing the managed .cat-cafe/capabilities.json. */
+  capabilitiesProjectRoot?: string;
+  /** F249: User's project working directory for per-project MCP overrides. */
+  workingDirectory?: string;
+  /**
+   * When true, only generate MCP config — no custom provider entry.
+   * Used for OAuth auth where OpenCode handles credentials natively;
+   * injecting a provider with an empty apiKey placeholder would override
+   * OpenCode's built-in auth and break the session.
+   */
+  mcpOnly?: boolean;
 }
 
 export interface OpenCodeRuntimeConfigDebugSummary {
@@ -127,21 +175,12 @@ export interface OpenCodeRuntimeConfigDebugSummary {
     {
       npm?: string;
       modelKeys: string[];
+      modelMappings: Record<string, string>;
       hasBaseUrl: boolean;
       apiKeySource: string;
       baseUrlSource?: string;
     }
   >;
-}
-
-export function parseOpenCodeModel(model: string): { providerName: string; modelName: string } | null {
-  const trimmed = model.trim();
-  const slashIndex = trimmed.indexOf('/');
-  if (slashIndex <= 0 || slashIndex >= trimmed.length - 1) return null;
-  return {
-    providerName: trimmed.slice(0, slashIndex),
-    modelName: trimmed.slice(slashIndex + 1),
-  };
 }
 
 function stripOwnProviderPrefix(modelName: string, providerName: string): string {
@@ -164,7 +203,7 @@ export function safeProviderName(name: string): string {
   return OPENCODE_BUILTIN_NAMES.has(name) ? `${name}-compat` : name;
 }
 
-function buildExternalDirectoryPermissions(
+export function buildExternalDirectoryPermissions(
   externalDirectories?: readonly string[],
 ): Record<string, OpenCodePermissionAction> | undefined {
   const rules: Record<string, OpenCodePermissionAction> = {};
@@ -179,6 +218,7 @@ export function generateOpenCodeRuntimeConfig(options: OpenCodeRuntimeConfigOpti
   const {
     providerName,
     models,
+    modelAliases,
     defaultModel,
     apiType = 'openai',
     hasBaseUrl = false,
@@ -187,15 +227,25 @@ export function generateOpenCodeRuntimeConfig(options: OpenCodeRuntimeConfigOpti
     allowedWorkspaceDirs,
     instructions,
     externalDirectories,
+    catId,
+    capabilitiesProjectRoot,
+    workingDirectory,
+    mcpOnly,
   } = options;
 
   const configName = safeProviderName(providerName);
 
-  const modelsMap: Record<string, { name: string }> = {};
+  const modelsMap: Record<string, { id?: string; name: string }> = {};
   const modelsToRegister = defaultModel ? [...models, defaultModel] : [...models];
   for (const rawModel of modelsToRegister) {
     const modelName = stripOwnProviderPrefix(rawModel, providerName);
-    modelsMap[modelName] = { name: modelName };
+    const configuredAlias =
+      modelAliases && Object.hasOwn(modelAliases, modelName) ? modelAliases[modelName] : undefined;
+    const upstreamId = typeof configuredAlias === 'string' ? configuredAlias.trim() : undefined;
+    modelsMap[modelName] = {
+      ...(upstreamId ? { id: upstreamId } : {}),
+      name: modelName,
+    };
   }
 
   let configDefaultModel = defaultModel;
@@ -219,13 +269,14 @@ export function generateOpenCodeRuntimeConfig(options: OpenCodeRuntimeConfigOpti
   };
 
   if (mcpServerPath) {
-    config.mcp = {
-      'cat-cafe': {
-        type: 'local',
-        command: ['node', mcpServerPath],
-        ...(allowedWorkspaceDirs ? { environment: { ALLOWED_WORKSPACE_DIRS: allowedWorkspaceDirs } } : {}),
-      },
-    };
+    const mcp = buildOpenCodeMcpSync(
+      mcpServerPath,
+      catId,
+      capabilitiesProjectRoot,
+      workingDirectory,
+      allowedWorkspaceDirs,
+    );
+    if (Object.keys(mcp).length > 0) config.mcp = mcp;
   }
 
   // F203 Phase I: inject compiled L0 + OPENCODE.md paths into instructions.
@@ -270,6 +321,11 @@ export function summarizeOpenCodeRuntimeConfigForDebug(
         {
           npm: providerConfig.npm,
           modelKeys: Object.keys(providerConfig.models ?? {}).sort(),
+          modelMappings: Object.fromEntries(
+            Object.entries(providerConfig.models ?? {})
+              .sort(([left], [right]) => left.localeCompare(right))
+              .map(([modelKey, modelConfig]) => [modelKey, modelConfig.id ?? modelKey]),
+          ),
           hasBaseUrl: Boolean(providerConfig.options.baseURL),
           apiKeySource: summarizeEnvPlaceholder(providerConfig.options.apiKey) ?? '(unset)',
           ...(providerConfig.options.baseURL
@@ -280,68 +336,5 @@ export function summarizeOpenCodeRuntimeConfigForDebug(
     ),
   };
 }
-
-function sanitizePathSegment(value: string): string {
-  return value.replace(/[^a-zA-Z0-9._-]+/g, '-');
-}
-
-/**
- * F203 Phase I: Write an instructions-only opencode config (no provider block).
- *
- * Used for OpenCode fallback paths (subscription/unresolved/known-model) where
- * a full runtime config is not generated. The config ONLY contains `instructions`
- * so OpenCode reads L0 + OPENCODE.md into system role. No provider/apiKey fields
- * → `buildEnv` must NOT clear native auth when this config is set.
- *
- * Callers must also set `CAT_CAFE_OC_INSTRUCTIONS_ONLY=1` in callbackEnv so
- * `OpenCodeAgentService.buildEnv` knows to preserve native auth.
- */
-export function writeOpenCodeInstructionsOnlyConfig(
-  projectRoot: string,
-  catId: string,
-  invocationId: string,
-  instructions: readonly string[],
-  externalDirectories?: readonly string[],
-): string {
-  const safeCatId = sanitizePathSegment(catId);
-  const safeInvocationId = sanitizePathSegment(invocationId);
-  const configDir = join(projectRoot, '.cat-cafe', `oc-config-${safeCatId}-${safeInvocationId}`);
-  mkdirSync(configDir, { recursive: true });
-  const configPath = join(configDir, 'opencode.json');
-  const tempPath = `${configPath}.tmp-${process.pid}`;
-  const config: Pick<OpenCodeConfig, '$schema' | 'instructions' | 'permission'> = {
-    $schema: 'https://opencode.ai/config.json',
-    instructions: [...instructions],
-  };
-  const externalDirectoryPermissions = buildExternalDirectoryPermissions(externalDirectories);
-  if (externalDirectoryPermissions) {
-    config.permission = { external_directory: externalDirectoryPermissions };
-  }
-  writeFileSync(tempPath, JSON.stringify(config, null, 2), 'utf-8');
-  renameSync(tempPath, configPath);
-  return configPath;
-}
-
-/**
- * Writes a per-invocation opencode config file.
- * OpenCode's `OPENCODE_CONFIG` points to a config file path; `OPENCODE_CONFIG_DIR`
- * is reserved for the `.opencode/`-style config directory structure.
- * Returns the `opencode.json` file path (set it as `OPENCODE_CONFIG`).
- */
-export function writeOpenCodeRuntimeConfig(
-  projectRoot: string,
-  catId: string,
-  invocationId: string,
-  options: OpenCodeRuntimeConfigOptions,
-): string {
-  const safeCatId = sanitizePathSegment(catId);
-  const safeInvocationId = sanitizePathSegment(invocationId);
-  const configDir = join(projectRoot, '.cat-cafe', `oc-config-${safeCatId}-${safeInvocationId}`);
-  mkdirSync(configDir, { recursive: true });
-  const configPath = join(configDir, 'opencode.json');
-  const tempPath = `${configPath}.tmp-${process.pid}`;
-  const config = generateOpenCodeRuntimeConfig(options);
-  writeFileSync(tempPath, JSON.stringify(config, null, 2), 'utf-8');
-  renameSync(tempPath, configPath);
-  return configPath;
-}
+// Writer functions (writeOpenCodeRuntimeConfig, writeOpenCodeInstructionsOnlyConfig)
+// extracted to opencode-config-writer.ts to stay under 350-line module budget.

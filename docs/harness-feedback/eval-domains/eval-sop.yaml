@@ -15,12 +15,16 @@
 
 domainId: eval:sop
 displayName: SOP Compliance Eval
+descriptionForHuman: 猫有没有按规矩办事——SOP 步骤跳了没、skill 该加载没加载
 systemThreadId: thread_eval_sop
 evalCat:
   catId: opus-47
   handle: "@opus47"
   model: claude-opus-4-7
 frequency: weekly
+triggerPolicy:
+  mode: time_only
+  maxDetectionDelayHours: 168
 sourceAdapter: sop-trace-eval
 sourceRefsKind: sop-trace-eval
 threadPolicy:
@@ -35,6 +39,13 @@ handoffTargetResolver:
   featureId: F192
   ownerCatId: opus
   threadLookup: feature-thread
+metricGlossaryRef: eval-sop.metrics.yaml
 sla:
   acknowledgeHours: 48
   reevalWithinHours: 336
+# 2026-10-01 dormant: see feature-discussions/2026-10-01-eval-into-f311/README.md
+dormancy:
+  reason: "Deterministic SOP violations are covered by merge-gate, quality-gate and pre-commit hooks; following the spirit of the SOP has no Program or consumer."
+  revivalPath: "Revive when a development-process-quality Program names a consumer."
+  decisionRef: "private-thread-id#private-source-id"
+enabled: false

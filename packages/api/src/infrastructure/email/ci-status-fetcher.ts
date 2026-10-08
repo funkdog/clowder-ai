@@ -2,22 +2,33 @@
  * #320: Standalone CI status fetcher (pure gh CLI calls — no store dependency).
  * Single source of truth for CI bucket/state interpretation, consumed by CiCdCheckTaskSpec.
  */
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
-import { buildGhCliEnv } from '../github/gh-cli-env.js';
-import type { CiBucket, CiCheckDetail, CiPollResult } from './CiCdRouter.js';
+import { executeGitHubRequest, GitHubRateLimitError } from '../github/request-budget.js';
+import type { CiBucket, CiCheckDetail, CiPollResult } from './ci-cd-contract.js';
+import { enrichGitHubExecutionFailures } from './ci-execution-failure.js';
 
-const execFileAsync = promisify(execFile);
-const GH_TIMEOUT_MS = 15_000;
+export {
+  classifyGitHubExecutionFailure,
+  type GitHubExecutionFailureEvidence,
+} from './ci-execution-failure.js';
+
+export type GhExecFileAsync = (file: string, args: readonly string[], options: unknown) => Promise<{ stdout: string }>;
 
 export interface FetchPrCiStatusOptions {
   readonly ghToken?: string;
+  /** Scheduler cancellation for every gh process in this poll generation. */
+  readonly signal?: AbortSignal;
+  /** Test seam at the real gh JSON boundary; production always uses node:child_process. */
+  readonly execFileAsync?: GhExecFileAsync;
 }
 
 type MinimalLog = {
   warn: (...args: unknown[]) => void;
   debug?: (...args: unknown[]) => void;
 };
+
+export async function executeGh(args: readonly string[], options: FetchPrCiStatusOptions): Promise<{ stdout: string }> {
+  return executeGitHubRequest([...args], options);
+}
 
 export async function fetchPrCiStatus(
   repoFullName: string,
@@ -27,13 +38,22 @@ export async function fetchPrCiStatus(
 ): Promise<CiPollResult | null> {
   let prViewJson: string;
   try {
-    const { stdout } = await execFileAsync(
-      'gh',
-      ['pr', 'view', String(prNumber), '-R', repoFullName, '--json', 'headRefOid,state,mergedAt,statusCheckRollup'],
-      { timeout: GH_TIMEOUT_MS, env: buildGhCliEnv({ token: options.ghToken }) },
+    const { stdout } = await executeGh(
+      [
+        'pr',
+        'view',
+        String(prNumber),
+        '-R',
+        repoFullName,
+        '--json',
+        'headRefOid,state,mergedAt,mergedBy,statusCheckRollup',
+      ],
+      options,
     );
     prViewJson = stdout;
   } catch (err) {
+    options.signal?.throwIfAborted();
+    if (err instanceof GitHubRateLimitError) throw err;
     log.warn(`[ci-status] gh pr view failed for ${repoFullName}#${prNumber}: ${String(err)}`);
     return null;
   }
@@ -42,6 +62,7 @@ export async function fetchPrCiStatus(
     headRefOid: string;
     state: string;
     mergedAt: string | null;
+    mergedBy: { login: string } | null;
     statusCheckRollup: Array<{ name: string; status: string; conclusion: string; __typename: string }>;
   };
   try {
@@ -53,7 +74,15 @@ export async function fetchPrCiStatus(
 
   const prState = normalizePrState(prView.state, prView.mergedAt);
   if (prState === 'merged' || prState === 'closed') {
-    return { repoFullName, prNumber, headSha: prView.headRefOid, prState, aggregateBucket: 'pending', checks: [] };
+    return {
+      repoFullName,
+      prNumber,
+      headSha: prView.headRefOid,
+      prState,
+      aggregateBucket: 'pending',
+      checks: [],
+      mergedByLogin: prView.mergedBy?.login,
+    };
   }
 
   const rollup = prView.statusCheckRollup ?? [];
@@ -61,68 +90,101 @@ export async function fetchPrCiStatus(
 
   let checks: CiCheckDetail[] = [];
   if (aggregateBucket !== 'pending') {
-    checks = await fetchCheckDetails(repoFullName, prNumber, log, options);
+    checks = await fetchCheckDetails(repoFullName, prNumber, prView.headRefOid, log, options);
   }
 
-  return { repoFullName, prNumber, headSha: prView.headRefOid, prState, aggregateBucket, checks };
+  return {
+    repoFullName,
+    prNumber,
+    headSha: prView.headRefOid,
+    prState,
+    aggregateBucket,
+    checkRollup: rollup.length === 0 ? 'empty' : 'present',
+    checks,
+  };
 }
 
 async function fetchCheckDetails(
   repoFullName: string,
   prNumber: number,
+  headSha: string,
   log: MinimalLog,
   options: FetchPrCiStatusOptions,
 ): Promise<CiCheckDetail[]> {
-  for (const requiredFlag of ['--required', '']) {
+  let checks = await fetchRequiredFailingChecks(repoFullName, prNumber, options);
+  if (!checks) {
     try {
-      const args = [
-        'pr',
-        'checks',
-        String(prNumber),
-        '-R',
-        repoFullName,
-        '--json',
-        'name,bucket,link,workflow,description',
-      ];
-      if (requiredFlag) args.push(requiredFlag);
-
-      const { stdout } = await execFileAsync('gh', args, {
-        timeout: GH_TIMEOUT_MS,
-        env: buildGhCliEnv({ token: options.ghToken }),
-      });
-      const parsed: Array<{ name: string; bucket: string; link?: string; workflow?: string; description?: string }> =
-        JSON.parse(stdout);
-
-      if (parsed.length > 0) {
-        const mapped = parsed.map((c) => ({
-          name: c.name,
-          bucket: normalizeBucket(c.bucket),
-          link: c.link,
-          workflow: c.workflow,
-          description: c.description,
-        }));
-        if (requiredFlag && !mapped.some((c) => c.bucket === 'fail')) {
-          continue;
-        }
-        return mapped;
-      }
-
-      if (!requiredFlag) {
-        return parsed.map((c) => ({
-          name: c.name,
-          bucket: normalizeBucket(c.bucket),
-          link: c.link,
-          workflow: c.workflow,
-          description: c.description,
-        }));
-      }
+      checks = await fetchGhCheckDetails(repoFullName, prNumber, false, options);
     } catch (err) {
-      if (requiredFlag) continue;
+      options.signal?.throwIfAborted();
+      if (err instanceof GitHubRateLimitError) throw err;
       log.warn(`[ci-status] gh pr checks failed for ${repoFullName}#${prNumber}: ${String(err)}`);
       return [];
     }
   }
-  return [];
+
+  return enrichGitHubExecutionFailures({
+    signal: options.signal,
+    repoFullName,
+    headSha,
+    checks,
+    ghApiJson: (path) => ghApiJson(path, options),
+    warn: (message) => log.warn(message),
+  });
+}
+
+async function fetchGhCheckDetails(
+  repoFullName: string,
+  prNumber: number,
+  requiredOnly: boolean,
+  options: FetchPrCiStatusOptions,
+): Promise<CiCheckDetail[]> {
+  const args = [
+    'pr',
+    'checks',
+    String(prNumber),
+    '-R',
+    repoFullName,
+    '--json',
+    'name,bucket,link,workflow,description',
+  ];
+  if (requiredOnly) args.push('--required');
+  const { stdout } = await executeGh(args, options);
+  const parsed = JSON.parse(stdout) as Array<{
+    name: string;
+    bucket: string;
+    link?: string;
+    workflow?: string;
+    description?: string;
+  }>;
+  return parsed.map((check) => ({
+    name: check.name,
+    bucket: normalizeBucket(check.bucket),
+    link: check.link,
+    workflow: check.workflow,
+    description: check.description,
+  }));
+}
+
+/** Preserve the historical `gh pr checks --required` failure projection. */
+export async function fetchRequiredFailingChecks(
+  repoFullName: string,
+  prNumber: number,
+  options: FetchPrCiStatusOptions,
+): Promise<CiCheckDetail[] | null> {
+  try {
+    const checks = await fetchGhCheckDetails(repoFullName, prNumber, true, options);
+    return checks.some((check) => check.bucket === 'fail') ? checks : null;
+  } catch (error) {
+    options.signal?.throwIfAborted();
+    if (error instanceof GitHubRateLimitError) throw error;
+    return null;
+  }
+}
+
+export async function ghApiJson<T>(path: string, options: FetchPrCiStatusOptions): Promise<T> {
+  const { stdout } = await executeGh(['api', path], options);
+  return JSON.parse(stdout) as T;
 }
 
 export function normalizePrState(state: string, mergedAt: string | null): 'open' | 'merged' | 'closed' {
@@ -141,6 +203,9 @@ export function normalizeBucket(bucket: string): CiBucket {
 export function computeAggregateBucket(
   rollup: Array<{ status: string; conclusion: string; __typename: string }>,
 ): CiBucket {
+  // An empty rollup is ambiguous: GitHub may not have created the check runs yet
+  // for a fresh HEAD, or the repository may define no checks. Neither is positive
+  // CI evidence, so the router keeps this pending across later polls too.
   if (rollup.length === 0) return 'pending';
   let hasFailure = false;
   let hasPending = false;

@@ -7,6 +7,8 @@
  */
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { clearAuthTestNamespace, createAuthTestNamespace } from './helpers/redis-auth-namespace.js';
+import { assertRedisIsolationOrThrow, redisIsolationSkipReason } from './helpers/redis-test-helpers.js';
 
 const backends = [
   [
@@ -20,12 +22,11 @@ const backends = [
   ],
 ];
 
-// Redis backend variant — only included when REDIS_URL is set to ANY port
-// EXCEPT 6399 (圣域 LL-015). The test:redis harness assigns a random port in
-// 6300..6999 range, so a strict :6398 check would skip the Redis variant
-// during full suite — defeating the contract.
+// The isolated runner chooses a random port; distributable public lanes use
+// port 0 to disable Redis. Share the same availability and isolation guard.
 const _redisUrl = process.env.REDIS_URL;
-if (_redisUrl && !_redisUrl.includes(':6399')) {
+if (!redisIsolationSkipReason(_redisUrl)) {
+  assertRedisIsolationOrThrow(_redisUrl, 'auth-invocation-backend-contract');
   backends.push([
     'redis',
     async () => {
@@ -33,17 +34,20 @@ if (_redisUrl && !_redisUrl.includes(':6399')) {
       const { RedisAuthInvocationBackend } = await import(
         '../dist/domains/cats/services/agents/invocation/RedisAuthInvocationBackend.js'
       );
-      const redis = createRedisClient({ url: process.env.REDIS_URL, keyPrefix: 'cat-cafe-test:' });
-      // Wipe test keyspace before each test (keyPrefix isolates from shared 6398 data)
-      const keys = await redis.keys('cat-cafe-test:auth:*');
-      if (keys.length > 0) {
-        const stripped = keys.map((k) => k.replace('cat-cafe-test:', ''));
-        await redis.del(...stripped);
-      }
+      // A namespace unique to this suite and process. The previous code took
+      // the shared `cat-cafe-test:` prefix and wiped `cat-cafe-test:auth:*`
+      // before every Redis variant, which under `--test-concurrency=4` could
+      // delete a record auth-invocation-restart.test.js had just written.
+      const namespace = createAuthTestNamespace('auth-contract');
+      const redis = createRedisClient({ url: process.env.REDIS_URL, keyPrefix: namespace });
       return {
         backend: new RedisAuthInvocationBackend(redis),
         cleanup: async () => {
-          await redis.quit();
+          try {
+            await clearAuthTestNamespace(redis, namespace);
+          } finally {
+            await redis.quit();
+          }
         },
       };
     },
@@ -55,6 +59,7 @@ function fixture(invocationId, callbackToken, threadId = 't-1', catId = 'opus') 
     invocationId,
     callbackToken,
     userId: 'u-1',
+    ownerAuthProvenance: 'strict',
     catId,
     threadId,
     clientMessageIds: new Set(),
@@ -72,6 +77,60 @@ for (const [name, factory] of backends) {
         assert.equal(result.ok, true);
         assert.equal(result.record.callbackToken, 'tok-1');
         assert.equal(result.record.userId, 'u-1');
+        assert.equal(result.record.ownerAuthProvenance, 'strict');
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('F254 read-only tool policy survives backend round-trip', async () => {
+      const { backend, cleanup } = await factory();
+      try {
+        const record = fixture('inv-policy', 'tok-policy');
+        record.toolExecutionPolicy = {
+          mode: 'read_only',
+          replayDeniedToolNames: ['cat_cafe_hold_ball', 'cat_cafe_post_message'],
+        };
+        await backend.create(record, 60_000);
+
+        const verified = await backend.verify('inv-policy', 'tok-policy', 60_000);
+        assert.equal(verified.ok, true);
+        assert.deepEqual(verified.record.toolExecutionPolicy, record.toolExecutionPolicy);
+        const hydrated = await backend.getRecord('inv-policy');
+        assert.deepEqual(hydrated?.toolExecutionPolicy, record.toolExecutionPolicy);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('exact turn origin survives backend round-trip without becoming A2A reply provenance', async () => {
+      const { backend, cleanup } = await factory();
+      try {
+        const record = fixture('inv-origin', 'tok-origin');
+        record.originTriggerMessageId = 'msg-user-direct';
+        await backend.create(record, 60_000);
+
+        const verified = await backend.verify('inv-origin', 'tok-origin', 60_000);
+        assert.equal(verified.ok, true);
+        assert.equal(verified.record.originTriggerMessageId, 'msg-user-direct');
+        assert.equal(verified.record.a2aTriggerMessageId, undefined);
+      } finally {
+        await cleanup();
+      }
+    });
+
+    test('private managed-work binding survives backend verify and hydrate paths', async () => {
+      const { backend, cleanup } = await factory();
+      try {
+        const record = fixture('inv-managed', 'tok-managed');
+        record.managedWorkBinding = { workId: 'wrk_private', attemptId: 'wat_private' };
+        await backend.create(record, 60_000);
+
+        const verified = await backend.verify('inv-managed', 'tok-managed', 60_000);
+        assert.equal(verified.ok, true);
+        assert.deepEqual(verified.record.managedWorkBinding, record.managedWorkBinding);
+        const hydrated = await backend.getRecord('inv-managed');
+        assert.deepEqual(hydrated?.managedWorkBinding, record.managedWorkBinding);
       } finally {
         await cleanup();
       }
@@ -98,14 +157,14 @@ for (const [name, factory] of backends) {
       }
     });
 
-    test('verify after TTL expiry returns reason:expired', async () => {
+    test('active credentials do not expire after elapsed time', async () => {
       const { backend, cleanup } = await factory();
       try {
         await backend.create(fixture('inv-3', 'tok-3'), 10);
         await new Promise((r) => setTimeout(r, 30));
         const result = await backend.verify('inv-3', 'tok-3', 10);
-        assert.equal(result.ok, false);
-        assert.equal(result.reason, 'expired');
+        assert.equal(result.ok, true);
+        assert.equal(result.record.expiresAt, null);
       } finally {
         await cleanup();
       }
@@ -134,7 +193,7 @@ for (const [name, factory] of backends) {
         await backend.create(fixture('inv-new', 'tok-new'), 60_000); // supersedes inv-old
         const stale = await backend.verifyLatest('inv-old', 'tok-old', 60_000);
         assert.equal(stale.ok, false);
-        assert.equal(stale.reason, 'stale_invocation');
+        assert.equal(stale.reason, 'replaced');
         const fresh = await backend.verifyLatest('inv-new', 'tok-new', 60_000);
         assert.equal(fresh.ok, true);
         assert.equal(fresh.record?.invocationId, 'inv-new');
@@ -166,21 +225,16 @@ for (const [name, factory] of backends) {
 
     // F174 Phase B P1 (gpt52 review #1363) — symptom check that survives
     // even with 60s grace: after a slide window, the latest pointer must
-    // not have drifted relative to the record. The detailed PTTL check
-    // lives in auth-invocation-redis-ttl-slide.test.js (Redis-only).
-    test('verify() does not let latest pointer drift behind record TTL (P1: gpt52 #1363)', async () => {
+    // Active record and latest pointer must remain aligned without wall-clock TTLs.
+    test('verify() keeps the durable latest pointer aligned with the active record', async () => {
       const { backend, cleanup } = await factory();
       try {
         await backend.create(fixture('drift-test', 'tok-drift'), 60_000);
-        // Wait then slide multiple times.
         await new Promise((r) => setTimeout(r, 50));
         await backend.verify('drift-test', 'tok-drift', 60_000);
         await new Promise((r) => setTimeout(r, 50));
         await backend.verify('drift-test', 'tok-drift', 60_000);
 
-        // After repeated slides, isLatest must still report the slot.
-        // (Real symptom kicks in after TTL drift > grace; covered by the PTTL
-        // assertion in the Redis-specific suite.)
         assert.equal(await backend.isLatest('drift-test'), true);
       } finally {
         await cleanup();

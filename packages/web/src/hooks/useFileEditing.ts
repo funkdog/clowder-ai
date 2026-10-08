@@ -8,6 +8,12 @@ interface FileForEdit {
   truncated?: boolean;
 }
 
+interface ScopedEditToken {
+  worktreeId: string;
+  token: string;
+  expiry: number;
+}
+
 export function useFileEditing(deps: {
   worktreeId: string | null;
   openFilePath: string | null;
@@ -15,16 +21,33 @@ export function useFileEditing(deps: {
   fetchFile: (path: string) => Promise<void>;
 }) {
   const { worktreeId, openFilePath, file, fetchFile } = deps;
-
-  const editToken = useChatStore((s) => s.workspaceEditToken);
-  const editTokenExpiry = useChatStore((s) => s.workspaceEditTokenExpiry);
-  const setEditToken = useChatStore((s) => s.setWorkspaceEditToken);
-
+  const ambientWorktreeId = useChatStore((state) => state.workspaceWorktreeId);
+  const ambientEditToken = useChatStore((state) => state.workspaceEditToken);
+  const ambientEditTokenExpiry = useChatStore((state) => state.workspaceEditTokenExpiry);
+  const setAmbientEditToken = useChatStore((state) => state.setWorkspaceEditToken);
+  const [ownerToken, setOwnerToken] = useState<ScopedEditToken | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
+  const usesAmbientOwner = worktreeId === ambientWorktreeId;
+  const scopedOwnerToken = ownerToken?.worktreeId === worktreeId ? ownerToken : null;
+  const editToken = usesAmbientOwner ? ambientEditToken : (scopedOwnerToken?.token ?? null);
+  const editTokenExpiry = usesAmbientOwner ? ambientEditTokenExpiry : (scopedOwnerToken?.expiry ?? null);
   const isTokenValid = !!(editToken && editTokenExpiry && editTokenExpiry > Date.now());
   const canEdit = !!(file && !file.binary && !file.truncated);
+
+  const setEditToken = useCallback(
+    (token: string | null, expiresIn?: number) => {
+      if (usesAmbientOwner) {
+        setAmbientEditToken(token, expiresIn);
+        return;
+      }
+      setOwnerToken(
+        token && expiresIn && worktreeId ? { worktreeId, token, expiry: Date.now() + expiresIn * 1000 } : null,
+      );
+    },
+    [setAmbientEditToken, usesAmbientOwner, worktreeId],
+  );
 
   const handleToggleEdit = useCallback(async () => {
     if (editMode && isTokenValid) {
@@ -53,10 +76,10 @@ export function useFileEditing(deps: {
       }
     }
     setEditMode(true);
-  }, [editMode, worktreeId, isTokenValid, setEditToken]);
+  }, [editMode, isTokenValid, setEditToken, worktreeId]);
 
   const handleSave = useCallback(
-    async (newContent: string) => {
+    async (newContent: string, options?: { baseSha256: string }) => {
       if (!worktreeId || !openFilePath || !file) return;
       if (!editToken) {
         setSaveError('编辑会话过期，请点击「编辑」按钮刷新权限后重试保存');
@@ -71,7 +94,7 @@ export function useFileEditing(deps: {
             worktreeId,
             path: openFilePath,
             content: newContent,
-            baseSha256: file.sha256,
+            baseSha256: options?.baseSha256 ?? file.sha256,
             editSessionToken: editToken,
           }),
         });
@@ -89,12 +112,22 @@ export function useFileEditing(deps: {
           setSaveError(data.error || '保存失败');
           return;
         }
-        if (openFilePath) await fetchFile(openFilePath);
+        const receipt = (await res.json()) as { path?: unknown; sha256?: unknown };
+        if (
+          receipt.path !== openFilePath ||
+          typeof receipt.sha256 !== 'string' ||
+          !/^[a-f0-9]{64}$/.test(receipt.sha256)
+        ) {
+          setSaveError('保存回执尚未核验，编辑草稿已保留。');
+          return;
+        }
+        await fetchFile(openFilePath);
+        return { path: receipt.path, sha256: receipt.sha256 };
       } catch {
         setSaveError('网络错误');
       }
     },
-    [worktreeId, openFilePath, file, editToken, setEditToken, fetchFile],
+    [editToken, fetchFile, file, openFilePath, setEditToken, worktreeId],
   );
 
   return {

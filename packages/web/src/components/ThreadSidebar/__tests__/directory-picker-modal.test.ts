@@ -148,13 +148,20 @@ describe('DirectoryPickerModal', () => {
     });
   }
 
+  function findProjectOption(text: string) {
+    const row = Array.from(container.querySelectorAll<HTMLElement>('[data-project-option]')).find((option) =>
+      option.textContent?.includes(text),
+    );
+    return row?.querySelector<HTMLButtonElement>('button[data-project-path]');
+  }
+
   // ── Quick pick selection (two-step: select then confirm) ──
 
   it('calls onSelect with cwd path when recommended quick pick is selected and confirmed', async () => {
     setupCwdSuccess();
     const fns = render();
     await flush();
-    const cwdBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('推荐'));
+    const cwdBtn = findProjectOption('推荐');
     expect(cwdBtn).toBeTruthy();
     act(() => {
       cwdBtn?.click();
@@ -169,7 +176,7 @@ describe('DirectoryPickerModal', () => {
     setupCwdSuccess();
     const fns = render({ existingProjects: [existingPath] });
     await flush();
-    const projectBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('other'));
+    const projectBtn = findProjectOption('other');
     expect(projectBtn).toBeTruthy();
     act(() => {
       projectBtn?.click();
@@ -291,6 +298,214 @@ describe('DirectoryPickerModal', () => {
     expect(fns.onSelect).not.toHaveBeenCalled();
   });
 
+  it('creates the thread with the currently browsed directory without requiring a separate directory confirm', async () => {
+    const projectsPath = `${CWD_PATH}/sandbox`;
+    const targetPath = `${projectsPath}/inner`;
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/projects/cwd') return jsonOk({ path: CWD_PATH });
+      if (path === '/api/backlog/items') return jsonOk({ items: [] });
+      if (path === `/api/projects/browse?path=${encodeURIComponent(CWD_PATH)}`) {
+        return jsonOk({
+          current: CWD_PATH,
+          name: 'cat-cafe',
+          parent: '/home/user/projects',
+          homePath: CWD_PATH,
+          entries: [{ name: 'sandbox', path: projectsPath, isDirectory: true }],
+        });
+      }
+      if (path === `/api/projects/browse?path=${encodeURIComponent(projectsPath)}`) {
+        return jsonOk({
+          current: projectsPath,
+          name: 'sandbox',
+          parent: CWD_PATH,
+          homePath: CWD_PATH,
+          entries: [{ name: 'inner', path: targetPath, isDirectory: true }],
+        });
+      }
+      if (path === `/api/projects/browse?path=${encodeURIComponent(targetPath)}`) {
+        return jsonOk({
+          current: targetPath,
+          name: 'inner',
+          parent: projectsPath,
+          homePath: CWD_PATH,
+          entries: [],
+        });
+      }
+      return jsonFail();
+    });
+    const fns = render();
+    await flush();
+    const browseBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('浏览文件夹'),
+    );
+    if (!browseBtn) throw new Error('browse button not found');
+
+    await act(async () => {
+      browseBtn.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(container.textContent).not.toContain('选择此目录');
+
+    const projectsBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('sandbox'),
+    );
+    if (!projectsBtn) throw new Error('sandbox directory button not found');
+    await act(async () => {
+      projectsBtn.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    const innerBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('inner'));
+    if (!innerBtn) throw new Error('inner directory button not found');
+    await act(async () => {
+      innerBtn.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    clickConfirm();
+    expect(fns.onSelect).toHaveBeenCalledWith(expect.objectContaining({ projectPath: targetPath }));
+    expect(
+      mockApiFetch.mock.calls.filter(
+        ([path]) => path === `/api/projects/browse?path=${encodeURIComponent(projectsPath)}`,
+      ),
+    ).toHaveLength(1);
+    expect(
+      mockApiFetch.mock.calls.filter(
+        ([path]) => path === `/api/projects/browse?path=${encodeURIComponent(targetPath)}`,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it('clears the selected directory while browsing the virtual 此电脑 root', async () => {
+    const winCwd = 'D:\\Projects';
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/projects/cwd') return jsonOk({ path: winCwd });
+      if (path === '/api/backlog/items') return jsonOk({ items: [] });
+      if (path === `/api/projects/browse?path=${encodeURIComponent(winCwd)}`) {
+        return jsonOk({
+          current: winCwd,
+          name: 'Projects',
+          parent: 'D:\\',
+          homePath: 'C:\\Users\\test',
+          isWindows: true,
+          entries: [],
+        });
+      }
+      if (path === '/api/projects/drives') {
+        return jsonOk({
+          drives: [
+            { letter: 'C', path: 'C:\\', label: '本地磁盘 (C:)' },
+            { letter: 'D', path: 'D:\\', label: '本地磁盘 (D:)' },
+          ],
+          isWindows: true,
+        });
+      }
+      return jsonFail();
+    });
+
+    render();
+    await flush();
+
+    const browseBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('浏览文件夹'),
+    );
+    expect(browseBtn).toBeTruthy();
+    await act(async () => {
+      browseBtn!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush();
+
+    await act(async () => {
+      const thisPc = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('此电脑'));
+      expect(thisPc).toBeTruthy();
+      thisPc!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush();
+
+    expect(container.textContent).not.toContain('已选：');
+    const confirmBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('创建对话'),
+    ) as HTMLButtonElement;
+    expect(confirmBtn).toBeTruthy();
+    expect(confirmBtn.disabled).toBe(true);
+  });
+
+  it('does not let a late cwd response reselect a directory while browsing virtual 此电脑 root', async () => {
+    const winCwd = 'D:\\Projects';
+    let resolveCwd: (value: unknown) => void = () => {};
+    const cwdResponse = new Promise((resolve) => {
+      resolveCwd = resolve;
+    });
+
+    mockApiFetch.mockImplementation((path: string) => {
+      if (path === '/api/projects/cwd') return cwdResponse;
+      if (path === '/api/backlog/items') return jsonOk({ items: [] });
+      if (path === '/api/projects/browse') {
+        return jsonOk({
+          current: winCwd,
+          name: 'Projects',
+          parent: 'D:\\',
+          homePath: 'C:\\Users\\test',
+          isWindows: true,
+          entries: [],
+        });
+      }
+      if (path === '/api/projects/drives') {
+        return jsonOk({
+          drives: [
+            { letter: 'C', path: 'C:\\', label: '本地磁盘 (C:)' },
+            { letter: 'D', path: 'D:\\', label: '本地磁盘 (D:)' },
+          ],
+          isWindows: true,
+        });
+      }
+      return jsonFail();
+    });
+
+    render();
+    await flush();
+
+    const browseBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('浏览文件夹'),
+    );
+    expect(browseBtn).toBeTruthy();
+    await act(async () => {
+      browseBtn!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush();
+
+    await act(async () => {
+      const thisPc = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('此电脑'));
+      expect(thisPc).toBeTruthy();
+      thisPc!.click();
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush();
+
+    let confirmBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('创建对话'),
+    ) as HTMLButtonElement;
+    expect(confirmBtn).toBeTruthy();
+    expect(confirmBtn.disabled).toBe(true);
+    expect(container.textContent).not.toContain('已选：');
+
+    await act(async () => {
+      resolveCwd(await jsonOk({ path: winCwd }));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    await flush();
+
+    confirmBtn = Array.from(container.querySelectorAll('button')).find((b) =>
+      b.textContent?.includes('创建对话'),
+    ) as HTMLButtonElement;
+    expect(confirmBtn).toBeTruthy();
+    expect(confirmBtn.disabled).toBe(true);
+    expect(container.textContent).not.toContain('已选：');
+  });
+
   // ── F068: Path input ──────────────────────────────────────
 
   it('shows path input field with placeholder', async () => {
@@ -329,6 +544,13 @@ describe('DirectoryPickerModal', () => {
       await new Promise((r) => setTimeout(r, 0));
     });
     expect(fns.onSelect).not.toHaveBeenCalled(); // not yet
+    const selectedOption = Array.from(container.querySelectorAll<HTMLElement>('[data-project-option]')).find((option) =>
+      option.textContent?.includes(canonicalPath),
+    );
+    expect(selectedOption).toBeTruthy();
+    expect(
+      Array.from(selectedOption?.querySelectorAll('span') ?? []).some((span) => span.textContent?.trim() === '已选'),
+    ).toBe(false);
     clickConfirm();
     expect(fns.onSelect).toHaveBeenCalledWith(expect.objectContaining({ projectPath: canonicalPath }));
   });
@@ -387,7 +609,7 @@ describe('DirectoryPickerModal', () => {
     act(() => {
       catChip?.click();
     });
-    const cwdBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('推荐'));
+    const cwdBtn = findProjectOption('推荐');
     act(() => {
       cwdBtn?.click();
     });
@@ -434,7 +656,7 @@ describe('DirectoryPickerModal', () => {
       titleInput.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await flush();
-    const cwdBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('推荐'));
+    const cwdBtn = findProjectOption('推荐');
     act(() => {
       cwdBtn?.click();
     });
@@ -451,7 +673,7 @@ describe('DirectoryPickerModal', () => {
       checkbox.click();
     });
     await flush();
-    const cwdBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('推荐'));
+    const cwdBtn = findProjectOption('推荐');
     act(() => {
       cwdBtn?.click();
     });
@@ -480,7 +702,7 @@ describe('DirectoryPickerModal', () => {
       select.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await flush();
-    const cwdBtn = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('推荐'));
+    const cwdBtn = findProjectOption('推荐');
     act(() => {
       cwdBtn?.click();
     });

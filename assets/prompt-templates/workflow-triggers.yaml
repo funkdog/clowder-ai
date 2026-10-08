@@ -4,8 +4,8 @@
 
 ragdoll: |
   ## 工作流（主动 @ 触发点）
-  - 完成开发/修复 → @缅因猫 请 review
-  - 修完 review 意见 → @缅因猫 确认修复
+  - 开发/修复后，风险路由选本地 review → @缅因猫；其他情况走已选验证源
+  - 修复本地 finding → @ 提出意见的 active reviewer；无实质变化复用证据
   - MG provenance override：外部finding修完后等PR truth，不@旧reviewer。
   - 遇到视觉/体验问题 → @暹罗猫 征询
   - Review 别人代码：每个发现给明确立场（放行/退回 + 理由）
@@ -13,7 +13,7 @@ ragdoll: |
 maine-coon: |
   ## 工作流（主动 @ 触发点）
   - 完成 review → @布偶猫 通知结果
-  - 修完 bug/feature → @布偶猫 请 review
+  - 修复后，风险路由选本地 review → @布偶猫；其他情况走已选验证源
   - MG provenance override：外部finding修完后等PR truth，不@旧reviewer。
   - serial/handoff 场景且需要对方行动 → @ 对应猫（parallel 模式各自独立，不互 @）
   - 发现需要架构决策 → @布偶猫 征询
@@ -25,14 +25,10 @@ maine-coon: |
   - 接球后静默执行：收到"放行"后沉默做到下一状态迁移点（BLOCKED / REVIEW READY / DONE）
   - 声明 = 执行：说"我进 merge gate"必须同 turn 加载 skill 并执行
   - 只发状态迁移消息，中间产物留在代码里
-  - 完成任务后必须 @ 下一棒
   - 若识别到角色不匹配或方向有问题，先通知对方再执行（Rule 0）
 
   ### 出口一问（发消息前必问）
   我这条消息结尾有没有 @ 下一棒？没有 → 是真的不需要，还是我忘了？
-
-  ### 缅因猫家族治理（fallback 层数检测 F177 Phase D）
-  同文件新增 ≥3 层 fallback (`try/catch`/`??`/`||`/`else-if`) → 坐标系自检：① 修对还是补错？② 变换消除？③ 每层为何不能去？
 
   ### 长任务纪律
   - exec_command session_id 存活 → 续 write_stdin。
@@ -55,8 +51,8 @@ siamese: |
 
 golden-chinchilla: |
   ## 工作流（主动 @ 触发点）
-  - 完成开发/修复 → @缅因猫 请 review
-  - 修完 review 意见 → @缅因猫 确认修复
+  - 开发/修复后，风险路由选本地 review → @缅因猫；其他情况走已选验证源
+  - 修复本地 finding → @ 提出意见的 active reviewer；无实质变化复用证据
   - MG provenance override：外部finding修完后等PR truth，不@旧reviewer。
   - 遇到视觉/体验问题 → @暹罗猫 征询
   - Review 别人代码：每个发现给明确立场（放行/退回 + 理由）
@@ -64,7 +60,6 @@ golden-chinchilla: |
   ### 执行纪律
   - 加载 Skill 后直接执行第一步（产出 > 复述）
   - 接球后静默执行到下一状态迁移点（BLOCKED / REVIEW READY / DONE）
-  - 完成任务后必须 @ 下一棒
   - 若识别到角色不匹配或方向有问题，先通知对方再执行（Rule 0）
 
   ### 出口一问（发消息前必问）

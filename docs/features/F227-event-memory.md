@@ -1,9 +1,10 @@
 ---
 feature_ids: [F227]
-related_features: [F114, F102, F192, F095, F057, F187, F225]
+related_features: [F114, F102, F192, F095, F057, F187, F225, F287, F296, F312]
 topics: [memory, observability, harness, magic-words, navigation, cognitive-state]
 doc_kind: spec
 created: 2026-06-06
+tips_exempt: "Renewed 2026-09-27 for F324 Phase A: Event list bounds and exact event continuation repair existing cat-side reads; they add no user-invokable action or new Hub discovery surface."
 ---
 
 # F227: Event Memory — 事件级记忆索引（拉闸记录）
@@ -23,6 +24,24 @@ created: 2026-06-06
 
 operator experience场景（2026-06-06，PPT 演示编排讨论）：想在台上说"我说过脚手架"然后**瞬间跳转到那个 thread 那条 message**——正是这个动作暴露了记忆系统的真空层。
 
+## User Journey
+
+**Scope unit**: one owner-scoped cognitive-transition Event linked to one source message coordinate.
+
+**Actor**: operator查看/纠正事件轨迹；猫在严格认证的当前 thread 中按需使用近期 Event 建立连续性。
+
+**Flow**:
+
+1. owner message 中的确定性 Magic Word，或猫主动声明的事件，经 lane-owned capture 写入
+   `EventMemoryStore`，保留 owner/thread/message/time/revision；
+2. operator在 Event timeline filter、查看摘要并 teleport 回原消息；source 不可见时不得展示正文；
+3. 后续当前 thread 的严格 owner invocation 只在十五分钟内为最新 high-confidence Event 产生 bounded cue；
+4. 猫 drill 后可用它建立 chronology/continuity，并记录 `applied|dismissed`；
+5. revision/source visibility/scope/expiry 改变时旧 projection fail closed。
+
+**User-perceivable outcome**: operator能从“我在哪拉过闸”回到精确现场；猫在事件仍新鲜且同一 subject
+scope 时自然承接上下文，不靠全量历史注入，也不把事件变成新的 Profile/事实 authority。
+
 ## Current State / 现状基线
 
 | 维度 | 当前真实状态（实测） |
@@ -33,7 +52,38 @@ operator experience场景（2026-06-06，PPT 演示编排讨论）：想在台�
 | 认知轨迹回溯 | 当事猫无法回溯自己的认知轨迹。F225 活案例：起源靠operator人肉记忆"那只猫是 48" |
 | 趋势/闭环度量 | 无。"拉了几次闸""骂完长出什么能力"无任何索引或度量 |
 
+### F312 Phase C recall extension（2026-09-02）
+
+Architecture cell: memory
+
+F312 不改变 Event authority：`EventMemoryStore` 仍是 owner-scoped 事件真相源，消息坐标仍是 source
+visibility 的唯一依据。Phase C 只在现有 F287 Cue Plane 上增加只读 adapter：
+
+- `recent_event_available / event_memory` 只选择 exact owner + current subject thread 内，十五分钟窗口中
+  最新的一条 `high` confidence Event；无匹配时为零，不加分类器或中央 relevance engine；
+- cue 只携带 `eventId / subjectThreadId / sourceRevision`，drill 才返回 bounded Event record，不复制 source
+  message 正文；
+- existing content-free `MemoryCueEpisodeStore` 记录 presented/drilled/applied/dismissed；同一 revision 的
+  terminal receipt 阻止重复呈现；
+- revision 改变、source message 删除/不可见、owner/thread scope 改变、十五分钟窗口结束与 opaque handle
+  到期都会 fail closed。`applied` 只表示该 Event 为当前 response 建立了实际使用的 chronology/continuity，
+  不声称单条记忆造成任务效用提升。
+
+Main/fixture 证据由 `f312-event-cue.test.js`、`f312-invocation-cue-wiring.test.js` 和 schema V41 migration
+覆盖。merged-main Alpha `c72b89139c` 的真实 invocation `5a54ab2f-dc56-402c-a607-d76f0f3cc26e`
+已补齐运行证据：Event cue `cue_4156e2b7660e26b6b5f6771417711834` 被正式 admitted，并在同一
+invocation 写入 `presented / drilled / applied`；回答只用 bounded Event record 解释当前 thread 的
+`human_brake/user_brake`。owner 软删除 synthetic source 后，同一 handle 复钻 `404 not_available`，
+append-only ledger 追加 `invalidation_reason=source_forgotten`。这证明 runtime receipt 与 source invalidation，
+不把单条 Event 夸成 utility causality。
+
 ## What
+
+### 2026-09-27 读侧页界（F324 Phase A）
+
+`EventMemoryStore.listEvents` 省略 limit 时默认读取 50 条，显式读取最大 201 条（供 API 的 200 条窗口加一条 lookahead）；`GET /api/memory/events` 对完整 JSON 页执行 24,000 字符预算，返回 `meta.hasMore/nextOffset`，保持 owner scope 与 newest-first 排序。超大单条保留 Event 坐标和摘要预览，`GET /api/memory/events/:eventId?charOffset=N` 在相同 owner 授权下精确续读原记录；现有 `cat_cafe_list_events` 同名工具以互斥的 `eventId + charOffset` detail mode 暴露这条续读链，agent-key 调用者不必手写内部 HTTP。Web timeline 消费 server `hasMore`，短预算页仍显示“加载更多”。250 条合成事件的默认读不再全量涌出；cue source 的显式 limit 不变。原 Event 和 message 坐标仍由本 store 与 source message 持有，没有新账本。回归：`event-memory-store.test.js`、`events-route.test.js`、`event-memory-tools.test.js`、`event-timeline-data.test.ts` 的 F324 分页/续读用例。
+
+Architecture cell: `memory`; Map delta: none. Why: 原 EventMemoryStore 仍是唯一数据 owner，route、MCP 和 Web 只消费其有界读取。Canonical source: `packages/api/src/domains/memory/EventMemoryStore.ts#listEvents`。Consumer evidence: `rg -n "listEvents\\(|/api/memory/events|loadEventsPage|handleListEvents" packages/api/src packages/mcp-server/src packages/web/src`。Claim guard: “owner 隔离 + 有界页 + MCP 可达的精确续读” → `events-route.test.js` 的 F324 大页/foreign-owner 用例、`event-memory-tools.test.js` 的原文哈希/404 用例与 `event-timeline-data.test.ts` 的短页用例 → RED 于全量返回、误判 terminal、MCP 不可达，GREEN 于预算/nextOffset/原文等价/404。
 
 > **5 条设计原则（贯穿全 Phase，KD 钉死）**：
 > 1. 内核是 Event Memory（事件级记忆索引），不是 Magic Word 面板——Magic Word 只是第一条 lane

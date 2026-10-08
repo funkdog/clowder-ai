@@ -15,10 +15,15 @@
     "electron": "35.7.5",
     "electron-builder": "26.8.1"
   },
+  "overrides": {
+    "extract-zip": {
+      "yauzl": "3.4.0"
+    }
+  },
   "build": {
-    "appId": "ai.catcafe.desktop",
+    "appId": "ai.clowderai.desktop",
     "productName": "Clowder AI",
-    "artifactName": "CatCafe-${version}-${arch}.${ext}",
+    "artifactName": "ClowderAI-${version}-${arch}.${ext}",
     "win": {
       "target": "dir",
       "icon": "assets/icon.ico"
@@ -53,12 +58,27 @@
       "writeUpdateInfo": false
     },
     "files": [
+      "app-identity.js",
+      "desktop-update-menu.js",
+      "desktop-update-runtime.js",
       "main.js",
+      "mac-install-location.js",
       "preload.js",
       "project-root.js",
+      "renderer-link-policy.js",
       "service-manager.js",
+      "update-checker.js",
+      "update-downloader.js",
+      "update-installer.js",
+      "update-install-flow.js",
+      "update-manager.js",
+      "update-network-diagnostics.js",
+      "update-prompt-controller.js",
       "splash.html",
-      "assets/**/*"
+      "assets/**/*",
+      "plugin-window/**/*",
+      "!plugin-window/**/*.test.*",
+      "!plugin-window/**/*-fixture.cjs"
     ],
     "extraResources": [
       {
@@ -94,6 +114,10 @@
         "to": ".claude/hooks/user-level"
       },
       {
+        "from": "../.claude/hooks/f24-compaction.mjs",
+        "to": ".claude/hooks/f24-compaction.mjs"
+      },
+      {
         "from": "./scripts/sync-agent-hooks-offline.mjs",
         "to": "scripts/sync-agent-hooks-offline.mjs"
       },
@@ -120,7 +144,7 @@
         "to": "assets"
       },
       {
-        "from": "../plugins",
+        "from": "../packages/api/src/plugins",
         "to": "plugins"
       }
     ],

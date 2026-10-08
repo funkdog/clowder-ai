@@ -55,7 +55,7 @@ pnpm -r --if-present run build         # 成功
 
 ---
 
-**本地 Review**: [x] {reviewer 纯文本句柄，如 gpt52} 已 review 并放行
+**本地 Review**: [x] {reviewer 的 catId，纯文本不带 @} 已 review 并放行
 **云端 Review**: [ ] PR 创建后在 **comment** 中触发（见下方模板）
 
 <!-- 猫猫签名（纯文本，禁止 @）: 例如 Maine Coon/Maine Coon (codex) -->
@@ -100,7 +100,7 @@ fi
 
 ### 触发后执行策略（必须遵守）
 
-1. 进入**等待通知**模式，优先等 Cat Café 的 `GitHub Review 通知`
+1. 进入**等待通知**模式，优先等 Clowder AI 的 `GitHub Review 通知`
 2. 不要高频轮询，不要”看起来没回就再发一次”
 3. 10 分钟无通知，只允许一次人工检查：
 

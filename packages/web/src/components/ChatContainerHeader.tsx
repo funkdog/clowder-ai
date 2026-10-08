@@ -1,51 +1,99 @@
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
-import { useChatStore } from '@/stores/chatStore';
+import { useEffect, useState } from 'react';
 import { apiFetch } from '@/utils/api-client';
-import { ChatVoiceFeatureControls } from './ChatVoiceFeatureControls';
-import { ExportButton } from './ExportButton';
+import { AppTooltip } from './AppTooltip';
+import { ThreadTitleResetMenu } from './execution-row/ThreadTitleResetMenu';
 import { CatCafeLogo } from './icons/CatCafeLogo';
+import { ThreadTasksButton, ThreadWorksButton } from './shell/HeaderCounts';
+import { HeaderParticipants } from './shell/HeaderParticipants';
+import { ShellGlyph } from './shell/ShellIcons';
+import { useShellPresentation } from './shell/shell-presentation';
 import { ThreadCatPill } from './ThreadCatPill';
+import { ThreadIndicator } from './ThreadIndicator';
 
 interface ChatContainerHeaderProps {
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   threadId: string;
-  authPendingCount: number;
   viewMode: 'single' | 'split';
   onToggleViewMode: () => void;
-  onOpenMobileStatus: () => void;
   statusPanelOpen: boolean;
   onToggleStatusPanel: () => void;
-  /** F092: Default cat for voice companion */
-  defaultCatId: string;
+  hasWorkspaceActivity?: boolean;
 }
 
 export function ChatContainerHeader({
   sidebarOpen,
   onToggleSidebar,
   threadId,
-  authPendingCount,
   // F099/OQ-4: viewMode toggle hidden — candidate for removal (KD-7)
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   viewMode: _viewMode,
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onToggleViewMode: _onToggleViewMode,
-  onOpenMobileStatus,
   statusPanelOpen,
   onToggleStatusPanel,
-  defaultCatId,
+  hasWorkspaceActivity = false,
 }: ChatContainerHeaderProps) {
+  const isV2 = useShellPresentation() === 'v2';
+  if (isV2) {
+    return (
+      <header
+        className="safe-area-top"
+        style={{ background: 'var(--shell-work)', borderBottom: '1px solid var(--shell-hairline)' }}
+        data-shell-header="v2"
+      >
+        <div className="flex h-[52px] items-center gap-1.5 pl-6 pr-3.5">
+          {/* The sidebar has its own collapse control; this one only brings a collapsed sidebar back. */}
+          {!sidebarOpen && (
+            <AppTooltip label="展开侧栏" side="bottom">
+              <button
+                type="button"
+                onClick={onToggleSidebar}
+                aria-label="展开侧栏"
+                data-testid="header-sidebar-expand"
+                className="shell-rail-item shell-focusable -ml-2 mr-1 flex h-[30px] w-[30px] flex-none items-center justify-center rounded-lg"
+                style={{ color: 'var(--shell-muted)' }}
+              >
+                <ShellGlyph name="panelLeft" />
+              </button>
+            </AppTooltip>
+          )}
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <ThreadIndicator threadId={threadId} />
+            {/* F322 original-B (new shell only): the title's ⌄ menu holds the normal force-reset; it appears only while something runs. Keyed by thread so a question opened for one thread cannot be confirmed against the next. */}
+            <ThreadTitleResetMenu key={threadId} threadId={threadId} />
+            {/* F198 Phase C AC-C5: Daemon active indicator */}
+            <DaemonActiveIndicator threadId={threadId} />
+            {/* F154 Phase B: Preferred cat pill — desktop only (KD-10) */}
+            <div className="hidden flex-shrink-0 lg:block">
+              <ThreadCatPill threadId={threadId} />
+            </div>
+          </div>
+          <HeaderParticipants threadId={threadId} />
+          <ThreadWorksButton />
+          <ThreadTasksButton />
+          <PanelToggle
+            onToggleStatusPanel={onToggleStatusPanel}
+            statusPanelOpen={statusPanelOpen}
+            hasWorkspaceActivity={hasWorkspaceActivity}
+            tooltip
+          />
+        </div>
+      </header>
+    );
+  }
   return (
     <header className="safe-area-top">
       <div className="px-5 py-3 flex items-center gap-2">
         <button
+          type="button"
           onClick={onToggleSidebar}
           className="p-1 rounded-lg hover:bg-[var(--console-hover-bg)] transition-colors mr-1"
           title={sidebarOpen ? '收起侧栏' : '展开侧栏'}
           aria-label={sidebarOpen ? 'Hide sidebar' : 'Show sidebar'}
         >
-          <svg className="w-5 h-5 text-cafe-secondary" viewBox="0 0 20 20" fill="currentColor">
+          <svg aria-hidden="true" className="w-5 h-5 text-cafe-secondary" viewBox="0 0 20 20" fill="currentColor">
             <path
               fillRule="evenodd"
               d="M3 5a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 10a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM3 15a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1z"
@@ -66,34 +114,12 @@ export function ChatContainerHeader({
             </div>
           </div>
         </div>
-        <ExportButton threadId={threadId} />
-        <ChatVoiceFeatureControls threadId={threadId} defaultCatId={defaultCatId} />
-        {authPendingCount > 0 && (
-          <span
-            className="inline-flex items-center justify-center h-5 min-w-[20px] px-1 rounded-full bg-conn-amber-bg text-conn-amber-text text-micro font-bold animate-pulse-subtle"
-            title={`${authPendingCount} 个授权请求等待处理`}
-          >
-            🔐 {authPendingCount}
-          </span>
-        )}
-        {/* Mobile/tablet: status sheet trigger */}
-        <button
-          onClick={onOpenMobileStatus}
-          className="p-1 rounded-lg hover:bg-[var(--console-hover-bg)] transition-colors ml-1 lg:hidden"
-          title="打开状态面板"
-          aria-label="打开状态面板"
-        >
-          <svg className="w-5 h-5 text-cafe-secondary" viewBox="0 0 20 20" fill="currentColor">
-            <path
-              fillRule="evenodd"
-              d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-              clipRule="evenodd"
-            />
-          </svg>
-        </button>
-        {/* F232 AC-A8: 单一 panel 开关（桌面 lg:block）；mode 切换从底部工具栏图标触发。
-            P2-2：右侧 panel desktop-only，小屏走 MobileStatusSheet。 */}
-        <PanelToggle onToggleStatusPanel={onToggleStatusPanel} statusPanelOpen={statusPanelOpen} />
+        {/* F284: one stable recall entry; activity stays a badge, not a second header capability. */}
+        <PanelToggle
+          onToggleStatusPanel={onToggleStatusPanel}
+          statusPanelOpen={statusPanelOpen}
+          hasWorkspaceActivity={hasWorkspaceActivity}
+        />
       </div>
     </header>
   );
@@ -144,129 +170,75 @@ function DaemonActiveIndicator({ threadId }: { threadId: string }) {
   );
 }
 
-/** Tail-preserving truncation for project chip labels.
- * The suffix usually carries the distinguishing worktree or nested directory name. */
-export function tailTruncate(name: string, maxLen = 24): string {
-  if (name.length <= maxLen) return name;
-  return `…${name.slice(-(maxLen - 1))}`;
-}
-
-const PROJECT_PATH_COPY_KEYS = new Set(['Enter', ' ']);
-
-/** Thread indicator: shows which thread you're currently chatting in */
-export function ThreadIndicator({ threadId }: { threadId: string }) {
-  const threads = useChatStore((s) => s.threads);
-  const currentThread = threads.find((t) => t.id === threadId);
-  const [copied, setCopied] = useState(false);
-  const copyResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const title = currentThread?.title ?? '未命名对话';
-  const rawPath = currentThread?.projectPath ?? '';
-
-  useEffect(() => {
-    if (copyResetTimerRef.current) {
-      clearTimeout(copyResetTimerRef.current);
-      copyResetTimerRef.current = null;
-    }
-    setCopied(false);
-  }, [threadId, rawPath]);
-
-  useEffect(() => {
-    return () => {
-      if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
-    };
-  }, []);
-
-  if (threadId === 'default') {
-    return <p className="text-xs text-cafe-secondary">大厅 · Your AI team collaboration space</p>;
-  }
-
-  // 'default' is a sentinel for threads without a real projectPath — match exact value, not basename
-  const rawBasename = rawPath === 'default' ? '' : (rawPath.split(/[/\\]/).pop() ?? '');
-  // Map known internal repo basenames to brand name; preserve real project paths for multi-workspace
-  const INTERNAL_BASENAMES = ['cat-cafe', 'cat-cafe-runtime', 'clowder-ai'];
-  const brandName = process.env.NEXT_PUBLIC_BRAND_NAME ?? '';
-  const projectName = INTERNAL_BASENAMES.includes(rawBasename) && brandName ? brandName : rawBasename;
-  const displayName = tailTruncate(projectName);
-  const copyPath = rawPath === 'default' ? '' : rawPath;
-  const projectChipLabel = copied ? 'copied!' : displayName;
-
-  const handleCopyPath = () => {
-    if (!copyPath) return;
-    const cb = typeof navigator !== 'undefined' && navigator.clipboard ? navigator.clipboard : null;
-    if (!cb) return;
-    if (typeof cb.writeText !== 'function') return;
-    void Promise.resolve()
-      .then(() => cb.writeText(copyPath))
-      .then(
-        () => {
-          if (copyResetTimerRef.current) clearTimeout(copyResetTimerRef.current);
-          setCopied(true);
-          copyResetTimerRef.current = setTimeout(() => {
-            setCopied(false);
-            copyResetTimerRef.current = null;
-          }, 1200);
-        },
-        () => {},
-      );
-  };
-
-  return (
-    <div className="flex min-w-0 items-baseline text-xs text-cafe-secondary">
-      <span className="truncate min-w-0 font-medium text-cafe-secondary" title={title}>
-        {title}
-      </span>
-      {projectName && (
-        <span
-          className="flex-shrink-0 max-w-[40%] sm:max-w-[200px] overflow-hidden whitespace-nowrap text-cafe-muted cursor-pointer hover:text-cafe-secondary transition-colors"
-          title={copied ? '已复制!' : `点击复制: ${copyPath}`}
-          aria-label={copied ? '已复制项目路径' : `点击复制项目路径: ${copyPath}`}
-          onClick={handleCopyPath}
-          onKeyDown={(e) => {
-            if (PROJECT_PATH_COPY_KEYS.has(e.key)) {
-              e.preventDefault();
-              handleCopyPath();
-            }
-          }}
-          role="button"
-          tabIndex={0}
-        >
-          {' '}
-          · {projectChipLabel}
-        </span>
-      )}
-    </div>
-  );
-}
+// Brand Guard: INTERNAL_BASENAMES ('cat-cafe', 'cat-cafe-runtime') now live in ThreadIndicator.tsx.
+// Re-export for existing tests and consumers that import from the header module.
+export { ThreadIndicator, tailTruncate } from './ThreadIndicator';
 
 /**
- * F232 AC-A8: 单一 panel 开关。原 F099 RightPanelToggle + F232 ArtifactsToggle
- * 收敛成一个 toggle——mode 切换从底部工具栏图标触发。桌面 lg:block，小屏走 MobileStatusSheet。
+ * F284 stable Workspace entry. The Launcher owns capability discovery; this
+ * borderless control only recalls the contextual work surface.
  */
-function PanelToggle({
+export function PanelToggle({
   onToggleStatusPanel,
   statusPanelOpen,
+  hasWorkspaceActivity = false,
+  tooltip = false,
 }: {
   onToggleStatusPanel: () => void;
   statusPanelOpen: boolean;
+  hasWorkspaceActivity?: boolean;
+  /** F322 v2: name comes from AppTooltip (150ms, focus, Escape) instead of the native `title` (~1s). */
+  tooltip?: boolean;
 }) {
-  return (
+  // The button is server-rendered before React owns its click handler. Browser
+  // journeys wait on this marker rather than racing cold client hydration.
+  const [clientInteractive, setClientInteractive] = useState(false);
+  useEffect(() => {
+    setClientInteractive(true);
+  }, []);
+
+  const label = statusPanelOpen ? '收起 Workspace' : '打开 Workspace';
+  const button = (
     <button
       type="button"
       onClick={onToggleStatusPanel}
-      className={`p-1 rounded-lg transition-colors ml-1 hidden lg:block ${
-        statusPanelOpen ? 'text-cafe-accent' : 'text-cafe-secondary hover:text-cafe-accent'
+      className={`relative z-40 ml-1 inline-flex h-8 w-8 items-center justify-center rounded-full bg-transparent transition-colors ${
+        statusPanelOpen
+          ? 'text-cafe-accent'
+          : 'text-cafe-secondary hover:bg-[var(--console-hover-bg)] hover:text-cafe-accent'
       }`}
-      aria-label={statusPanelOpen ? '收起面板' : '打开面板'}
-      title={statusPanelOpen ? '收起面板' : '打开面板'}
+      aria-label={label}
+      title={tooltip ? undefined : label}
+      data-client-interactive={clientInteractive ? 'true' : 'false'}
+      data-testid="workspace-panel-toggle"
     >
-      <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-        <path
-          fillRule="evenodd"
-          d="M3 4a1 1 0 011-1h12a1 1 0 011 1v12a1 1 0 01-1 1H4a1 1 0 01-1-1V4zm2 0v12h10V4H5z"
-          clipRule="evenodd"
-        />
-        {statusPanelOpen && <rect x="12" y="4" width="4" height="12" rx="0.5" opacity="0.3" />}
+      <svg
+        aria-hidden="true"
+        className="h-4 w-4"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <path d="M4 2.5h8a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5H4A1.5 1.5 0 0 1 2.5 12V4A1.5 1.5 0 0 1 4 2.5Z" />
+        <path d="M10.5 2.5v11M7.5 6 5.5 8l2 2" />
       </svg>
+      {hasWorkspaceActivity && (
+        <span
+          className="absolute right-1 top-1 h-2 w-2 rounded-full border-2 border-[var(--console-card-bg)] bg-[var(--semantic-success)]"
+          aria-hidden="true"
+          data-testid="workspace-activity-badge"
+        />
+      )}
     </button>
+  );
+  return tooltip ? (
+    <AppTooltip label={label} side="bottom">
+      {button}
+    </AppTooltip>
+  ) : (
+    button
   );
 }

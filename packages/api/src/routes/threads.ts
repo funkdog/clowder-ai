@@ -11,15 +11,22 @@ import type { CatId } from '@cat-cafe/shared';
 import { catIdSchema } from '@cat-cafe/shared';
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
+import type { InvocationQueue } from '../domains/cats/services/agents/invocation/InvocationQueue.js';
 import type { InvocationTracker } from '../domains/cats/services/agents/invocation/InvocationTracker.js';
+import type { QueueProcessor } from '../domains/cats/services/agents/invocation/QueueProcessor.js';
 import type { TaskProgressStore } from '../domains/cats/services/agents/invocation/TaskProgressStore.js';
 import {
   aggregateThreadArtifacts,
   collectAllThreadMessages,
 } from '../domains/cats/services/agents/routing/thread-artifacts-aggregator.js';
 import { resolveBootcampWorkspaceRoot } from '../domains/cats/services/bootcamp/workspace-root.js';
+import { recordFreshnessClosureTransition } from '../domains/cats/services/freshness/closure/freshness-closure-telemetry.js';
+import { projectFreshnessClosure } from '../domains/cats/services/freshness/glass-box/FreshnessOutputCommitCoordinator.js';
+import { projectFreshnessSupplementForHistory } from '../domains/cats/services/freshness/glass-box/freshness-supplement-history-projection.js';
 import { AuditEventTypes, getEventAuditLog } from '../domains/cats/services/orchestration/EventAuditLog.js';
 import type { TranscriptWriter } from '../domains/cats/services/session/TranscriptWriter.js';
+import { compareCursors, parseCursor } from '../domains/cats/services/stores/cursor.js';
+import { gateForDurableSlot } from '../domains/cats/services/stores/cursor-activation.js';
 import type { IBacklogStore } from '../domains/cats/services/stores/ports/BacklogStore.js';
 import type { DeliveryCursorStore } from '../domains/cats/services/stores/ports/DeliveryCursorStore.js';
 import type { IDraftStore } from '../domains/cats/services/stores/ports/DraftStore.js';
@@ -27,7 +34,11 @@ import type { IMemoryStore } from '../domains/cats/services/stores/ports/MemoryS
 import type { IMessageStore } from '../domains/cats/services/stores/ports/MessageStore.js';
 import type { ISessionChainStore } from '../domains/cats/services/stores/ports/SessionChainStore.js';
 import type { ITaskStore } from '../domains/cats/services/stores/ports/TaskStore.js';
-import type { IThreadReadStateStore } from '../domains/cats/services/stores/ports/ThreadReadStateStore.js';
+import type {
+  IThreadReadStateStore,
+  ThreadReadCoordinate,
+  ThreadReadState,
+} from '../domains/cats/services/stores/ports/ThreadReadStateStore.js';
 import type {
   BootcampStateV1,
   ILabelStore,
@@ -35,13 +46,324 @@ import type {
   Thread,
   ThreadRoutingPolicyV1,
 } from '../domains/cats/services/stores/ports/ThreadStore.js';
+import {
+  isDurableOwnerReadEvidence,
+  passesManagedHoldViewerBoundary,
+  SYSTEM_USER_IDS,
+} from '../domains/cats/services/stores/visibility.js';
+import { projectThreadRelations } from '../domains/thread-navigation/thread-relation-projection.js';
 import { createModuleLogger } from '../infrastructure/logger.js';
-import { validateProjectPath } from '../utils/project-path.js';
-import { resolveUserId } from '../utils/request-identity.js';
+import { visibilityCursorUnresolvedRepair } from '../infrastructure/telemetry/instruments.js';
+import type { SocketManager } from '../infrastructure/websocket/index.js';
+import { CHATGPT_CHAT_URL_REGEX } from '../utils/chatgpt-chat-url.js';
+import { migrateStoredProjectPath, resolvePersistentProjectPathDetailed } from '../utils/persistent-project-path.js';
+import { resolveStrictUserId, resolveUserId } from '../utils/request-identity.js';
 import { getMultiMentionOrchestrator } from './callback-multi-mention-routes.js';
+import {
+  composeSidebarPresence,
+  type SidebarPresence,
+  type SidebarPresenceSource,
+} from './sidebar-presence-projection.js';
+import { sendCanonicalSidebarSnapshot } from './sidebar-snapshot-http.js';
+import { createThreadProjectPathResolver, mapThreadList } from './thread-list-project-migration.js';
 
 const log = createModuleLogger('routes/threads');
 const WRITE_OPS = new Set(['edit', 'create', 'delete']);
+
+type StoredReadCoordinateAssessment =
+  | { kind: 'valid'; primary: NonNullable<ReturnType<typeof parseCursor>> }
+  | { kind: 'unresolved_legacy'; primary: NonNullable<ReturnType<typeof parseCursor>> }
+  | { kind: 'unresolved_canonical'; primary: NonNullable<ReturnType<typeof parseCursor>> }
+  | { kind: 'invalid' }
+  | { kind: 'blocked' };
+
+type StoredReadPreparation = 'ready' | 'corrected' | 'retry' | 'blocked';
+type ParsedReadPosition = {
+  token: string;
+  parsed: NonNullable<ReturnType<typeof parseCursor>>;
+};
+type ReadPositionAssessment =
+  | 'resolved_legacy'
+  | 'resolved_canonical'
+  | 'unresolved_legacy'
+  | 'unresolved_canonical'
+  | 'invalid'
+  | 'blocked';
+
+function readCoordinateOf(state: ThreadReadState): ThreadReadCoordinate {
+  return {
+    lastReadMessageId: state.lastReadMessageId,
+    ...(state.lastReadVisibilityCursor === undefined
+      ? {}
+      : { lastReadVisibilityCursor: state.lastReadVisibilityCursor }),
+  };
+}
+
+function parseStoredReadPositions(stored: ThreadReadState): ParsedReadPosition[] | null {
+  try {
+    const primary = parseCursor(stored.lastReadMessageId);
+    if (!primary) return null;
+    const positions: ParsedReadPosition[] = [{ token: stored.lastReadMessageId, parsed: primary }];
+    if (stored.lastReadVisibilityCursor === undefined) return positions;
+    const anchor = parseCursor(stored.lastReadVisibilityCursor);
+    if (!anchor || anchor.version !== 2) return null;
+    positions.push({ token: stored.lastReadVisibilityCursor, parsed: anchor });
+    return positions;
+  } catch {
+    return null;
+  }
+}
+
+async function assessReadPosition(
+  messageStore: IMessageStore,
+  userId: string,
+  threadId: string,
+  position: ParsedReadPosition,
+): Promise<ReadPositionAssessment> {
+  let message: Awaited<ReturnType<IMessageStore['getById']>>;
+  try {
+    message = await messageStore.getById(position.parsed.id);
+  } catch {
+    return 'blocked';
+  }
+  if (!message) return position.parsed.version === 2 ? 'unresolved_canonical' : 'unresolved_legacy';
+  if (
+    message.threadId !== threadId ||
+    !isDurableOwnerReadEvidence(message) ||
+    !passesManagedHoldViewerBoundary(message, userId)
+  ) {
+    return 'invalid';
+  }
+  if (position.parsed.version !== 2 || !messageStore.canonicalizeCursor) return 'resolved_legacy';
+  try {
+    const canonical = await messageStore.canonicalizeCursor(position.parsed.id, threadId);
+    return canonical === position.token ? 'resolved_canonical' : 'invalid';
+  } catch {
+    return 'blocked';
+  }
+}
+
+async function assessStoredReadCoordinate(
+  messageStore: IMessageStore,
+  userId: string,
+  threadId: string,
+  stored: ThreadReadState,
+): Promise<StoredReadCoordinateAssessment> {
+  const positions = parseStoredReadPositions(stored);
+  if (!positions?.[0]) return { kind: 'invalid' };
+  const assessments = await Promise.all(
+    positions.map((position) => assessReadPosition(messageStore, userId, threadId, position)),
+  );
+  if (assessments.includes('blocked')) return { kind: 'blocked' };
+  if (assessments.includes('invalid')) return { kind: 'invalid' };
+  if (assessments.includes('unresolved_canonical')) {
+    return { kind: 'unresolved_canonical', primary: positions[0].parsed };
+  }
+  if (assessments.includes('unresolved_legacy') && !assessments.includes('resolved_canonical')) {
+    return { kind: 'unresolved_legacy', primary: positions[0].parsed };
+  }
+  return { kind: 'valid', primary: positions[0].parsed };
+}
+
+async function correctInvalidReadCoordinate(
+  readStateStore: IThreadReadStateStore,
+  userId: string,
+  threadId: string,
+  stored: ThreadReadState,
+  incomingSlotCursor: string,
+  canonicalIncomingCursor: string,
+): Promise<StoredReadPreparation> {
+  const replaceCoordinate = readStateStore.replaceReadCoordinateIfEqual;
+  if (!replaceCoordinate) return 'blocked';
+  const corrected = await replaceCoordinate.call(readStateStore, userId, threadId, readCoordinateOf(stored), {
+    lastReadMessageId: incomingSlotCursor,
+    ...(canonicalIncomingCursor.startsWith('v2:') ? { lastReadVisibilityCursor: canonicalIncomingCursor } : {}),
+  });
+  return corrected ? 'corrected' : 'retry';
+}
+
+async function reconcileStoredReadPrimary(
+  readStateStore: IThreadReadStateStore,
+  messageStore: IMessageStore,
+  userId: string,
+  threadId: string,
+  stored: ThreadReadState,
+): Promise<StoredReadPreparation> {
+  if (!messageStore.canonicalizeCursor) return 'blocked';
+  let storedV2: string;
+  try {
+    storedV2 = await messageStore.canonicalizeCursor(stored.lastReadMessageId, threadId);
+  } catch {
+    return 'blocked';
+  }
+  if (storedV2 === stored.lastReadMessageId) return 'ready';
+
+  const replaceCoordinate = readStateStore.replaceReadCoordinateIfEqual;
+  if (replaceCoordinate) {
+    const canonicalFrontier =
+      stored.lastReadVisibilityCursor && compareCursors(stored.lastReadVisibilityCursor, storedV2) > 0
+        ? stored.lastReadVisibilityCursor
+        : storedV2;
+    const reconciled = await replaceCoordinate.call(readStateStore, userId, threadId, readCoordinateOf(stored), {
+      lastReadMessageId: storedV2,
+      lastReadVisibilityCursor: canonicalFrontier,
+    });
+    return reconciled ? 'ready' : 'retry';
+  }
+  if (stored.lastReadVisibilityCursor !== undefined || !readStateStore.reconcileReadCursor) return 'blocked';
+  const reconciled = await readStateStore.reconcileReadCursor(userId, threadId, stored.lastReadMessageId, storedV2);
+  return reconciled ? 'ready' : 'retry';
+}
+
+/**
+ * Validate the complete stored read coordinate before CAS ack.
+ *
+ * The rollout primary and canonical visibility anchor are one state object.
+ * Any resolved ineligible position invalidates the whole
+ * coordinate. Correction and v1 → v2 reconciliation CAS both fields so an
+ * anchor-only concurrent change cannot be overwritten.
+ */
+async function prepareStoredReadCursorForAck(
+  readStateStore: IThreadReadStateStore,
+  messageStore: IMessageStore | null | undefined,
+  userId: string,
+  threadId: string,
+  stored: ThreadReadState | null,
+  incomingSlotCursor: string,
+  canonicalIncomingCursor: string,
+): Promise<StoredReadPreparation> {
+  if (!stored) return 'ready';
+  if (!messageStore) return 'blocked';
+
+  const assessment = await assessStoredReadCoordinate(messageStore, userId, threadId, stored);
+  if (assessment.kind === 'blocked') return 'blocked';
+  if (assessment.kind === 'invalid') {
+    return correctInvalidReadCoordinate(
+      readStateStore,
+      userId,
+      threadId,
+      stored,
+      incomingSlotCursor,
+      canonicalIncomingCursor,
+    );
+  }
+
+  if (assessment.kind !== 'valid' || !incomingSlotCursor.startsWith('v2:') || assessment.primary.version === 2) {
+    return 'ready';
+  }
+  return reconcileStoredReadPrimary(readStateStore, messageStore, userId, threadId, stored);
+}
+
+async function repairUnresolvedLegacyReadCoordinate(
+  readStateStore: IThreadReadStateStore,
+  messageStore: IMessageStore | null | undefined,
+  userId: string,
+  threadId: string,
+  existing: ThreadReadState | null,
+  gated: string,
+  incomingCursor: string,
+): Promise<boolean> {
+  if (!existing || existing.lastReadVisibilityCursor || !messageStore?.canonicalizeCursor) return false;
+  let parsedExisting: ReturnType<typeof parseCursor> = null;
+  try {
+    parsedExisting = parseCursor(existing.lastReadMessageId);
+  } catch {
+    // Malformed persisted tokens have no comparable visibility position.
+  }
+  if (parsedExisting?.version === 2) return false;
+  if (parsedExisting?.version === 1) {
+    try {
+      const storedCanonical = await messageStore.canonicalizeCursor(existing.lastReadMessageId, threadId);
+      if (storedCanonical !== existing.lastReadMessageId) return false;
+    } catch {
+      return false;
+    }
+  }
+
+  const replaceCoordinate = readStateStore.replaceReadCoordinateIfEqual;
+  if (!replaceCoordinate) return false;
+  const repaired = await replaceCoordinate.call(readStateStore, userId, threadId, readCoordinateOf(existing), {
+    lastReadMessageId: gated,
+    lastReadVisibilityCursor: incomingCursor,
+  });
+  if (repaired) visibilityCursorUnresolvedRepair.add(1, { namespace: 'read' });
+  return repaired;
+}
+
+/**
+ * #1269: Gated read-state ack — applies durable-slot gate before CAS.
+ * Reads existing read-state to decide format, then conditionally
+ * pre-reconciles and acks with the gated cursor value.
+ */
+async function gatedReadStateAck(
+  readStateStore: IThreadReadStateStore,
+  messageStore: IMessageStore | null | undefined,
+  userId: string,
+  threadId: string,
+  incomingCursor: string,
+  options: { repairUnresolvableLegacy?: boolean } = {},
+): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const existing = await readStateStore.get(userId, threadId);
+    const existingCursor = existing?.lastReadMessageId ?? null;
+    const gated = gateForDurableSlot(incomingCursor, existingCursor);
+
+    const preparation = await prepareStoredReadCursorForAck(
+      readStateStore,
+      messageStore,
+      userId,
+      threadId,
+      existing,
+      gated,
+      incomingCursor,
+    );
+    if (preparation === 'corrected') return true;
+    if (preparation === 'retry') continue;
+    if (preparation === 'blocked') return false;
+
+    const advanced = await readStateStore.ack(userId, threadId, gated, incomingCursor);
+    if (advanced || !existingCursor || !incomingCursor.startsWith('v2:')) return advanced;
+    if (!options.repairUnresolvableLegacy) return false;
+    return repairUnresolvedLegacyReadCoordinate(
+      readStateStore,
+      messageStore,
+      userId,
+      threadId,
+      existing,
+      gated,
+      incomingCursor,
+    );
+  }
+  return false;
+}
+
+async function isReadStateCaughtUp(
+  state: Awaited<ReturnType<IThreadReadStateStore['get']>>,
+  targetCursor: string,
+  targetMessageId: string,
+  messageStore: IMessageStore | null | undefined,
+  userId: string,
+  threadId: string,
+): Promise<boolean> {
+  if (!state || !messageStore) return false;
+  const assessment = await assessStoredReadCoordinate(messageStore, userId, threadId, state);
+  if (assessment.kind !== 'valid' && assessment.kind !== 'unresolved_canonical') return false;
+  if (state.lastReadMessageId === targetCursor || state.lastReadMessageId === targetMessageId) return true;
+  const anchor = state.lastReadVisibilityCursor;
+  if (!anchor) return false;
+  try {
+    const parsedAnchor = parseCursor(anchor);
+    const parsedTarget = parseCursor(targetCursor);
+    return (
+      parsedAnchor?.version === 2 &&
+      parsedTarget?.version === 2 &&
+      (parsedAnchor.seq > parsedTarget.seq ||
+        (parsedAnchor.seq === parsedTarget.seq && parsedAnchor.id >= parsedTarget.id))
+    );
+  } catch {
+    return false;
+  }
+}
 
 interface ThreadIndexBuilder {
   markThreadDirty(threadId: string): void;
@@ -50,6 +372,13 @@ interface ThreadIndexBuilder {
 
 export interface ThreadsRoutesOptions {
   threadStore: IThreadStore;
+  /**
+   * F297 Phase B: batched active-execution presence for the Sidebar snapshot (C10).
+   *
+   * **必填**：生产上不接线就等于 Sidebar 永远报不出 working（PR #3748 P1-1）。
+   * 类型上强制，让 TS 生产调用点无法漏接；JS 测试不涉及运行态时可省略，运行时按无 active 处理。
+   */
+  presenceSource: SidebarPresenceSource;
   /** Optional: cascade delete messages when thread is deleted */
   messageStore?: IMessageStore;
   /** Optional: cascade delete tasks when thread is deleted */
@@ -58,6 +387,12 @@ export interface ThreadsRoutesOptions {
   memoryStore?: IMemoryStore;
   /** Optional: cascade delete delivery cursors when thread is deleted */
   deliveryCursorStore?: DeliveryCursorStore;
+  /** F254 Phase E: cascade persistent catch responsibility with thread deletion. */
+  freshnessClosureStore?: import('../domains/cats/services/freshness/closure/FreshnessClosureStore.js').FreshnessClosureStore;
+  /** F254 Phase E: explicit blocked-closure retry uses the unified queue. */
+  invocationQueue?: InvocationQueue;
+  queueProcessor?: QueueProcessor;
+  socketManager?: SocketManager;
   /** Optional: protect active invocations from thread deletion (#35) */
   invocationTracker?: InvocationTracker;
   /** #80: cascade delete streaming drafts */
@@ -81,7 +416,7 @@ export interface ThreadsRoutesOptions {
   /**
    * F229: Reserved — no longer used by GET /api/threads.
    * createdBy=userId (P1 fix) means threadStore.list(userId) already returns concierge threads;
-   * threadKind='concierge' filter handles default exclusion / includeConcierge=true inclusion.
+   * threadKind='concierge' filter keeps only the owner's canonical carrier in the default list.
    */
   conciergeThreadService?: import('../domains/concierge/ConciergeThreadService.js').ConciergeThreadService;
 }
@@ -170,6 +505,8 @@ const createThreadSchema = z
   .strict();
 
 const listThreadsSchema = z.object({
+  /** Lightweight list projection used by the Sidebar. */
+  view: z.enum(['sidebar']).optional(),
   projectPath: z.string().min(1).max(500).optional(),
   q: z.string().trim().min(1).max(200).optional(),
   backlogItemIds: z.string().trim().min(1).max(4000).optional(),
@@ -179,7 +516,7 @@ const listThreadsSchema = z.object({
   /** F095 Phase D: When true, list soft-deleted threads (trash bin) instead of active threads. */
   deleted: z.union([z.boolean(), z.string().trim().min(1).max(8)]).optional(),
   /**
-   * F229: When true, include concierge threads in the list (default: excluded).
+   * F229/F317: When true, include the owner's extra concierge threads; the canonical one is visible by default.
    * Used by the concierge surface to load the per-user concierge thread.
    */
   includeConcierge: z.union([z.boolean(), z.string().trim().min(1).max(8)]).optional(),
@@ -203,15 +540,18 @@ async function resolveCreateThreadProjectPath(
   }
 
   if (projectPath && projectPath !== 'default') {
-    const validated = await validateProjectPath(projectPath);
-    if (!validated) {
+    const resolved = await resolvePersistentProjectPathDetailed(projectPath);
+    if (!resolved.ok) {
+      const runtimeConfigError = ['runtime_root_invalid', 'runtime_workspace_missing'].includes(resolved.reason);
       return {
         ok: false,
-        statusCode: 400,
-        error: 'Invalid projectPath: must be an existing directory under allowed roots',
+        statusCode: runtimeConfigError ? 500 : 400,
+        error: runtimeConfigError
+          ? `Unable to resolve persistent workspace: ${resolved.message ?? resolved.reason}`
+          : 'Invalid projectPath: must be an existing directory under allowed roots',
       };
     }
-    return { ok: true, projectPath: validated };
+    return { ok: true, projectPath: resolved.path };
   }
 
   return { ok: true, projectPath };
@@ -229,11 +569,52 @@ function parseOptionalBooleanQuery(value: string | boolean | undefined): boolean
 export function sanitizeThreadForResponse(thread: Thread, _userId: string): Thread {
   // Cloud Codex P2: strip internal-only fields that should not appear in API responses.
   // pendingContinuation is per-cat/user session state — not client-visible.
-  if (thread.pendingContinuation) {
-    const { pendingContinuation: _, ...sanitized } = thread;
-    return sanitized as Thread;
+  // F247 AC-B1c-1: cloudCatBindings is owner-only operational sidecar — not visible via
+  //   default thread GET. Owner-only access goes through `/api/threads/:id/cloud-bindings`.
+  //   Defense-in-depth: Redis-backed threads already exclude this field via separate
+  //   hash storage (not hydrated by `.get()`); this strip protects the in-memory path.
+  const hasPendingContinuation = !!thread.pendingContinuation;
+  const hasCloudCatBindings = !!thread.cloudCatBindings;
+  // #872: threadMetadata is accessed via dedicated MCP tools only — strip from general APIs
+  // to avoid bloating thread list responses with worktree paths and notes.
+  const hasThreadMetadata = !!thread.threadMetadata;
+  if (!hasPendingContinuation && !hasCloudCatBindings && !hasThreadMetadata) return thread;
+  const { pendingContinuation: _pc, cloudCatBindings: _ccb, threadMetadata: _tm, ...sanitized } = thread;
+  return sanitized as Thread;
+}
+
+function projectThreadForListView(
+  thread: Thread,
+  view: 'sidebar' | undefined,
+  presence?: SidebarPresence,
+): Thread | (Omit<Thread, 'threadMemory'> & { presence: SidebarPresence }) {
+  if (view !== 'sidebar') return thread;
+  const { threadMemory: _threadMemory, ...summary } = thread;
+  return { ...summary, presence: presence ?? { status: 'idle' } };
+}
+
+async function migrateRuntimeProjectPath(
+  thread: Thread,
+  threadStore: IThreadStore,
+  resolvePath = migrateStoredProjectPath,
+): Promise<Thread> {
+  if (!thread.projectPath || thread.projectPath === 'default' || thread.projectPath.startsWith('games/')) {
+    return thread;
   }
-  return thread;
+  const previousProjectPath = thread.projectPath;
+  const migratedProjectPath = await resolvePath(previousProjectPath);
+  if (migratedProjectPath === previousProjectPath) return thread;
+  const projectPath = migratedProjectPath ?? 'default';
+
+  try {
+    await threadStore.updateProjectPath(thread.id, projectPath);
+  } catch (err) {
+    log.warn(
+      { err, threadId: thread.id, previousProjectPath, projectPath },
+      'failed to persist runtime projectPath migration during thread read',
+    );
+  }
+  return { ...thread, projectPath };
 }
 
 function isConciergeThread(thread: Thread): boolean {
@@ -288,7 +669,18 @@ const updateThreadSchema = z
     bubbleCli: z.enum(['global', 'expanded', 'collapsed']).optional(),
     /** F168: Preferred workspace mode for auto-switch on thread open. null clears. */
     preferredWorkspaceMode: z
-      .enum(['dev', 'recall', 'schedule', 'tasks', 'community', 'artifacts', 'approval', 'trajectory'])
+      .enum([
+        'dev',
+        'recall',
+        'product-schedule',
+        'schedule',
+        'tasks',
+        'community',
+        'artifacts',
+        'approval',
+        'trajectory',
+        'eval',
+      ])
       .nullable()
       .optional(),
     /** F187: Thread label IDs. */
@@ -393,6 +785,7 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
     }
 
     const {
+      view,
       projectPath,
       q,
       backlogItemIds,
@@ -404,13 +797,24 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
     const hasBacklogItemId = parseOptionalBooleanQuery(hasBacklogItemIdRaw);
     const showDeleted = parseOptionalBooleanQuery(deletedRaw);
     const includeConcierge = parseOptionalBooleanQuery(includeConciergeRaw);
+    const isCanonicalSidebarSnapshot =
+      view === 'sidebar' &&
+      projectPath === undefined &&
+      q === undefined &&
+      backlogItemIds === undefined &&
+      hasBacklogItemIdRaw === undefined &&
+      featureIds === undefined &&
+      deletedRaw === undefined &&
+      includeConciergeRaw === undefined;
+    const sidebarCompositionStartedAt = isCanonicalSidebarSnapshot ? performance.now() : null;
     const userId = resolveUserId(request, { defaultUserId: 'default-user' });
     if (!userId) return { threads: [] };
+    const resolveListProjectPath = createThreadProjectPathResolver();
 
     // F095 Phase D: Return soft-deleted threads when deleted=true
     if (showDeleted) {
-      let deletedThreads = (await threadStore.listDeleted(userId)).map((thread) =>
-        sanitizeThreadForResponse(thread, userId),
+      let deletedThreads = await mapThreadList(await threadStore.listDeleted(userId), async (thread) =>
+        sanitizeThreadForResponse(await migrateRuntimeProjectPath(thread, threadStore, resolveListProjectPath), userId),
       );
       // F229: Apply the same concierge exclusion to the trash view.
       // Without this, a soft-deleted concierge thread appears in the default trash list;
@@ -419,19 +823,44 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
       if (!includeConcierge) {
         deletedThreads = deletedThreads.filter((t) => !isConciergeThread(t));
       }
-      return { threads: deletedThreads };
+      return { threads: deletedThreads.map((thread) => projectThreadForListView(thread, view)) };
     }
 
-    let threads = projectPath ? await threadStore.listByProject(userId, projectPath) : await threadStore.list(userId);
-    threads = threads.map((thread) => sanitizeThreadForResponse(thread, userId));
-
-    // F229: Exclude concierge threads from default sidebar listing.
-    // createdBy=userId (P1 fix) means threadStore.list(userId) includes concierge threads;
-    // threadKind='concierge' is the filter signal at this route layer.
-    // includeConcierge=true opt-in exposes them (used by the concierge surface itself).
-    if (!includeConcierge) {
-      threads = threads.filter((t) => !isConciergeThread(t));
+    // Resolve the owner's one canonical concierge carrier before reading the
+    // list. This also repairs a generated blank title without creating a thread.
+    const canonicalConciergeId = await opts.conciergeThreadService?.findThreadId(userId);
+    const migratedProjectPath = projectPath ? await resolveListProjectPath(projectPath) : undefined;
+    if (projectPath && migratedProjectPath === null) return { threads: [] };
+    const projectPathMatches =
+      projectPath && migratedProjectPath
+        ? await Promise.all(
+            [...new Set([projectPath, migratedProjectPath])].map((path) => threadStore.listByProject(userId, path)),
+          )
+        : null;
+    let threads = projectPathMatches
+      ? [...new Map(projectPathMatches.flat().map((thread) => [thread.id, thread] as const)).values()]
+      : await threadStore.list(userId);
+    if (canonicalConciergeId && !threads.some((thread) => thread.id === canonicalConciergeId)) {
+      const canonical = await threadStore.get(canonicalConciergeId);
+      if (
+        canonical &&
+        !canonical.deletedAt &&
+        (!projectPath || canonical.projectPath === migratedProjectPath || canonical.projectPath === projectPath)
+      )
+        threads.push(canonical);
     }
+    threads = await mapThreadList(threads, async (thread) =>
+      sanitizeThreadForResponse(await migrateRuntimeProjectPath(thread, threadStore, resolveListProjectPath), userId),
+    );
+
+    // Keep only this owner's canonical concierge carrier discoverable. Stale
+    // same-kind orphans cannot become duplicate history entries.
+    threads = threads.filter(
+      (thread) =>
+        !isConciergeThread(thread) ||
+        thread.id === canonicalConciergeId ||
+        (includeConcierge && thread.createdBy === userId),
+    );
 
     // F058 Phase G: Match threads by feature IDs in titles
     if (featureIds) {
@@ -519,18 +948,41 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
         messageStore,
       );
       const summaryMap = new Map(summaries.map((s) => [s.threadId, s]));
-      return {
-        threads: threads.map((t) => {
-          const s = summaryMap.get(t.id);
-          return { ...t, unreadCount: s?.unreadCount ?? 0, hasUserMention: s?.hasUserMention ?? false };
-        }),
-      };
+      threads = threads.map((t) => {
+        const s = summaryMap.get(t.id);
+        return { ...t, unreadCount: s?.unreadCount ?? 0, hasUserMention: s?.hasUserMention ?? false };
+      });
     }
 
-    return { threads };
+    // F297 Phase B (AC-B4): Sidebar snapshot 必须自带 C10 presence，
+    // 否则浏览器只能自己 fold runtime 事件——那正是 F5 才恢复真相的根因。
+    const presenceByThread =
+      view === 'sidebar' && threads.length > 0
+        ? await composeSidebarPresence(threads, userId, opts.presenceSource)
+        : undefined;
+
+    const response = {
+      threads: threads.map((thread) => projectThreadForListView(thread, view, presenceByThread?.get(thread.id))),
+    };
+    if (sidebarCompositionStartedAt !== null) {
+      return sendCanonicalSidebarSnapshot(request, reply, response, sidebarCompositionStartedAt);
+    }
+    return response;
   });
 
   // GET /api/threads/:id - 获取对话详情
+  // F277: relation membership is a separate read model from F297 Sidebar rows.
+  // Keep this route before `/:id` so "relations" cannot be captured as a thread id.
+  app.get('/api/threads/relations', async (request, reply) => {
+    const userId = resolveUserId(request, { defaultUserId: 'default-user' });
+    if (!userId) {
+      reply.status(401);
+      return { error: 'Identity required (session cookie or X-Cat-Cafe-User header)' };
+    }
+    const threads = await threadStore.list(userId);
+    return projectThreadRelations(threads);
+  });
+
   app.get('/api/threads/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     const thread = await threadStore.get(id);
@@ -539,7 +991,102 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
       return { error: 'Thread not found' };
     }
     const userId = resolveUserId(request, { defaultUserId: 'default-user' }) ?? 'default-user';
-    return sanitizeThreadForResponse(thread, userId);
+    if (isConciergeThread(thread)) {
+      const canonicalId = await opts.conciergeThreadService?.findThreadId(userId);
+      if (thread.createdBy !== userId && canonicalId !== id) {
+        reply.status(404);
+        return { error: 'Thread not found' };
+      }
+    }
+    return sanitizeThreadForResponse(
+      await migrateRuntimeProjectPath((await threadStore.get(id)) ?? thread, threadStore),
+      userId,
+    );
+  });
+
+  // F254 Phase E: rebuildable Hub projection for F5/reconnect recovery.
+  app.get('/api/threads/:id/freshness-closures', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const thread = await threadStore.get(id);
+    if (!thread || thread.deletedAt) {
+      reply.status(404);
+      return { error: 'Thread not found' };
+    }
+    const userId = resolveUserId(request, { defaultUserId: 'default-user' }) ?? 'default-user';
+    const closures = ((await opts.freshnessClosureStore?.listActiveByThread(id)) ?? []).filter(
+      (closure) => closure.userId === userId,
+    );
+    const supplements = ((await opts.freshnessClosureStore?.listSupplementsByThread(id)) ?? []).filter(
+      (supplement) => supplement.userId === userId,
+    );
+    return {
+      closures: closures.map((closure) => projectFreshnessClosure(closure)),
+      supplements: await Promise.all(
+        supplements.map((supplement) => projectFreshnessSupplementForHistory(supplement, opts.messageStore)),
+      ),
+    };
+  });
+
+  app.post('/api/threads/:id/freshness-closures/:closureId/retry', async (request, reply) => {
+    const { id, closureId } = request.params as { id: string; closureId: string };
+    const userId = resolveStrictUserId(request);
+    if (!userId) {
+      reply.status(401);
+      return { error: 'Authentication required' };
+    }
+    const closure = await opts.freshnessClosureStore?.get(closureId);
+    if (!closure || closure.threadId !== id || closure.userId !== userId) {
+      reply.status(404);
+      return { error: 'Freshness closure not found' };
+    }
+    if (closure.status !== 'blocked') {
+      reply.status(409);
+      return { error: 'Freshness closure is not blocked', status: closure.status };
+    }
+    if (!opts.invocationQueue || !opts.queueProcessor || !opts.freshnessClosureStore) {
+      reply.status(503);
+      return { error: 'Freshness retry unavailable' };
+    }
+    const nextEpoch = closure.retryEpoch + 1;
+    const enqueue = opts.invocationQueue.enqueue({
+      threadId: id,
+      userId,
+      ownerAuthProvenance: 'strict',
+      content: `[Freshness Catch Closure ${closure.id}] 显式重试；正文由执行前 closure truth 注入。`,
+      source: 'agent',
+      sourceCategory: 'freshness',
+      targetCats: [closure.catId],
+      callerCatId: closure.catId,
+      autoExecute: true,
+      priority: 'normal',
+      intent: 'execute',
+      idempotencyKey: `freshness-closure:${closure.id}:retry:${nextEpoch}`,
+      freshnessClosureId: closure.id,
+      freshnessRequiredFrontierMessageId: closure.requiredFrontierMessageId,
+    });
+    if (enqueue.outcome === 'full') {
+      reply.status(409);
+      return { error: 'Invocation queue is full' };
+    }
+    const retried = await opts.freshnessClosureStore.retry(closure.id, {
+      actorId: userId,
+      evidenceRef: `api:retry:${Date.now()}`,
+      now: Date.now(),
+    });
+    recordFreshnessClosureTransition('retried');
+    const projection = projectFreshnessClosure(retried);
+    opts.socketManager?.broadcastAgentMessage(
+      {
+        type: 'system_info',
+        catId: retried.catId as CatId,
+        content: JSON.stringify(projection),
+        timestamp: projection.updatedAt,
+      },
+      id,
+    );
+    void opts.queueProcessor.tryAutoExecute(id);
+    reply.status(202);
+    return { closure: projection };
   });
 
   // PATCH /api/threads/:id - 更新标题/置顶/收藏
@@ -555,6 +1102,14 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
     if (!thread || thread.deletedAt) {
       reply.status(404);
       return { error: 'Thread not found' };
+    }
+    const ownerUserId = resolveUserId(request, { defaultUserId: 'default-user' }) ?? 'default-user';
+    if (isConciergeThread(thread) && thread.createdBy !== ownerUserId) {
+      const canonicalId = await opts.conciergeThreadService?.findThreadId(ownerUserId);
+      if (canonicalId !== id) {
+        reply.status(404);
+        return { error: 'Thread not found' };
+      }
     }
 
     const {
@@ -619,6 +1174,121 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
     return sanitizeThreadForResponse(updated, patchUserId);
   });
 
+  // ─── F247 AC-B1c-1: cloudCatBindings owner-only endpoints ───
+  //
+  // Per KD-20 / KD-21, these are owner-only operational sidecar endpoints. The same
+  // data MUST NOT leak through the default `GET /api/threads/:id` (stripped by
+  // `sanitizeThreadForResponse`) nor through `get_thread_context` / thread export /
+  // cross-post / memory index paths (see AC-B1c-8 privacy fixtures).
+
+  const cloudBindingPatchSchema = z
+    .object({
+      catId: catIdSchema(),
+      /** ChatGPT chat URL — must match CHATGPT_CHAT_URL_REGEX. `null` clears the binding. */
+      chatUrl: z
+        .union([
+          z.string().regex(CHATGPT_CHAT_URL_REGEX, 'chatUrl must be canonical https://chatgpt.com/c/<id>'),
+          z.null(),
+        ])
+        .nullable(),
+    })
+    .strict();
+
+  // GET /api/threads/:id/cloud-bindings — STRICT user-owned only.
+  // Returns `{ bindings: Record<catId, chatUrl> }`. Empty object when no bindings.
+  //
+  // Auth model (R3-hardened defense-in-depth):
+  //   1. resolveStrictUserId: session cookie / non-browser header only. null → 401.
+  //   2. Reserved-identity reject: `system` / `scheduler` literals MUST NOT acquire
+  //      ownership via `x-cat-cafe-user` header. These are internal-only emitters
+  //      (orchestrator messages, scheduled tasks); accepting them as user-supplied
+  //      identity would let any non-browser caller spoof system owners.
+  //   3. System-thread reject: cloud bindings are user-owned operational sidecar;
+  //      system threads (default lobby / connector hub / eval domain / etc.) have
+  //      no user-owner semantics for this feature → 403 (NOT 404, so the caller
+  //      knows the thread exists but the endpoint is N/A).
+  //   4. Strict literal owner match: `thread.createdBy === userId`.
+  //
+  // History:
+  //   - R0: `resolveUserId(... defaultUserId: 'default-user')` + `createdBy === 'system'`
+  //         exemption (copied from reveal endpoint) → ANYONE could read system thread
+  //         bindings, even un-authed (gpt52 R2 P0).
+  //   - R1: strict resolver only, but `x-cat-cafe-user: system` header still spoofed
+  //         system owner on system threads (gpt52 R3 P0). Codified by a wishful test.
+  //   - R2 (here): reject reserved identities at auth layer + reject system-owned
+  //         threads at thread layer → no spoof path remains. Echoes F077 R9 fix
+  //         pattern + F24 P1-3 reserved-identity discipline.
+  app.get<{ Params: { id: string } }>('/api/threads/:id/cloud-bindings', async (request, reply) => {
+    const { id } = request.params;
+    const userId = resolveStrictUserId(request);
+    if (!userId) {
+      reply.status(401);
+      return { error: 'Authentication required' };
+    }
+    if (SYSTEM_USER_IDS.has(userId)) {
+      // Reserved internal identity cannot be acquired through user-facing endpoints.
+      reply.status(401);
+      return { error: 'Reserved internal identity cannot be used' };
+    }
+    const thread = await threadStore.get(id);
+    if (!thread || thread.deletedAt) {
+      reply.status(404);
+      return { error: 'Thread not found' };
+    }
+    if (SYSTEM_USER_IDS.has(thread.createdBy)) {
+      // System threads have no user-owner semantics for cloud bindings.
+      reply.status(403);
+      return { error: 'Cloud cat bindings are not supported on system-owned threads' };
+    }
+    if (thread.createdBy !== userId) {
+      reply.status(403);
+      return { error: 'Only the thread owner can read cloud cat bindings' };
+    }
+    const bindings = await threadStore.getCloudCatBindings(id);
+    return { bindings };
+  });
+
+  // PATCH /api/threads/:id/cloud-bindings — STRICT user-owned only.
+  // Body: `{ catId: string, chatUrl: string | null }`. `chatUrl=null` clears the catId binding.
+  // URL must match CHATGPT_CHAT_URL_REGEX (AC-B1c-11). Returns `{ bindings: ... }` post-update.
+  //
+  // Auth model: same 4 layers as GET (strict resolver / reserved-identity reject /
+  // system-thread reject / literal owner match). See GET doc above for history.
+  app.patch<{ Params: { id: string } }>('/api/threads/:id/cloud-bindings', async (request, reply) => {
+    const { id } = request.params;
+    const userId = resolveStrictUserId(request);
+    if (!userId) {
+      reply.status(401);
+      return { error: 'Authentication required' };
+    }
+    if (SYSTEM_USER_IDS.has(userId)) {
+      reply.status(401);
+      return { error: 'Reserved internal identity cannot be used' };
+    }
+    const parseResult = cloudBindingPatchSchema.safeParse(request.body);
+    if (!parseResult.success) {
+      reply.status(400);
+      return { error: 'Invalid request body', details: parseResult.error.issues };
+    }
+    const thread = await threadStore.get(id);
+    if (!thread || thread.deletedAt) {
+      reply.status(404);
+      return { error: 'Thread not found' };
+    }
+    if (SYSTEM_USER_IDS.has(thread.createdBy)) {
+      reply.status(403);
+      return { error: 'Cloud cat bindings are not supported on system-owned threads' };
+    }
+    if (thread.createdBy !== userId) {
+      reply.status(403);
+      return { error: 'Only the thread owner can update cloud cat bindings' };
+    }
+    const { catId, chatUrl } = parseResult.data;
+    await threadStore.updateCloudCatBinding(id, catId as CatId, chatUrl);
+    const bindings = await threadStore.getCloudCatBindings(id);
+    return { bindings };
+  });
+
   // DELETE /api/threads/:id - 删除对话 (with cascade delete)
   app.delete('/api/threads/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
@@ -666,6 +1336,7 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
 
       // B-4: Cascade delete guide session to prevent stale sessions on deleted threads
       void opts.guideSessionStore?.delete(id).catch(() => {});
+      await opts.freshnessClosureStore?.deleteByThread(id);
 
       // I-2: Audit thread deletion for traceability (best-effort, don't block response)
       const userId = resolveUserId(request, {});
@@ -888,10 +1559,17 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
     let advancedCount = 0;
 
     for (const thread of threads) {
-      const messages = await messageStore.getByThread(thread.id);
-      if (messages.length === 0) continue;
-      const latestId = messages[messages.length - 1]?.id;
-      const advanced = await opts.readStateStore.ack(userId, thread.id, latestId);
+      // F297 AC-D4: stay in visibility order, but require durable owner-read
+      // evidence so a queued mutable stream cannot be acknowledged mid-flight.
+      const latest = await messageStore.getLatestVisibleCursor(thread.id, {
+        evidence: 'durable_owner_read',
+        viewerUserId: userId,
+      });
+      if (!latest) continue;
+      // #1269: Gated ack — applies durable-slot gate + conditional pre-reconcile
+      const advanced = await gatedReadStateAck(opts.readStateStore!, messageStore, userId, thread.id, latest.cursor, {
+        repairUnresolvableLegacy: true,
+      });
       if (advanced) advancedCount++;
     }
 
@@ -929,16 +1607,45 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
     }
 
     // P1-3: Validate upToMessageId belongs to this thread
+    // #1200: Also canonicalize raw v1 ID → v2 cursor for correct CAS lex comparison.
+    // Without canonicalization, a raw v1 ID permanently loses to any v2 cursor
+    // in SET_IF_GREATER because 'v' (0x76) > any digit — the ack silently no-ops.
+    let cursorToken = parseResult.data.upToMessageId;
     if (messageStore) {
       const msg = await messageStore.getById(parseResult.data.upToMessageId);
       if (!msg || msg.threadId !== id) {
         reply.status(400);
         return { error: 'upToMessageId does not belong to this thread' };
       }
+      // INV-PR5-3: a direct message-id ACK is a viewer-bound read. Apply the
+      // same managed-hold owner/hidden boundary as timeline and latest-cursor
+      // reads before canonicalization or legacy cursor repair can advance it.
+      if (!passesManagedHoldViewerBoundary(msg, userId)) {
+        return { advanced: false, caughtUp: false };
+      }
+      // F297 AC-D4: direct message-id ACK is still owner-read evidence.
+      // Mutable stream speech may paint while queued, but cannot advance the
+      // durable cursor until the same message reaches final delivery.
+      if (!isDurableOwnerReadEvidence(msg)) {
+        return { advanced: false, caughtUp: false };
+      }
+      if (messageStore.canonicalizeCursor) {
+        cursorToken = await messageStore.canonicalizeCursor(parseResult.data.upToMessageId, id);
+      }
     }
 
-    const advanced = await opts.readStateStore.ack(userId, id, parseResult.data.upToMessageId);
-    return { advanced };
+    // #1269: Gated ack — applies durable-slot gate + conditional pre-reconcile
+    const advanced = await gatedReadStateAck(opts.readStateStore, messageStore, userId, id, cursorToken, {
+      // #3476: a validated same-thread message is explicit read evidence.
+      repairUnresolvableLegacy: true,
+    });
+    // #1304: caughtUp distinguishes "cursor at/beyond target" from "stale/can't compare"
+    // Check against both cursor (v2) and raw messageId (v1 fallback when V2 OFF)
+    const afterState = await opts.readStateStore.get(userId, id);
+    const caughtUp =
+      advanced ||
+      (await isReadStateCaughtUp(afterState, cursorToken, parseResult.data.upToMessageId, messageStore, userId, id));
+    return { advanced, caughtUp };
   });
 
   // F069-R5: POST /api/threads/:id/read/latest — ack to latest real message server-side.
@@ -968,13 +1675,29 @@ export const threadsRoutes: FastifyPluginAsync<ThreadsRoutesOptions> = async (ap
       return { error: 'Thread not found' };
     }
 
-    const messages = await messageStore.getByThread(id, 1);
-    if (messages.length === 0) {
-      return { advanced: false, reason: 'no messages' };
+    // F297 AC-D4: stay in visibility order, but require durable owner-read
+    // evidence so a queued mutable stream cannot be acknowledged mid-flight.
+    const latest = await messageStore.getLatestVisibleCursor(id, {
+      evidence: 'durable_owner_read',
+      viewerUserId: userId,
+    });
+    if (!latest) {
+      return { advanced: false, caughtUp: true, reason: 'no messages' };
     }
 
-    const latestId = messages[messages.length - 1]?.id;
-    const advanced = await opts.readStateStore.ack(userId, id, latestId);
-    return { advanced, messageId: latestId };
+    // #1269: Gated ack — applies durable-slot gate + conditional pre-reconcile
+    const advanced = await gatedReadStateAck(opts.readStateStore, messageStore, userId, id, latest.cursor, {
+      repairUnresolvableLegacy: true,
+    });
+    // #1304: caughtUp distinguishes "cursor at latest" from "stale/can't compare"
+    // Check against both cursor (v2) and raw messageId (v1 fallback when V2 OFF)
+    const afterState = await opts.readStateStore.get(userId, id);
+    const caughtUp =
+      advanced || (await isReadStateCaughtUp(afterState, latest.cursor, latest.messageId, messageStore, userId, id));
+    // #1200 RED #23b: return both raw messageId and canonical v2 cursor
+    return { advanced, caughtUp, messageId: latest.messageId, cursor: latest.cursor };
   });
 };
+
+/** Re-export：presence 投影已抽到 `sidebar-presence-projection.ts`（cloud R9 P1）。 */
+export type { SidebarPresence, SidebarPresenceSource };

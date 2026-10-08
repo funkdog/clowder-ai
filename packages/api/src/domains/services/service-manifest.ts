@@ -38,6 +38,9 @@ export interface ServiceManifest {
   /** Timeout in ms for deep health probe (default 20000). Must be much longer
    *  than the standard 1500ms health timeout because synthesis probes are slow. */
   deepHealthTimeoutMs?: number;
+  /** Optional health-payload identity contract. A 2xx response is not enough
+   *  when one service id can dispatch multiple model/backend implementations. */
+  healthIdentity?: 'asr-model-backend' | 'tts-stream-route-v1';
   prerequisites?: {
     runtime?: string;
     venvPath?: string;
@@ -55,6 +58,10 @@ export interface ServiceManifest {
     install?: string;
     start?: string;
     uninstall?: string;
+    /** Additional Python scripts this service may launch at runtime.
+     *  Used for multi-backend services where the start script dispatches
+     *  to different API scripts based on the selected model (#863). */
+    additionalRuntimeScripts?: string[];
   };
 }
 
@@ -62,6 +69,7 @@ export interface ServiceHealthResult {
   ok: boolean;
   status?: number;
   error?: string | null;
+  details?: Record<string, unknown>;
 }
 
 export interface ServiceConfig {
@@ -104,7 +112,6 @@ export interface ServiceState {
 
 export const MODEL_ENV_VARS: Record<string, string> = {
   'whisper-stt': 'WHISPER_MODEL',
-  'qwen3-asr': 'QWEN3_ASR_MODEL',
   'mlx-tts': 'TTS_MODEL',
   'embedding-model': 'EMBED_MODEL',
   'llm-postprocess': 'LLM_POSTPROCESS_MODEL',
@@ -113,7 +120,6 @@ export const MODEL_ENV_VARS: Record<string, string> = {
 /** Env var each server script reads to bind its listening port. */
 export const PORT_ENV_VARS: Record<string, string> = {
   'whisper-stt': 'WHISPER_PORT',
-  'qwen3-asr': 'WHISPER_PORT',
   'mlx-tts': 'TTS_PORT',
   'embedding-model': 'EMBED_PORT',
   'llm-postprocess': 'LLM_POSTPROCESS_PORT',
@@ -122,7 +128,6 @@ export const PORT_ENV_VARS: Record<string, string> = {
 
 export const LEGACY_SERVICE_ENABLED_ENV_VARS: Record<string, string> = {
   'whisper-stt': 'ASR_ENABLED',
-  'qwen3-asr': 'QWEN3_ASR_ENABLED',
   'mlx-tts': 'TTS_ENABLED',
   'embedding-model': 'EMBED_ENABLED',
   'llm-postprocess': 'LLM_POSTPROCESS_ENABLED',
@@ -131,11 +136,35 @@ export const LEGACY_SERVICE_ENABLED_ENV_VARS: Record<string, string> = {
 
 export const API_SERVICE_ENABLED_ENV_VARS: Record<string, string> = {
   'whisper-stt': 'CAT_CAFE_SERVICE_ASR_ENABLED',
-  'qwen3-asr': 'CAT_CAFE_SERVICE_QWEN3_ASR_ENABLED',
   'mlx-tts': 'CAT_CAFE_SERVICE_TTS_ENABLED',
   'embedding-model': 'CAT_CAFE_SERVICE_EMBED_ENABLED',
   'llm-postprocess': 'CAT_CAFE_SERVICE_LLM_POSTPROCESS_ENABLED',
   'audio-capture': 'CAT_CAFE_SERVICE_AUDIO_ENABLED',
+};
+
+/**
+ * Env var fallbacks for merged services (#863). When checking whether a
+ * service should auto-start via legacy env bridge, also check the old
+ * service's env vars. Keys are current service IDs.
+ */
+const LEGACY_ENV_FALLBACKS: Record<
+  string,
+  {
+    enabled?: string[];
+    apiEnabled?: string[];
+    model?: string[];
+    /** Default model when activation came from this legacy service's env vars
+     *  but no model env was set.  Without this the manifest default (which may
+     *  be a different backend) would silently replace the old service's model. */
+    defaultModel?: string;
+  }
+> = {
+  'whisper-stt': {
+    enabled: ['QWEN3_ASR_ENABLED'],
+    apiEnabled: ['CAT_CAFE_SERVICE_QWEN3_ASR_ENABLED'],
+    model: ['QWEN3_ASR_MODEL'],
+    defaultModel: 'mlx-community/Qwen3-ASR-1.7B-8bit',
+  },
 };
 
 type ServiceModel = NonNullable<NonNullable<ServiceManifest['prerequisites']>['models']>[number];
@@ -149,8 +178,8 @@ function serviceModel(name: string, size: string, description: string, isDefault
 export const SERVICE_MANIFESTS: readonly ServiceManifest[] = [
   {
     id: 'whisper-stt',
-    name: 'Whisper STT',
-    description: 'Local speech-to-text endpoint',
+    name: 'Speech Recognition',
+    description: 'Local speech-to-text endpoint (Qwen3-ASR / Whisper)',
     category: 'voice',
     type: 'python',
     port: 9876,
@@ -159,14 +188,22 @@ export const SERVICE_MANIFESTS: readonly ServiceManifest[] = [
     endpointEnvVars: ['WHISPER_URL', 'NEXT_PUBLIC_WHISPER_URL'],
     defaultEndpoint: 'http://localhost:9876',
     healthPath: '/health',
+    deepHealthPath: '/health/deep',
+    deepHealthTimeoutMs: 60_000,
+    healthIdentity: 'asr-model-backend',
     prerequisites: {
       runtime: 'python3.10+',
       venvPath: '~/.cat-cafe/whisper-venv',
       packages: ['mlx-whisper', 'fastapi', 'uvicorn'],
       models: [
-        serviceModel('mlx-community/whisper-large-v3-turbo', '~1.5GB', 'Fast, high-quality local transcription', true),
-        serviceModel('mlx-community/whisper-large-v3-mlx', '~3GB', 'Highest quality, slower startup'),
-        serviceModel('mlx-community/whisper-small-mlx', '~500MB', 'Smaller local model for lower-memory machines'),
+        serviceModel('mlx-community/Qwen3-ASR-1.7B-8bit', '~2.5GB', 'Qwen3 ASR (MLX, recommended)'),
+        serviceModel('mlx-community/Qwen3-ASR-1.7B-4bit', '~1.5GB', 'Qwen3 ASR 4bit (lower memory)'),
+        // Manifest default must be cross-platform for deriveLegacyServiceConfig
+        // fallback; Qwen3-ASR is MLX-only.  YAML matrix recommends Qwen3 on
+        // macOS arm64; this static default only matters for legacy env bridge.
+        serviceModel('mlx-community/whisper-large-v3-turbo', '~1.5GB', 'Whisper turbo (MLX, fast)', true),
+        serviceModel('mlx-community/whisper-large-v3-mlx', '~3GB', 'Whisper highest quality'),
+        serviceModel('mlx-community/whisper-small-mlx', '~500MB', 'Whisper small (low memory)'),
       ],
       estimatedMinutes: 5,
     },
@@ -174,34 +211,10 @@ export const SERVICE_MANIFESTS: readonly ServiceManifest[] = [
       install: 'scripts/services/whisper-install.sh',
       start: 'scripts/services/whisper-server.sh',
       uninstall: 'scripts/services/whisper-uninstall.sh',
-    },
-  },
-  {
-    id: 'qwen3-asr',
-    name: 'Qwen3 ASR',
-    description: 'Local speech-to-text endpoint (Qwen3-ASR, drop-in whisper replacement)',
-    category: 'voice',
-    type: 'python',
-    port: 9876,
-    features: ['voice-input', 'connector-stt'],
-    envVars: ['WHISPER_URL', 'NEXT_PUBLIC_WHISPER_URL'],
-    endpointEnvVars: ['WHISPER_URL', 'NEXT_PUBLIC_WHISPER_URL'],
-    defaultEndpoint: 'http://localhost:9876',
-    healthPath: '/health',
-    prerequisites: {
-      runtime: 'python3.10+',
-      venvPath: '~/.cat-cafe/asr-venv',
-      packages: ['mlx-audio', 'fastapi', 'uvicorn', 'python-multipart'],
-      models: [
-        serviceModel('mlx-community/Qwen3-ASR-1.7B-8bit', '~2.5GB', 'High-quality Qwen3 ASR (default)', true),
-        serviceModel('mlx-community/Qwen3-ASR-1.7B-4bit', '~1.5GB', 'Smaller quantization, lower memory'),
-      ],
-      estimatedMinutes: 5,
-    },
-    scripts: {
-      install: 'scripts/services/qwen3-asr-install.sh',
-      start: 'scripts/services/qwen3-asr-server.sh',
-      uninstall: 'scripts/services/qwen3-asr-uninstall.sh',
+      // Legacy process recognition (#863): old qwen3-asr sidecar ran
+      // qwen3-asr-api.py on the same port.  Including it here lets
+      // lifecycle management detect and stop the old process after upgrade.
+      additionalRuntimeScripts: ['scripts/services/qwen3-asr-api.py'],
     },
   },
   {
@@ -217,6 +230,7 @@ export const SERVICE_MANIFESTS: readonly ServiceManifest[] = [
     defaultEndpoint: 'http://localhost:9879',
     healthPath: '/health',
     deepHealthPath: '/health/deep',
+    healthIdentity: 'tts-stream-route-v1',
     prerequisites: {
       runtime: 'python3.10+',
       venvPath: '~/.cat-cafe/tts-venv',
@@ -309,14 +323,29 @@ export const SERVICE_MANIFESTS: readonly ServiceManifest[] = [
     endpointEnvVars: ['AUDIO_SERVICE_URL'],
     defaultEndpoint: 'http://127.0.0.1:9881',
     healthPath: '/status',
+    deepHealthPath: '/health/deep',
     prerequisites: {
       runtime: 'python3.10+',
       venvPath: '~/.cat-cafe/audio-capture-venv',
-      packages: ['sounddevice', 'fastapi', 'uvicorn', 'numpy'],
-      // No models — audio-capture has no ML inference. Modal still shows
-      // install button (allModels.length === 0 short-circuits canConfirm).
-      models: [],
-      estimatedMinutes: 2,
+      packages: [
+        'aiohttp',
+        'sounddevice',
+        'numpy',
+        'torch',
+        'torchaudio',
+        'soundfile',
+        'scikit-learn',
+        'modelscope[framework]',
+      ],
+      models: [
+        serviceModel(
+          'iic/speech_campplus_sv_zh-cn_16k-common',
+          '~30MB',
+          'CAM++ speaker embedding for enrolled voices and session-local Speaker N separation',
+          true,
+        ),
+      ],
+      estimatedMinutes: 10,
     },
     scripts: {
       install: 'scripts/services/audio-capture-install.sh',
@@ -349,6 +378,11 @@ function parseEnabledEnv(value: string | undefined): boolean | null {
   return null;
 }
 
+function getDefaultServiceModel(service: ServiceManifest): string | undefined {
+  const models = service.prerequisites?.models;
+  return (models?.find((model) => model.isDefault) ?? models?.[0])?.name;
+}
+
 export function deriveLegacyServiceConfig(
   service: ServiceManifest,
   env: NodeJS.ProcessEnv = process.env,
@@ -361,21 +395,54 @@ export function deriveLegacyServiceConfig(
   // profile defaults do not unexpectedly auto-start ML sidecars.
   const legacyEnabled =
     apiEnabled ?? (env.CAT_CAFE_PROFILE ? null : parseEnabledEnv(legacyKey ? env[legacyKey] : undefined));
-  if (legacyEnabled !== true) return undefined;
+
+  // Check fallback env vars from merged services (#863).  A user who had
+  // QWEN3_ASR_ENABLED=true should auto-start whisper-stt after upgrade.
+  // Only consult fallbacks when the primary flag is *unset* (null).  An
+  // explicit disable (ASR_ENABLED=0) must not be overridden by a stale
+  // legacy enable flag.
+  const fallbacks = LEGACY_ENV_FALLBACKS[service.id];
+  let fallbackEnabled: boolean | null = null;
+  if (legacyEnabled == null && fallbacks) {
+    for (const key of fallbacks.apiEnabled ?? []) {
+      fallbackEnabled = parseEnabledEnv(env[key]);
+      if (fallbackEnabled != null) break;
+    }
+    if (fallbackEnabled == null && !env.CAT_CAFE_PROFILE) {
+      for (const key of fallbacks.enabled ?? []) {
+        fallbackEnabled = parseEnabledEnv(env[key]);
+        if (fallbackEnabled != null) break;
+      }
+    }
+  }
+
+  if (legacyEnabled !== true && fallbackEnabled !== true) return undefined;
 
   const config: ServiceConfig = { installed: true, enabled: true };
   const modelKey = MODEL_ENV_VARS[service.id];
-  const model = modelKey ? env[modelKey]?.trim() : undefined;
+  let model = modelKey ? env[modelKey]?.trim() : undefined;
+  // If primary model env is unset, check legacy fallback model env vars.
+  if (!model && fallbacks) {
+    for (const key of fallbacks.model ?? []) {
+      model = env[key]?.trim();
+      if (model) break;
+    }
+  }
   if (model) {
     config.selectedModel = model;
+  } else if (fallbackEnabled === true && fallbacks?.defaultModel) {
+    // Activation came from legacy merged-service env vars (e.g. QWEN3_ASR_ENABLED)
+    // but no model env was set.  Use the old service's implicit default so users
+    // aren't silently migrated to a different backend.
+    config.selectedModel = fallbacks.defaultModel;
   } else {
     // Fall back to manifest's recommended default model so that legacy
     // env bridge users (ENABLED=1 without MODEL) get a working service
     // instead of a "MODEL required" startup failure.  The manifest's
     // isDefault model is the single source of truth for defaults (see
     // b29c04d05 — hardcoded script defaults were removed intentionally).
-    const defaultModel = service.prerequisites?.models?.find((m) => m.isDefault) ?? service.prerequisites?.models?.[0];
-    if (defaultModel) config.selectedModel = defaultModel.name;
+    const defaultModel = getDefaultServiceModel(service);
+    if (defaultModel) config.selectedModel = defaultModel;
   }
   const portKey = PORT_ENV_VARS[service.id];
   const port = parseServicePort(portKey ? env[portKey]?.trim() : undefined);
@@ -388,7 +455,28 @@ export function resolveEffectiveServiceConfig(
   config: ServiceConfig | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): ServiceConfig | undefined {
-  return config ?? deriveLegacyServiceConfig(service, env);
+  const legacy = deriveLegacyServiceConfig(service, env);
+  // F195 historically used QWEN3_ASR_* before qwen3-asr and Whisper were
+  // unified under whisper-stt. An explicit active Qwen contract is stronger
+  // than stale persisted model identity left by a previous backend switch.
+  // Primary ASR_ENABLED/WHISPER_MODEL still wins inside deriveLegacyServiceConfig.
+  if (
+    config &&
+    service.id === 'whisper-stt' &&
+    legacy?.selectedModel?.includes('Qwen3-ASR') &&
+    config.selectedModel !== legacy.selectedModel
+  ) {
+    return { ...config, enabled: legacy.enabled, selectedModel: legacy.selectedModel };
+  }
+  const effective = config === undefined ? legacy : config;
+  if (effective === undefined) return undefined;
+  if (effective.selectedModel?.trim()) return effective;
+
+  // Older services.json rows predate explicit model selection. Start scripts
+  // now require their MODEL env, so project the manifest default into the
+  // effective config instead of repeatedly launching a guaranteed failure.
+  const defaultModel = getDefaultServiceModel(service);
+  return defaultModel ? { ...effective, selectedModel: defaultModel } : effective;
 }
 
 function replaceEndpointPort(endpoint: string | null, port: number): string | null {
@@ -495,10 +583,21 @@ export async function fetchServiceHealth(url: string, service?: ServiceManifest)
   const timeoutMs = isDeepProbe ? (service?.deepHealthTimeoutMs ?? 20_000) : 1500;
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    let details: Record<string, unknown> | undefined;
+    try {
+      const payload: unknown = await response.json();
+      if (typeof payload === 'object' && payload !== null && !Array.isArray(payload)) {
+        details = payload as Record<string, unknown>;
+      }
+    } catch {
+      // A malformed health response remains represented by ok/status below;
+      // identity-bound services fail closed when details are absent.
+    }
     return {
       ok: response.ok,
       status: response.status,
       error: response.ok ? null : `HTTP ${response.status}`,
+      ...(details ? { details } : {}),
     };
   } catch (error) {
     return {
@@ -506,6 +605,48 @@ export async function fetchServiceHealth(url: string, service?: ServiceManifest)
       error: error instanceof Error ? error.message : 'Service health check failed',
     };
   }
+}
+
+function expectedAsrBackend(model: string): 'mlx-audio' | 'mlx-whisper' | 'faster-whisper' {
+  if (model.includes('Qwen3-ASR')) return 'mlx-audio';
+  if (model.startsWith('mlx-community/whisper-')) return 'mlx-whisper';
+  return 'faster-whisper';
+}
+
+function logSafeIdentity(value: string): string {
+  return JSON.stringify(value.slice(0, 200));
+}
+
+export function serviceHealthIdentityMatches(
+  service: ServiceManifest,
+  config: ServiceConfig | undefined,
+  health: ServiceHealthResult,
+): { matches: boolean; reason?: string } {
+  if (!service.healthIdentity) return { matches: true };
+  if (service.healthIdentity === 'tts-stream-route-v1') {
+    const capabilities = health.details?.capabilities;
+    if (!Array.isArray(capabilities) || !capabilities.includes('speech-stream-route-v1')) {
+      return { matches: false, reason: 'health response omitted speech-stream-route-v1 capability' };
+    }
+    return { matches: true };
+  }
+  const desiredModel = config?.selectedModel?.trim();
+  if (!desiredModel) return { matches: false, reason: 'desired model is not configured' };
+  const liveModel = health.details?.model;
+  const liveBackend = health.details?.backend;
+  if (typeof liveModel !== 'string' || typeof liveBackend !== 'string') {
+    return { matches: false, reason: 'health response omitted model/backend identity' };
+  }
+  const desiredBackend = expectedAsrBackend(desiredModel);
+  if (liveModel !== desiredModel || liveBackend !== desiredBackend) {
+    return {
+      matches: false,
+      reason:
+        `desired model=${logSafeIdentity(desiredModel)} backend=${logSafeIdentity(desiredBackend)}; ` +
+        `live model=${logSafeIdentity(liveModel)} backend=${logSafeIdentity(liveBackend)}`,
+    };
+  }
+  return { matches: true };
 }
 
 export async function resolveServiceState(
