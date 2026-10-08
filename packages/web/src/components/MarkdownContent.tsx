@@ -209,6 +209,56 @@ const REL_PATH_RE = new RegExp(
   'g',
 );
 const WT_TAG_RE = /^\s*\[wt:([a-zA-Z0-9_/-]+)\]/;
+const ABSOLUTE_FS_PATH_RE = /^(?:\/|[a-zA-Z]:[\\/])/;
+const FILE_NAME_WITH_EXTENSION_RE = /(?:^|[\\/])[^\\/]+\.[a-zA-Z0-9]+$/;
+
+function normalizeFilesystemPath(path: string): string {
+  const normalized = path.replaceAll('\\', '/');
+  return normalized.length > 1 ? normalized.replace(/\/+$/, '') : normalized;
+}
+
+/**
+ * Convert an absolute file path from agent output into the relative path accepted by Workspace.
+ * Fail closed when the file is outside the active project; the Workspace API must never receive
+ * an arbitrary absolute path.
+ */
+export function toWorkspaceRelativePath(filePath: string, projectRoot: string | undefined): string | null {
+  const normalizedFile = normalizeFilesystemPath(filePath);
+  if (!ABSOLUTE_FS_PATH_RE.test(normalizedFile)) return normalizedFile.replace(/^\.\//, '');
+  if (!projectRoot || projectRoot === 'default' || projectRoot === 'lobby') return null;
+
+  const normalizedRoot = normalizeFilesystemPath(projectRoot);
+  if (!ABSOLUTE_FS_PATH_RE.test(normalizedRoot)) return null;
+
+  const windowsPath = /^[a-zA-Z]:\//.test(normalizedFile) || /^[a-zA-Z]:\//.test(normalizedRoot);
+  const comparableFile = windowsPath ? normalizedFile.toLowerCase() : normalizedFile;
+  const comparableRoot = windowsPath ? normalizedRoot.toLowerCase() : normalizedRoot;
+  if (!comparableFile.startsWith(`${comparableRoot}/`)) return null;
+
+  const relativePath = normalizedFile.slice(normalizedRoot.length + 1);
+  if (relativePath.split('/').includes('..')) return null;
+  return relativePath;
+}
+
+function safeDecodeUri(value: string): string {
+  try {
+    return decodeURI(value);
+  } catch {
+    return value;
+  }
+}
+
+function parseAbsoluteFileHref(href: string | undefined): { filePath: string; line?: number } | null {
+  if (!href) return null;
+  const decoded = safeDecodeUri(href);
+  const [pathWithLine, fragment] = decoded.split('#', 2);
+  const lineSuffix = pathWithLine.match(/:(\d+)$/);
+  const filePath = lineSuffix ? pathWithLine.slice(0, -lineSuffix[0].length) : pathWithLine;
+  if (!ABSOLUTE_FS_PATH_RE.test(filePath) || !FILE_NAME_WITH_EXTENSION_RE.test(filePath)) return null;
+  const fragmentLine = fragment?.match(/^L?(\d+)$/)?.[1];
+  const line = lineSuffix?.[1] ?? fragmentLine;
+  return { filePath, line: line ? Number.parseInt(line, 10) : undefined };
+}
 
 function linkifyFilePaths(text: string): ReactNode[] {
   const parts: ReactNode[] = [];
@@ -275,7 +325,7 @@ function FilePathLink({
   line,
   worktreeId,
 }: {
-  display: string;
+  display: ReactNode;
   href: string;
   filePath: string;
   line?: number;
@@ -284,23 +334,32 @@ function FilePathLink({
   const setOpenFile = useChatStore((s) => s.setWorkspaceOpenFile);
   const currentThreadId = useChatStore((s) => s.currentThreadId);
   const linkRef = useRef<HTMLAnchorElement>(null);
+  const currentProjectPath = useChatStore((s) => s.currentProjectPath);
+  const activeProjectRoot =
+    currentProjectPath && currentProjectPath !== 'default' && currentProjectPath !== 'lobby'
+      ? currentProjectPath
+      : PROJECT_ROOT || undefined;
+  const workspacePath = toWorkspaceRelativePath(filePath, activeProjectRoot);
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
       // Cmd/Ctrl+click → VSCode (default link behavior)
       if (e.metaKey || e.ctrlKey) return;
+      // Absolute paths outside the active project stay VSCode-only. Do not pass
+      // them through Workspace's relative-path boundary.
+      if (!workspacePath) return;
       e.preventDefault();
       // Regular click → open in workspace panel (with optional worktree switch)
       const messageId = linkRef.current?.closest<HTMLElement>('[data-message-id]')?.dataset.messageId;
       setOpenFile(
-        filePath,
+        workspacePath,
         line ?? null,
         worktreeId ?? null,
         currentThreadId,
         currentThreadId && messageId ? { kind: 'chat-file-link', threadId: currentThreadId, messageId } : undefined,
       );
     },
-    [currentThreadId, setOpenFile, filePath, line, worktreeId],
+    [currentThreadId, setOpenFile, workspacePath, line, worktreeId],
   );
 
   return (
@@ -309,11 +368,31 @@ function FilePathLink({
       href={href}
       onClick={handleClick}
       className="text-[var(--semantic-info)] hover:text-[var(--semantic-info)] hover:underline font-mono text-[0.85em] cursor-pointer"
-      title={`点击在工作区中查看 · Cmd+Click 打开 VSCode\n${display}`}
+      title={
+        workspacePath
+          ? `点击在工作区中查看 · Cmd+Click 打开 VSCode\n${filePath}`
+          : `文件不在当前项目中 · 点击打开 VSCode\n${filePath}`
+      }
     >
       {display}
     </a>
   );
+}
+
+function MarkdownLink({ href, children }: { href?: string; children: ReactNode }) {
+  const localFile = parseAbsoluteFileHref(href);
+  const content =
+    localFile && !/\.mdx?$/i.test(localFile.filePath) ? (
+      <FilePathLink
+        display={children}
+        href={`vscode://file${localFile.filePath}${localFile.line ? `:${localFile.line}` : ''}`}
+        filePath={localFile.filePath}
+        line={localFile.line}
+      />
+    ) : (
+      <ChatWorkspaceLink href={href}>{children}</ChatWorkspaceLink>
+    );
+  return <InsideMarkdownLinkContext.Provider value={true}>{content}</InsideMarkdownLinkContext.Provider>;
 }
 
 /** Process string children → @mentions + file path links */
@@ -456,11 +535,7 @@ function buildMdComponents(tp?: (children: ReactNode) => ReactNode, listen?: Lis
         {children}
       </blockquote>
     ),
-    a: ({ href, children }) => (
-      <InsideMarkdownLinkContext.Provider value={true}>
-        <ChatWorkspaceLink href={href}>{m(children)}</ChatWorkspaceLink>
-      </InsideMarkdownLinkContext.Provider>
-    ),
+    a: ({ href, children }) => <MarkdownLink href={href}>{m(children)}</MarkdownLink>,
     hr: () => <hr className="my-3 border-cafe" />,
 
     /* Code blocks with copy button — textProcessor intentionally excluded */

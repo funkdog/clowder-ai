@@ -8,7 +8,6 @@ import type {
   ReplyPreview,
 } from '@cat-cafe/shared';
 import { useCallback, useEffect, useRef } from 'react';
-import { useShallow } from 'zustand/react/shallow';
 import { parseFreshnessCarrierCapability } from '@/components/message-disposition-presentation';
 import { deriveBubbleId, getBubbleInvocationId } from '@/debug/bubbleIdentity';
 import { recordBubbleInvariantViolation } from '@/debug/bubbleInvariantDiagnostics';
@@ -3317,59 +3316,30 @@ export function handleBackgroundAgentMessage(
  */
 export function useAgentMessages() {
   const resolveCatName = useCatNameResolver();
-  const {
-    addMessage,
-    appendToMessage,
-    appendToolEvent,
-    appendRichBlock,
-    replaceMessageId,
-    patchMessage,
-    removeMessage,
-    setStreaming,
-    setLoading,
-    setHasActiveInvocation,
-    removeActiveInvocation,
-    addActiveInvocation,
-    clearAllActiveInvocations,
-    setIntentMode,
-    setCatStatus,
-    clearCatStatuses,
-    setCatInvocation,
-    setMessageUsage,
-    mergeMessageServedFacts,
-    setMessageMetadata,
-    setMessageThinking,
-    setMessageStreamInvocation,
-    requestStreamCatchUp,
-    replaceThreadTargetCats,
-  } = useChatStore(
-    useShallow((s) => ({
-      addMessage: s.addMessage,
-      appendToMessage: s.appendToMessage,
-      appendToolEvent: s.appendToolEvent,
-      appendRichBlock: s.appendRichBlock,
-      replaceMessageId: s.replaceMessageId,
-      patchMessage: s.patchMessage,
-      removeMessage: s.removeMessage,
-      setStreaming: s.setStreaming,
-      setLoading: s.setLoading,
-      setHasActiveInvocation: s.setHasActiveInvocation,
-      removeActiveInvocation: s.removeActiveInvocation,
-      addActiveInvocation: s.addActiveInvocation,
-      clearAllActiveInvocations: s.clearAllActiveInvocations,
-      setIntentMode: s.setIntentMode,
-      setCatStatus: s.setCatStatus,
-      clearCatStatuses: s.clearCatStatuses,
-      setCatInvocation: s.setCatInvocation,
-      setMessageUsage: s.setMessageUsage,
-      setMessageMetadata: s.setMessageMetadata,
-      mergeMessageServedFacts: s.mergeMessageServedFacts,
-      setMessageThinking: s.setMessageThinking,
-      setMessageStreamInvocation: s.setMessageStreamInvocation,
-      requestStreamCatchUp: s.requestStreamCatchUp,
-      replaceThreadTargetCats: s.replaceThreadTargetCats,
-    })),
-  );
+  const addMessage = useChatStore((s) => s.addMessage);
+  const appendToMessage = useChatStore((s) => s.appendToMessage);
+  const appendToolEvent = useChatStore((s) => s.appendToolEvent);
+  const appendRichBlock = useChatStore((s) => s.appendRichBlock);
+  const replaceMessageId = useChatStore((s) => s.replaceMessageId);
+  const patchMessage = useChatStore((s) => s.patchMessage);
+  const removeMessage = useChatStore((s) => s.removeMessage);
+  const setStreaming = useChatStore((s) => s.setStreaming);
+  const setLoading = useChatStore((s) => s.setLoading);
+  const setHasActiveInvocation = useChatStore((s) => s.setHasActiveInvocation);
+  const removeActiveInvocation = useChatStore((s) => s.removeActiveInvocation);
+  const addActiveInvocation = useChatStore((s) => s.addActiveInvocation);
+  const clearAllActiveInvocations = useChatStore((s) => s.clearAllActiveInvocations);
+  const setIntentMode = useChatStore((s) => s.setIntentMode);
+  const setCatStatus = useChatStore((s) => s.setCatStatus);
+  const clearCatStatuses = useChatStore((s) => s.clearCatStatuses);
+  const setCatInvocation = useChatStore((s) => s.setCatInvocation);
+  const setMessageUsage = useChatStore((s) => s.setMessageUsage);
+  const setMessageMetadata = useChatStore((s) => s.setMessageMetadata);
+  const setMessageThinking = useChatStore((s) => s.setMessageThinking);
+  const setMessageStreamInvocation = useChatStore((s) => s.setMessageStreamInvocation);
+  const requestStreamCatchUp = useChatStore((s) => s.requestStreamCatchUp);
+  const replaceThreadTargetCats = useChatStore((s) => s.replaceThreadTargetCats);
+  const mergeMessageServedFacts = useChatStore((s) => s.mergeMessageServedFacts);
 
   // F173 Phase E: bg-message processing refs (moved from useSocket).
   // useAgentMessages 现在是 single dispatch entry — 这些 refs 给 background-thread

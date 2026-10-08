@@ -15,16 +15,17 @@
  *   800 synchronous nested re-renders exceed React's 50-update limit → crash.
  *
  *   WITH coalescer (chunked flush): 0 store notifications during push phase.
- *   Each microtask flush processes at most CHUNK_SIZE events (~6 × 4 = 24
- *   notifications per microtask). React resets its nested update counter
- *   between microtasks → each chunk stays safely under the 50-update limit.
+ *   The first microtask flush processes at most CHUNK_SIZE events
+ *   (~6 × 4 = 24 notifications), and follow-up burst chunks run in future
+ *   tasks. React stays under the 50-update limit, and the browser gets a
+ *   paint/input opportunity between large burst chunks.
  *
  * This test proves invariant A (0 synchronous notifications during push) and
  * invariant B (notifications are spread across multiple microtasks, each
  * staying under the 50-update limit) directly using the real zustand store
  * subscription mechanism — the same one useSyncExternalStore builds on.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore } from 'zustand/vanilla';
 import { createAgentMessageCoalescer } from '../useSocket-message-coalescer';
 
@@ -61,10 +62,11 @@ function simulateHandleAgentMessage(store: ReturnType<typeof createTestStore>, s
   store.setState((s) => ({ invocationCount: s.invocationCount + 1 }));
 }
 
-/** Drain all pending microtasks (chunked flush needs multiple ticks). */
-async function drainMicrotasks(ticks = 50): Promise<void> {
+/** Drain pending microtasks and 0ms continuation timers. */
+async function drainFlushes(ticks = 50): Promise<void> {
   for (let i = 0; i < ticks; i++) {
     await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1);
   }
 }
 
@@ -107,6 +109,14 @@ describe('WITHOUT coalescer (documents the bug)', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('WITH coalescer (proves the fix)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('invariant A: 200 synchronous events → 0 synchronous notifications during push phase', async () => {
     const store = createTestStore();
 
@@ -136,8 +146,8 @@ describe('WITH coalescer (proves the fix)', () => {
     // React's subscriber is never called synchronously → no nested update cascade.
     expect(synchronousNotifications).toHaveLength(0);
 
-    // Drain all microtask chunks — all 200 events flush across multiple microtasks
-    await drainMicrotasks();
+    // Drain all chunks — all 200 events flush without drops or duplicates
+    await drainFlushes();
 
     // After drain: store is fully up-to-date
     expect(store.getState().lastSeq).toBe(200);
@@ -147,15 +157,15 @@ describe('WITH coalescer (proves the fix)', () => {
     unsub();
   });
 
-  it('invariant B: each microtask chunk stays under 50 store notifications (React safety)', async () => {
+  it('invariant B: each chunk stays under 50 store notifications (React safety)', async () => {
     const store = createTestStore();
 
-    // Track notifications per microtask tick
-    const notificationsPerTick: number[] = [];
-    let currentTickCount = 0;
+    // Track notifications per flush boundary.
+    const notificationsPerFlush: number[] = [];
+    let currentFlushCount = 0;
 
     const unsub = store.subscribe(() => {
-      currentTickCount++;
+      currentFlushCount++;
     });
 
     const coalescer = createAgentMessageCoalescer((msg) => {
@@ -168,19 +178,25 @@ describe('WITH coalescer (proves the fix)', () => {
       coalescer.push({ seq });
     }
 
-    // Drain microtasks one at a time, recording notifications per tick
+    // Drain flushes one at a time, recording notifications per boundary.
     for (let tick = 0; tick < 50; tick++) {
-      currentTickCount = 0;
+      currentFlushCount = 0;
       await Promise.resolve();
-      if (currentTickCount > 0) {
-        notificationsPerTick.push(currentTickCount);
+      if (currentFlushCount > 0) {
+        notificationsPerFlush.push(currentFlushCount);
+      }
+      if (store.getState().lastSeq === 200) break;
+      currentFlushCount = 0;
+      await vi.advanceTimersByTimeAsync(1);
+      if (currentFlushCount > 0) {
+        notificationsPerFlush.push(currentFlushCount);
       }
       if (store.getState().lastSeq === 200) break;
     }
 
-    // Every tick must stay under React's 50-nested-update limit.
-    // With CHUNK_SIZE=6, each tick processes 6 events × 4 set() = 24 notifications.
-    for (const count of notificationsPerTick) {
+    // Every flush must stay under React's 50-nested-update limit.
+    // With CHUNK_SIZE=6, each flush processes 6 events × 4 set() = 24 notifications.
+    for (const count of notificationsPerFlush) {
       expect(count).toBeLessThanOrEqual(50);
     }
 

@@ -141,12 +141,8 @@ function forOpenableProject<T>(projectPath: string | undefined, build: (projectP
 export function ThreadSidebar({ onClose, className, routeThreadId, activeDestination = null }: ThreadSidebarProps) {
   const [showBootcampList, setShowBootcampList] = useState(false);
   const isV2 = useShellPresentation() === 'v2';
-  const { currentThreadId, setCurrentProject } = useChatStore(
-    useShallow((s) => ({
-      currentThreadId: s.currentThreadId,
-      setCurrentProject: s.setCurrentProject,
-    })),
-  );
+  const currentThreadId = useChatStore((s) => s.currentThreadId);
+  const setCurrentProject = useChatStore((s) => s.setCurrentProject);
   // The conversation the user is in. The store keeps remembering the last one while a Café destination (记忆) is the
   // current page, but then the user is not in it: it is not highlighted, clicking it navigates, and deleting or
   // archiving it must not move the user off the page they are on.

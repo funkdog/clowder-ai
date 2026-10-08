@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useShallow } from 'zustand/react/shallow';
 import { useActiveExecutionProjection } from '@/hooks/useActiveExecutionProjection';
 import { useAgentHookHealth } from '@/hooks/useAgentHookHealth';
 import { formatCatName, useCatData } from '@/hooks/useCatData';
@@ -95,45 +94,20 @@ function InteractiveChatContainer({ threadId }: ChatContainerProps) {
   const bottomChromeObserverRef = useRef<ResizeObserver | null>(null);
   const bottomChromeObserverRafRef = useRef<number | null>(null);
   const [bottomChromeHeight, setBottomChromeHeight] = useState(0);
-  const {
-    setCurrentThread,
-    viewMode,
-    setViewMode,
-    isLoading: chatIsLoading,
-    clearUnread,
-    settleUnreadAck,
-    armUnreadSuppression,
-    rightPanelMode,
-    workspaceSurface,
-    presentationLock,
-    setWorkspaceMode,
-    setWorkspaceSurface,
-    setRightPanelMode,
-    closeRightPanel,
-    showVoteModal,
-    setShowVoteModal,
-    addMessageToThread,
-  } = useChatStore(
-    useShallow((s) => ({
-      setCurrentThread: s.setCurrentThread,
-      viewMode: s.viewMode,
-      setViewMode: s.setViewMode,
-      isLoading: s.isLoading,
-      clearUnread: s.clearUnread,
-      settleUnreadAck: s.settleUnreadAck,
-      armUnreadSuppression: s.armUnreadSuppression,
-      rightPanelMode: s.rightPanelMode,
-      workspaceSurface: s.workspaceSurface,
-      presentationLock: s.presentationLock,
-      setWorkspaceMode: s.setWorkspaceMode,
-      setWorkspaceSurface: s.setWorkspaceSurface,
-      setRightPanelMode: s.setRightPanelMode,
-      closeRightPanel: s.closeRightPanel,
-      showVoteModal: s.showVoteModal,
-      setShowVoteModal: s.setShowVoteModal,
-      addMessageToThread: s.addMessageToThread,
-    })),
-  );
+  const setCurrentThread = useChatStore((s) => s.setCurrentThread);
+  const viewMode = useChatStore((s) => s.viewMode);
+  const setViewMode = useChatStore((s) => s.setViewMode);
+  const chatIsLoading = useChatStore((s) => s.isLoading);
+  const clearUnread = useChatStore((s) => s.clearUnread);
+  const settleUnreadAck = useChatStore((s) => s.settleUnreadAck);
+  const armUnreadSuppression = useChatStore((s) => s.armUnreadSuppression);
+  const rightPanelMode = useChatStore((s) => s.rightPanelMode);
+  const workspaceSurface = useChatStore((s) => s.workspaceSurface);
+  const presentationLock = useChatStore((s) => s.presentationLock);
+  const setWorkspaceMode = useChatStore((s) => s.setWorkspaceMode);
+  const setWorkspaceSurface = useChatStore((s) => s.setWorkspaceSurface);
+  const setRightPanelMode = useChatStore((s) => s.setRightPanelMode);
+  const closeRightPanel = useChatStore((s) => s.closeRightPanel);
   // F173 Phase C Task 3 — full read-side migration. All thread liveness +
   // messages now flow through thread-scoped selectors keyed off this
   // component's `threadId` prop, not the flat current-thread mirror. Closes
@@ -358,6 +332,9 @@ function InteractiveChatContainer({ threadId }: ChatContainerProps) {
   );
   const { socketConnected, resetAgentMessageRefs, registerIndexEventHandler } = useThreadChatRuntime(runtimeThreadIds);
   // F079: Vote modal
+  const showVoteModal = useChatStore((s) => s.showVoteModal);
+  const setShowVoteModal = useChatStore((s) => s.setShowVoteModal);
+  const addMessageToThread = useChatStore((s) => s.addMessageToThread);
   const handleVoteSubmit = useCallback(
     async (config: VoteConfig) => {
       setShowVoteModal(false);

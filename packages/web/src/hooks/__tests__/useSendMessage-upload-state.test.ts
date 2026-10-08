@@ -23,12 +23,15 @@ vi.mock('@/hooks/useChatCommands', () => ({
 
 vi.mock('@/stores/chatStore', () => ({
   useChatStore: Object.assign(
-    () => ({
-      addMessageToThread: mockAddMessageToThread,
-      setThreadLoading: mockSetThreadLoading,
-      setThreadHasActiveInvocation: mockSetThreadHasActiveInvocation,
-      currentThreadId: 'thread-stale',
-    }),
+    (selector?: (state: Record<string, unknown>) => unknown) => {
+      const state = {
+        addMessageToThread: mockAddMessageToThread,
+        setThreadLoading: mockSetThreadLoading,
+        setThreadHasActiveInvocation: mockSetThreadHasActiveInvocation,
+        currentThreadId: 'thread-stale',
+      };
+      return selector ? selector(state) : state;
+    },
     {
       getState: () => ({ currentThreadId: 'thread-stale' }),
     },

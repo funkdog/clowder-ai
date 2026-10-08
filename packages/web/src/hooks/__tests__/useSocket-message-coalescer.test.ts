@@ -6,27 +6,28 @@
  * batching → >50 nested updates → crash.
  *
  * Fix: createAgentMessageCoalescer buffers synchronous pushes and flushes them
- * in chunked microtasks (CHUNK_SIZE events per microtask). React resets its
- * nested update counter between microtasks, so each chunk stays safely under
- * the 50-update limit. Microtask chaining adds no paint boundaries.
+ * in chunks. The first chunk runs in a microtask for prompt normal streaming;
+ * follow-up burst chunks run in future tasks so the browser gets paint/input
+ * opportunities during large reconnect/background bursts.
  *
  * These tests verify the coalescer's correctness contract:
  *  1. 200 synchronous pushes → handler called 200× after microtask drain (not zero, not partial)
  *  2. Push order is preserved through the flush
  *  3. Events arriving across macrotask boundaries flush independently (no cross-batch merging)
  *  4. Only one microtask chain is scheduled per burst (flushScheduled guard)
- *  5. Chunking: each microtask processes at most CHUNK_SIZE events
+ *  5. Chunking: the first microtask processes at most CHUNK_SIZE events
+ *  6. Large bursts continue across task boundaries without dropping events
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAgentMessageCoalescer } from '../useSocket-message-coalescer';
 
 /**
- * Drain ALL pending microtasks by chaining enough awaits.
- * queueMicrotask chains need multiple Promise.resolve() ticks to fully drain.
+ * Drain pending microtasks and 0ms continuation timers.
  */
-async function drainMicrotasks(ticks = 50): Promise<void> {
+async function drainFlushes(ticks = 50): Promise<void> {
   for (let i = 0; i < ticks; i++) {
     await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(1);
   }
 }
 
@@ -51,8 +52,8 @@ describe('createAgentMessageCoalescer', () => {
     // Handler must NOT have been called yet — still inside the macrotask
     expect(handler).not.toHaveBeenCalled();
 
-    // Drain all microtask chunks (200 events / 6 per chunk = 34 microtasks)
-    await drainMicrotasks();
+    // Drain all chunks (200 events / 6 per chunk = 34 flushes)
+    await drainFlushes();
 
     // All 200 events must be processed: no drops, no duplicates
     expect(handler).toHaveBeenCalledTimes(200);
@@ -68,7 +69,7 @@ describe('createAgentMessageCoalescer', () => {
       coalescer.push({ seq: i });
     }
 
-    await drainMicrotasks();
+    await drainFlushes();
 
     expect(received).toEqual(Array.from({ length: 50 }, (_, i) => i + 1));
   });
@@ -80,13 +81,13 @@ describe('createAgentMessageCoalescer', () => {
     // Burst 1 — synchronous (2 events fit in one chunk)
     coalescer.push({ seq: 1 });
     coalescer.push({ seq: 2 });
-    await drainMicrotasks();
+    await drainFlushes();
 
     expect(handler).toHaveBeenCalledTimes(2);
 
     // Burst 2 — arrives after macrotask boundary
     coalescer.push({ seq: 3 });
-    await drainMicrotasks();
+    await drainFlushes();
 
     expect(handler).toHaveBeenCalledTimes(3);
   });
@@ -99,7 +100,7 @@ describe('createAgentMessageCoalescer', () => {
 
     // First burst
     for (let i = 0; i < 10; i++) coalescer.push({ seq: i });
-    await drainMicrotasks();
+    await drainFlushes();
     expect(handler).toHaveBeenCalledTimes(10);
 
     handler.mockClear();
@@ -108,15 +109,14 @@ describe('createAgentMessageCoalescer', () => {
     for (let i = 0; i < 10; i++) coalescer.push({ seq: i + 10 });
     // Before flush, nothing called
     expect(handler).not.toHaveBeenCalled();
-    await drainMicrotasks();
+    await drainFlushes();
     // After flush, all 10 called
     expect(handler).toHaveBeenCalledTimes(10);
   });
 
-  it('chunks events to stay under React nested update limit', async () => {
-    // With CHUNK_SIZE=6, a burst of 20 events should be processed in
-    // ceil(20/6) = 4 microtask ticks. After just one tick, only 6
-    // should have been handled.
+  it('chunks events and yields follow-up chunks to future tasks', async () => {
+    // With CHUNK_SIZE=6, a burst of 20 events should process the first chunk
+    // in the initial microtask, then wait for task continuations.
     const handler = vi.fn();
     const coalescer = createAgentMessageCoalescer(handler);
 
@@ -124,20 +124,23 @@ describe('createAgentMessageCoalescer', () => {
       coalescer.push({ seq: i + 1 });
     }
 
-    // After first microtask: exactly one chunk processed
+    // After first microtask: exactly one chunk processed.
     await Promise.resolve();
     expect(handler).toHaveBeenCalledTimes(6);
 
-    // After second microtask: two chunks
+    // Extra microtasks should not continue the burst; this is the browser-yield
+    // guarantee for large background/reconnect bursts.
     await Promise.resolve();
+    expect(handler).toHaveBeenCalledTimes(6);
+
+    // Each task continuation processes one more chunk.
+    await vi.runOnlyPendingTimersAsync();
     expect(handler).toHaveBeenCalledTimes(12);
 
-    // After third microtask: three chunks
-    await Promise.resolve();
+    await vi.runOnlyPendingTimersAsync();
     expect(handler).toHaveBeenCalledTimes(18);
 
-    // After fourth microtask: remaining 2
-    await Promise.resolve();
+    await vi.runOnlyPendingTimersAsync();
     expect(handler).toHaveBeenCalledTimes(20);
   });
 
@@ -151,7 +154,7 @@ describe('createAgentMessageCoalescer', () => {
       }
     }).not.toThrow();
 
-    await drainMicrotasks();
+    await drainFlushes();
 
     expect(handler).toHaveBeenCalledTimes(200);
   });
@@ -171,7 +174,7 @@ describe('createAgentMessageCoalescer', () => {
       coalescer.push({ seq: i });
     }
 
-    await drainMicrotasks();
+    await drainFlushes();
 
     // Original 5 events + 1 injected during processing
     expect(received).toHaveLength(6);

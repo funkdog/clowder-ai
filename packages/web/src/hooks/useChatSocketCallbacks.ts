@@ -1,6 +1,5 @@
 import type { GameView } from '@cat-cafe/shared';
 import { useMemo } from 'react';
-import { useShallow } from 'zustand/react/shallow';
 import type { SocketCallbacks } from '@/hooks/useSocket';
 import { type Thread, useChatStore } from '@/stores/chatStore';
 import { useGameStore } from '@/stores/gameStore';
@@ -30,27 +29,14 @@ export function useChatSocketCallbacks({
   onNavigateToThread,
   onIndexEvent,
 }: ExternalDeps): SocketCallbacks {
-  const {
-    updateThreadTitle,
-    updateThreadParticipants,
-    setLoading,
-    setHasActiveInvocation,
-    setIntentMode,
-    setTargetCats,
-    removeThreadMessage,
-    requestStreamCatchUp,
-  } = useChatStore(
-    useShallow((s) => ({
-      updateThreadTitle: s.updateThreadTitle,
-      updateThreadParticipants: s.updateThreadParticipants,
-      setLoading: s.setLoading,
-      setHasActiveInvocation: s.setHasActiveInvocation,
-      setIntentMode: s.setIntentMode,
-      setTargetCats: s.setTargetCats,
-      removeThreadMessage: s.removeThreadMessage,
-      requestStreamCatchUp: s.requestStreamCatchUp,
-    })),
-  );
+  const updateThreadTitle = useChatStore((s) => s.updateThreadTitle);
+  const updateThreadParticipants = useChatStore((s) => s.updateThreadParticipants);
+  const setLoading = useChatStore((s) => s.setLoading);
+  const setHasActiveInvocation = useChatStore((s) => s.setHasActiveInvocation);
+  const setIntentMode = useChatStore((s) => s.setIntentMode);
+  const setTargetCats = useChatStore((s) => s.setTargetCats);
+  const removeThreadMessage = useChatStore((s) => s.removeThreadMessage);
+  const requestStreamCatchUp = useChatStore((s) => s.requestStreamCatchUp);
   const { addTask, updateTask } = useTaskStore();
 
   return useMemo<SocketCallbacks>(

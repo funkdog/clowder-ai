@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useShallow } from 'zustand/react/shallow';
 import type { CatStatusType } from '@/stores/chat-types';
 import { type Thread, useChatStore } from '@/stores/chatStore';
 import { CatAvatar } from './CatAvatar';
@@ -21,13 +20,9 @@ const MAX_WIDTH = 300;
  * Click a thread to assign it to the currently selected pane.
  */
 export function MiniThreadSidebar({ onAssignToPane }: MiniThreadSidebarProps) {
-  const { threads, splitPaneThreadIds, getThreadState } = useChatStore(
-    useShallow((s) => ({
-      threads: s.threads,
-      splitPaneThreadIds: s.splitPaneThreadIds,
-      getThreadState: s.getThreadState,
-    })),
-  );
+  const threads = useChatStore((s) => s.threads);
+  const splitPaneThreadIds = useChatStore((s) => s.splitPaneThreadIds);
+  const getThreadState = useChatStore((s) => s.getThreadState);
   // getThreadState is a stable store action. Subscribe to its backing map so
   // per-thread status and unread changes still refresh the rendered rows.
   useChatStore((s) => s.threadStates);

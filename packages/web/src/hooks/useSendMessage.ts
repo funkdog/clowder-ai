@@ -2,7 +2,6 @@
 
 import type { ContextAttachment, MessageContent, MessageWorkDisposition } from '@cat-cafe/shared';
 import { useCallback, useState } from 'react';
-import { useShallow } from 'zustand/react/shallow';
 import { useAgentMessages } from '@/hooks/useAgentMessages';
 import { useChatCommands } from '@/hooks/useChatCommands';
 import type { DeliveryMode } from '@/stores/chat-types';
@@ -52,23 +51,12 @@ export interface WhisperOptions {
  * Handles both JSON and multipart form data modes.
  */
 export function useSendMessage(activeThreadId?: string) {
-  const {
-    addMessageToThread,
-    removeThreadMessage,
-    replaceThreadMessageId,
-    patchThreadMessage,
-    setThreadLoading,
-    setThreadHasActiveInvocation,
-  } = useChatStore(
-    useShallow((s) => ({
-      addMessageToThread: s.addMessageToThread,
-      removeThreadMessage: s.removeThreadMessage,
-      replaceThreadMessageId: s.replaceThreadMessageId,
-      patchThreadMessage: s.patchThreadMessage,
-      setThreadLoading: s.setThreadLoading,
-      setThreadHasActiveInvocation: s.setThreadHasActiveInvocation,
-    })),
-  );
+  const addMessageToThread = useChatStore((s) => s.addMessageToThread);
+  const removeThreadMessage = useChatStore((s) => s.removeThreadMessage);
+  const replaceThreadMessageId = useChatStore((s) => s.replaceThreadMessageId);
+  const setThreadLoading = useChatStore((s) => s.setThreadLoading);
+  const setThreadHasActiveInvocation = useChatStore((s) => s.setThreadHasActiveInvocation);
+  const patchThreadMessage = useChatStore((s) => s.patchThreadMessage);
   const { resetRefs } = useAgentMessages();
   const { processCommand } = useChatCommands();
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>('idle');

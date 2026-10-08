@@ -1,7 +1,6 @@
 'use client';
 
 import { useCallback, useMemo } from 'react';
-import { useShallow } from 'zustand/react/shallow';
 import { type UploadStatus, useSendMessage } from '@/hooks/useSendMessage';
 import { type Thread, useChatStore } from '@/stores/chatStore';
 import { ChatInput } from './ChatInput';
@@ -31,17 +30,12 @@ export function SplitPaneView({
   uploadError,
   onZoomToThread,
 }: SplitPaneViewProps) {
-  const { threads, splitPaneThreadIds, splitPaneTargetId, setSplitPaneTarget, setSplitPaneThreadIds, getThreadState } =
-    useChatStore(
-      useShallow((s) => ({
-        threads: s.threads,
-        splitPaneThreadIds: s.splitPaneThreadIds,
-        splitPaneTargetId: s.splitPaneTargetId,
-        setSplitPaneTarget: s.setSplitPaneTarget,
-        setSplitPaneThreadIds: s.setSplitPaneThreadIds,
-        getThreadState: s.getThreadState,
-      })),
-    );
+  const threads = useChatStore((s) => s.threads);
+  const splitPaneThreadIds = useChatStore((s) => s.splitPaneThreadIds);
+  const splitPaneTargetId = useChatStore((s) => s.splitPaneTargetId);
+  const setSplitPaneTarget = useChatStore((s) => s.setSplitPaneTarget);
+  const setSplitPaneThreadIds = useChatStore((s) => s.setSplitPaneThreadIds);
+  const getThreadState = useChatStore((s) => s.getThreadState);
   // getThreadState is stable; its results are backed by threadStates.
   useChatStore((s) => s.threadStates);
 

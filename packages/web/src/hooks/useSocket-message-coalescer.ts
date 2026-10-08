@@ -17,11 +17,11 @@
  * change), the total set() count within one flush exceeds React's 50 nested
  * update limit → crash recurs.
  *
- * Fix (chunked flush): process at most CHUNK_SIZE events per microtask.
- * Remaining events are scheduled into the next microtask via
- * queueMicrotask chaining. Between microtasks React resets its nested
- * update counter, so each chunk stays safely under the limit. Microtask
- * chaining adds no paint boundaries (no user-visible delay).
+ * Fix (chunked flush): process at most CHUNK_SIZE events per flush.
+ * The first chunk still runs in a microtask so normal streaming remains
+ * prompt, but remaining burst chunks continue in future tasks. This keeps
+ * each React update batch below the nested-update limit and gives the
+ * browser a paint/input opportunity between large burst chunks.
  *
  * Design contract:
  *  - Every event is processed; nothing is dropped or merged.
@@ -50,16 +50,23 @@ export function createAgentMessageCoalescer(handler: AgentMessageHandler): Agent
   const queue: unknown[] = [];
   let flushScheduled = false;
 
+  function scheduleContinuation(): void {
+    // Large reconnect/background bursts should not monopolize the main thread
+    // with a long microtask chain. A task boundary lets the browser service
+    // input/paint while preserving FIFO processing and the "no dropped event"
+    // contract.
+    setTimeout(flush, 0);
+  }
+
   function flush(): void {
     // Take at most CHUNK_SIZE events from the front of the queue.
     // Remaining events stay in the queue for the next microtask.
     const chunk = queue.splice(0, CHUNK_SIZE);
 
     if (queue.length > 0) {
-      // More events waiting — schedule continuation in next microtask.
-      // React resets its nested update counter between microtasks,
-      // so each chunk stays safely under the 50-update limit.
-      queueMicrotask(flush);
+      // More events waiting — continue in a future task so React/browser get
+      // a chance to breathe between chunks.
+      scheduleContinuation();
     } else {
       // Queue fully drained — allow new pushes to schedule a fresh flush.
       flushScheduled = false;

@@ -32,19 +32,22 @@ vi.mock('@/hooks/useChatCommands', () => ({
 
 vi.mock('@/stores/chatStore', () => ({
   useChatStore: Object.assign(
-    () => ({
-      addMessage: mockAddMessage,
-      addMessageToThread: mockAddMessageToThread,
-      removeMessage: mockRemoveMessage,
-      removeThreadMessage: mockRemoveThreadMessage,
-      setLoading: mockSetLoading,
-      setHasActiveInvocation: mockSetHasActiveInvocation,
-      setThreadLoading: mockSetThreadLoading,
-      setThreadHasActiveInvocation: mockSetThreadHasActiveInvocation,
-      replaceMessageId: mockReplaceMessageId,
-      replaceThreadMessageId: mockReplaceThreadMessageId,
-      currentThreadId: storeCurrentThreadId,
-    }),
+    (selector?: (state: Record<string, unknown>) => unknown) => {
+      const state = {
+        addMessage: mockAddMessage,
+        addMessageToThread: mockAddMessageToThread,
+        removeMessage: mockRemoveMessage,
+        removeThreadMessage: mockRemoveThreadMessage,
+        setLoading: mockSetLoading,
+        setHasActiveInvocation: mockSetHasActiveInvocation,
+        setThreadLoading: mockSetThreadLoading,
+        setThreadHasActiveInvocation: mockSetThreadHasActiveInvocation,
+        replaceMessageId: mockReplaceMessageId,
+        replaceThreadMessageId: mockReplaceThreadMessageId,
+        currentThreadId: storeCurrentThreadId,
+      };
+      return selector ? selector(state) : state;
+    },
     {
       getState: () => ({ currentThreadId: storeCurrentThreadId }),
     },

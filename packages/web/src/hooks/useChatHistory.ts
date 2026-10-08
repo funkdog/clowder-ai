@@ -2,7 +2,6 @@
 
 import type { CliDiagnostics, ProviderSemanticEvent, ReplyPreview, SchedulerMessageExtra } from '@cat-cafe/shared';
 import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
-import { useShallow } from 'zustand/react/shallow';
 import { useThreadChatHistoryAdmission } from '@/components/thread-chat/ThreadChatRuntimeProvider';
 import { getBubbleInvocationId, shouldForceReplaceHydrationForCachedMessages } from '@/debug/bubbleIdentity';
 import { recordDebugEvent } from '@/debug/invocationEventDebug';
@@ -862,35 +861,18 @@ export function useChatHistory(threadId: string) {
   const historyConsumerIdRef = useRef<symbol | null>(null);
   historyConsumerIdRef.current ??= Symbol('thread-chat-history-consumer');
   const historyConsumerId = historyConsumerIdRef.current;
-  const {
-    messages,
-    isLoadingHistory,
-    hasMore,
-    replaceThreadMessages,
-    hydrateThread,
-    setThreadLoadingHistory,
-    setCatInvocation,
-    replaceThreadTargetCats,
-    updateThreadCatStatus,
-    setQueue,
-    setQueuePaused,
-    isOfflineSnapshot,
-  } = useChatStore(
-    useShallow((s) => ({
-      messages: s.messages,
-      isLoadingHistory: s.isLoadingHistory,
-      hasMore: s.hasMore,
-      replaceThreadMessages: s.replaceThreadMessages,
-      hydrateThread: s.hydrateThread,
-      setThreadLoadingHistory: s.setThreadLoadingHistory,
-      setCatInvocation: s.setCatInvocation,
-      replaceThreadTargetCats: s.replaceThreadTargetCats,
-      updateThreadCatStatus: s.updateThreadCatStatus,
-      setQueue: s.setQueue,
-      setQueuePaused: s.setQueuePaused,
-      isOfflineSnapshot: s.isOfflineSnapshot,
-    })),
-  );
+  const messages = useChatStore((s) => s.messages);
+  const isLoadingHistory = useChatStore((s) => s.isLoadingHistory);
+  const hasMore = useChatStore((s) => s.hasMore);
+  const replaceThreadMessages = useChatStore((s) => s.replaceThreadMessages);
+  const hydrateThread = useChatStore((s) => s.hydrateThread);
+  const setThreadLoadingHistory = useChatStore((s) => s.setThreadLoadingHistory);
+  const setCatInvocation = useChatStore((s) => s.setCatInvocation);
+  const replaceThreadTargetCats = useChatStore((s) => s.replaceThreadTargetCats);
+  const updateThreadCatStatus = useChatStore((s) => s.updateThreadCatStatus);
+  const setQueue = useChatStore((s) => s.setQueue);
+  const setQueuePaused = useChatStore((s) => s.setQueuePaused);
+  const isOfflineSnapshot = useChatStore((s) => s.isOfflineSnapshot);
   const { setTasks } = useTaskStore();
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
